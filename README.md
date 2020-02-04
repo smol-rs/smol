@@ -4,8 +4,8 @@
 * Fast - TODO
 * Safe - Written fully in safe Rust.
 * Portable - Works on Linux, macOS, iOS, and Windows.
-* Documented - Easy to tweak for custom use cases!
 * Lightweight - Built from scratch, hooks directly into epoll/kqueue/wepoll.
+* Documented - Easy to tweak for custom use cases!
 * Networking - Provides async TCP, UDP, and Unix domain sockets.
 * Executor - Configurable and with built-in work stealing.
 * Blocking - TODO

@@ -103,7 +103,7 @@ impl<T> Async<T> {
     }
 
     /// Turns a non-blocking read into an async operation.
-    async fn read_with<'a, R>(
+    pub async fn read_with<'a, R>(
         &'a self,
         mut f: impl FnMut(&'a T) -> io::Result<R>,
     ) -> io::Result<R> {
@@ -111,7 +111,7 @@ impl<T> Async<T> {
     }
 
     /// Turns a non-blocking write into an async operation.
-    async fn write_with<'a, R>(
+    pub async fn write_with<'a, R>(
         &'a self,
         mut f: impl FnMut(&'a T) -> io::Result<R>,
     ) -> io::Result<R> {
