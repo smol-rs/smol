@@ -1,3 +1,5 @@
+#![deny(unsafe_code)]
+
 mod executor;
 mod reactor;
 mod timer;

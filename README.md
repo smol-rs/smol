@@ -2,6 +2,7 @@
 
 * Small - Under 1000 lines of code!
 * Fast - TODO
+* Safe - Written fully in safe Rust.
 * Portable - Works on Linux, macOS, iOS, and Windows.
 * Documented - Easy to tweak for custom use cases!
 * Lightweight - Built from scratch, hooks directly into epoll/kqueue/wepoll.
