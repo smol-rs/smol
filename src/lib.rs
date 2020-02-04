@@ -1,4 +1,4 @@
-#![deny(unsafe_code)]
+#![forbid(unsafe_code)]
 
 use std::collections::BTreeMap;
 use std::future::Future;
