@@ -15,8 +15,6 @@ use once_cell::sync::Lazy;
 use slab::Slab;
 use socket2::{Domain, Protocol, Socket, Type};
 
-// TODO: if we do lazy register (id: Option<usize>), can we beat tokio?
-
 static EPOLL: Lazy<RawFd> = Lazy::new(|| epoll_create1(EpollCreateFlags::EPOLL_CLOEXEC).unwrap());
 
 static ENTRIES: Lazy<Mutex<Slab<Arc<Entry>>>> = Lazy::new(|| {

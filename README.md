@@ -1,7 +1,7 @@
 ## Features
 
 * Small - Under 1000 lines of code!
-* Fast - TODO
+* Fast - Competitive with async-std and Tokio.
 * Safe - Written fully in safe Rust.
 * Portable - Works on Linux, macOS, iOS, and Windows.
 * Lightweight - Built from scratch, hooks directly into epoll/kqueue/wepoll.
