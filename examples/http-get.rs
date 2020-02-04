@@ -6,6 +6,8 @@
 //! $ nc localhost 8080
 //! ```
 
+use std::net::TcpStream;
+
 use futures::executor::block_on;
 use futures::io;
 use futures::prelude::*;
@@ -13,7 +15,7 @@ use smol::Async;
 
 fn main() -> io::Result<()> {
     block_on(async {
-        let mut stream = Async::connect("www.example.com:80").await?;
+        let mut stream = Async::<TcpStream>::connect("www.example.com:80").await?;
         stream
             .write_all(b"GET / HTTP/1.0\r\nHost: example.com\r\n\r\n")
             .await?;

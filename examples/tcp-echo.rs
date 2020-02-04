@@ -6,7 +6,7 @@
 //! $ nc localhost 8080
 //! ```
 
-use std::net::TcpStream;
+use std::net::{TcpListener, TcpStream};
 
 use futures::executor::block_on;
 use futures::io;
@@ -14,12 +14,13 @@ use smol::Async;
 
 async fn process(mut stream: Async<TcpStream>) -> io::Result<()> {
     println!("Peer: {}", stream.source().peer_addr()?);
-    io::copy(stream.clone(), &mut stream).await
+    io::copy(stream.clone(), &mut stream).await?;
+    Ok(())
 }
 
 fn main() -> io::Result<()> {
     block_on(async {
-        let listener = Async::bind("127.0.0.1:8080")?;
+        let listener = Async::<TcpListener>::bind("127.0.0.1:8080")?;
         println!("Local: {}", listener.source().local_addr()?);
 
         loop {
