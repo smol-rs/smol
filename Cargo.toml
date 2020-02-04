@@ -1,6 +1,6 @@
 [package]
 name = "smol"
-version = "0.0.1"
+version = "0.1.0"
 authors = ["Stjepan Glavina <stjepang@gmail.com>"]
 edition = "2018"
 description = "WIP"
