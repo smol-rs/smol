@@ -1,0 +1,18 @@
+[package]
+name = "smol"
+version = "0.0.1"
+authors = ["Stjepan Glavina <stjepang@gmail.com>"]
+edition = "2018"
+description = "WIP"
+license = "Apache-2.0/MIT"
+
+[dependencies]
+async-task = "1.3.0"
+crossbeam = "0.7.3"
+eventvar = { path = "../eventvar" }
+futures = "0.3.1"
+nix = "0.16.1"
+num_cpus = "1.12.0"
+once_cell = "1.3.1"
+slab = "0.4.2"
+socket2 = "0.3.11"
