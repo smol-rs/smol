@@ -1,5 +1,7 @@
 ## Features
 
+**NOTE:** Not everything in this list is true yet. WIP :)
+
 * Small - Single file under 1000 lines of code.
 * Fast - Competitive with async-std and Tokio.
 * Safe - Written fully in safe Rust.
