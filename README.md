@@ -3,13 +3,13 @@
 **NOTE:** Not everything in this list is true yet. WIP :)
 
 * Small - Single file under 1000 lines of code.
-* Fast - Competitive with async-std and Tokio.
+* Fast - On par with async-std and Tokio.
 * Safe - Written fully in safe Rust.
+* Documented - Easy to understand and tweak for custom use cases.
 * Portable - Works on Linux, Android, macOS, iOS, and Windows.
 * Lightweight - Built from scratch, hooks directly into epoll/kqueue/wepoll.
-* Documented - Easy to understand and tweak for custom use cases.
-* Networking - Provides async TCP, UDP, and Unix domain sockets.
-* Executor - Configurable and with built-in work stealing.
+* Networking - TCP, UDP, Unix domain sockets, and custom files/sockets.
+* Executor - Configurable workers with work stealing, supports non-send futures.
 * Blocking - Thread pool for isolating blocking code.
 * Timer - Efficient userspace timers.
 
