@@ -8,9 +8,8 @@
 
 use std::net::{TcpListener, TcpStream};
 
-use futures::executor::block_on;
 use futures::io;
-use smol::Async;
+use smol::{Async, Task};
 
 async fn process(mut stream: Async<TcpStream>) -> io::Result<()> {
     println!("Peer: {}", stream.source().peer_addr()?);
@@ -19,13 +18,13 @@ async fn process(mut stream: Async<TcpStream>) -> io::Result<()> {
 }
 
 fn main() -> io::Result<()> {
-    block_on(async {
+    smol::run(async {
         let listener = Async::<TcpListener>::bind("127.0.0.1:8080")?;
         println!("Local: {}", listener.source().local_addr()?);
 
         loop {
             let (stream, _) = listener.accept().await?;
-            smol::spawn(async { process(stream).await.unwrap() });
+            Task::schedule(process(stream));
         }
     })
 }

@@ -16,13 +16,13 @@ use smol::Async;
 fn main() -> io::Result<()> {
     block_on(async {
         let mut stream = Async::<TcpStream>::connect("www.example.com:80").await?;
-        stream
-            .write_all(b"GET / HTTP/1.0\r\nHost: example.com\r\n\r\n")
-            .await?;
 
-        let mut html = String::new();
-        stream.read_to_string(&mut html).await?;
-        println!("{}", html);
+        let request = b"GET / HTTP/1.0\r\nHost: example.com\r\n\r\n";
+        stream.write_all(request).await?;
+
+        let mut response = String::new();
+        stream.read_to_string(&mut response).await?;
+        println!("{}", response);
 
         Ok(())
     })
