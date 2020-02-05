@@ -18,7 +18,7 @@ async fn process(mut stream: Async<TcpStream>) -> io::Result<()> {
 }
 
 fn main() -> io::Result<()> {
-    smol::run(async {
+    futures::executor::block_on(async {
         let listener = Async::<TcpListener>::bind("127.0.0.1:8080")?;
         println!("Local: {}", listener.source().local_addr()?);
 
