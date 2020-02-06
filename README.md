@@ -2,17 +2,19 @@
 
 * Small - Fits into a single source file.
 * Fast - On par with async-std and Tokio.
-* Safe - Written fully in safe Rust.
-* Documented - Easy to understand and tweak.
+* Safe - Written in 100% safe Rust.
+* Complete - Fully featured and ready for production.
+* Documented - Code is easy to understand and modify.
 * Portable - Works on Linux, Android, macOS, iOS, and Windows.
-* Lightweight - Built from scratch, hooks directly into epoll/kqueue/wepoll.
+* Lightweight - Simple dependencies, hooks into epoll/kqueue/wepoll.
 
 ## Features
 
 * Executor - Configurable threads, work stealing, supports non-send futures.
 * Blocking - Thread pool for isolating blocking code.
 * Networking - TCP, UDP, Unix domain sockets, and custom files/sockets.
-* Process - Can spawn child processes and interact with their I/O.
+* Process - Spawns child processes and interacts with their I/O.
+* Files - Filesystem manipulation operations.
 * Stdio - Asynchronous stdin, stdout, and stderr.
 * Timer - Efficient userspace timers.
 
