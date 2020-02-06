@@ -5,23 +5,29 @@ use std::convert::TryInto;
 use std::future::Future;
 use std::io::{self, Read, Write};
 use std::mem;
-use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, TcpListener, TcpStream, ToSocketAddrs};
+use std::net::{
+    Ipv4Addr, SocketAddr, SocketAddrV4, TcpListener, TcpStream, ToSocketAddrs, UdpSocket,
+};
 use std::os::unix::io::{AsRawFd, RawFd};
+use std::os::unix::net::{SocketAddr as UnixSocketAddr, UnixDatagram, UnixListener, UnixStream};
 use std::panic::catch_unwind;
+use std::path::Path;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::task::{Context, Poll, Waker};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use crossbeam_channel as channel;
+use futures_core::stream::Stream;
 use futures_io::{AsyncRead, AsyncWrite};
-use futures_util::future;
+use futures_util::{future, stream};
 use nix::sys::epoll::{
     epoll_create1, epoll_ctl, epoll_wait, EpollCreateFlags, EpollEvent, EpollFlags, EpollOp,
 };
 use once_cell::sync::Lazy;
+use parking_lot::Mutex;
 use slab::Slab;
 use socket2::{Domain, Protocol, Socket, Type};
 
@@ -47,8 +53,8 @@ compile_error!("smol does not support this target OS");
 // TODO: task cancellation?
 // TODO: fix unwraps
 // TODO: if epoll/kqueue/wepoll gets EINTR, then retry - maybe just call notify()
-// TODO: catch panics in wake()
-// TODO: use async mutex for locking timer and poller?
+// TODO: catch panics in wake() and Waker::drop()
+// TODO: use parking lot
 
 // ----- Globals -----
 
@@ -61,14 +67,9 @@ struct Runtime {
     poller: Mutex<Poller>,
 
     notified: AtomicBool,
-    // sock_notify: Socket,
-    // sock_wakeup: Async<Socket>,
+    socket_notify: Socket,
+    socket_wakeup: Lazy<Async<Socket>, Box<dyn FnOnce() -> Async<Socket> + Send>>,
 }
-
-static SOCKETS: Lazy<(Socket, Async<Socket>)> = Lazy::new(|| {
-    &RT;
-    wakeup_sockets().unwrap()
-});
 
 fn initialize() -> io::Result<Runtime> {
     thread::spawn(|| loop {
@@ -85,123 +86,13 @@ fn initialize() -> io::Result<Runtime> {
         });
     }
 
-    Ok(Runtime {
-        epoll: epoll_create1(EpollCreateFlags::EPOLL_CLOEXEC).expect("cannot create epoll"),
-        entries: Mutex::new(Slab::new()),
-        timers: Mutex::new(BTreeMap::new()),
-        queue: sender,
-        poller: Mutex::new(Poller {
-            epoll_events: vec![EpollEvent::empty(); 1000].into_boxed_slice(),
-        }),
-        notified: AtomicBool::new(false),
-        // sock_notify: sock1,
-        // sock_wakeup: sock2,
-    })
-}
-
-static RT: Lazy<Runtime> = Lazy::new(|| initialize().expect("cannot initialize smol runtime"));
-
-// ----- Poller -----
-
-struct Poller {
-    epoll_events: Box<[EpollEvent]>,
-}
-
-fn poll(block: bool) -> bool {
-    let mut poller = match RT.poller.try_lock() {
-        Ok(poller) => poller,
-        Err(_) => return false,
-    };
-
-    if RT.notified.swap(false, Ordering::SeqCst) {
-        // TODO: cache this buffer somewhere in Runtime
-        let mut tmp = [0; 1024];
-        loop {
-            match (&*SOCKETS.1.source()).read(&mut tmp) {
-                Ok(n) if n > 0 => {}
-                _ => break,
-            }
-        }
-    }
-
-    let mut timeout = poll_timers(&mut poller);
-    if !block {
-        timeout = Some(Duration::from_secs(0));
-    }
-    poll_io(&mut poller, timeout);
-
-    true
-}
-
-fn poll_timers(poller: &mut Poller) -> Option<Duration> {
-    let now = Instant::now();
-
-    let mut timers = RT.timers.lock().unwrap();
-    let pending = timers.split_off(&(now, 0));
-    let ready = mem::replace(&mut *timers, pending);
-    let next_timer = timers.keys().next().map(|(when, _)| *when - now);
-    drop(timers);
-
-    // Wake up ready timers.
-    for (_, waker) in ready {
-        waker.wake();
-    }
-
-    next_timer
-}
-
-fn poll_io(poller: &mut Poller, timeout: Option<Duration>) {
-    let timeout_ms = match timeout {
-        None => -1,
-        Some(t) => t.as_millis().try_into().expect("timer duration overflow"),
-    };
-    let n = epoll_wait(RT.epoll, &mut poller.epoll_events, timeout_ms).unwrap();
-
-    if n == 0 {
-        return;
-    }
-
-    let entries = RT.entries.lock().unwrap();
-
-    for ev in &poller.epoll_events[..n] {
-        let events = ev.events();
-        let index = ev.data() as usize;
-
-        if let Some(entry) = entries.get(index) {
-            if events != EpollFlags::EPOLLOUT {
-                for waker in entry.readers.lock().unwrap().drain(..) {
-                    waker.wake();
-                }
-            }
-            if events != EpollFlags::EPOLLIN {
-                for waker in entry.writers.lock().unwrap().drain(..) {
-                    waker.wake();
-                }
-            }
-        }
-    }
-}
-
-fn notify() {
-    if !RT.notified.load(Ordering::SeqCst) {
-        if !RT.notified.swap(true, Ordering::SeqCst) {
-            loop {
-                match (&SOCKETS.0).write(&[1]) {
-                    Err(err) if err.kind() == io::ErrorKind::Interrupted => {}
-                    _ => break,
-                }
-            }
-        }
-    }
-}
-
-/// Returns a (writer, reader) pair of sockets for waking up the poller.
-///
-/// https://stackoverflow.com/questions/24933411/how-to-emulate-socket-socketpair-on-windows
-/// https://github.com/mhils/backports.socketpair/blob/master/backports/socketpair/__init__.py
-/// https://github.com/python-trio/trio/blob/master/trio/_core/_wakeup_socketpair.py
-/// https://gist.github.com/geertj/4325783
-fn wakeup_sockets() -> io::Result<(Socket, Async<Socket>)> {
+    // Returns a (writer, reader) pair of sockets for waking up the poller.
+    //
+    // https://stackoverflow.com/questions/24933411/how-to-emulate-socket-socketpair-on-windows
+    // https://github.com/mhils/backports.socketpair/blob/master/backports/socketpair/__init__.py
+    // https://github.com/python-trio/trio/blob/master/trio/_core/_wakeup_socketpair.py
+    // https://gist.github.com/geertj/4325783
+    //
     // Create a temporary listener.
     let listener = Socket::new(Domain::ipv4(), Type::stream(), None)?;
     let addr = SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0).into();
@@ -221,7 +112,119 @@ fn wakeup_sockets() -> io::Result<(Socket, Async<Socket>)> {
     sock2.set_nonblocking(true)?;
     sock2.set_recv_buffer_size(1)?;
 
-    Ok((sock1, Async::register(sock2)))
+    Ok(Runtime {
+        // TODO: convert Result to io::Result
+        epoll: epoll_create1(EpollCreateFlags::EPOLL_CLOEXEC).expect("cannot create epoll"),
+        entries: Mutex::new(Slab::new()),
+        timers: Mutex::new(BTreeMap::new()),
+        queue: sender,
+        poller: Mutex::new(Poller {
+            epoll_events: vec![EpollEvent::empty(); 1000].into_boxed_slice(),
+            tmp_buffer: vec![0; 1000].into_boxed_slice(),
+        }),
+        notified: AtomicBool::new(false),
+        socket_notify: sock1,
+        socket_wakeup: Lazy::new(Box::new(move || Async::register(sock2))),
+    })
+}
+
+static RT: Lazy<Runtime> = Lazy::new(|| initialize().expect("cannot initialize smol runtime"));
+
+// ----- Poller -----
+
+struct Poller {
+    epoll_events: Box<[EpollEvent]>,
+    tmp_buffer: Box<[u8]>,
+}
+
+fn poll(block: bool) -> bool {
+    let mut poller = match RT.poller.try_lock() {
+        None => return false,
+        Some(poller) => poller,
+    };
+
+    if RT.notified.swap(false, Ordering::SeqCst) {
+        loop {
+            match RT.socket_wakeup.source().read(&mut poller.tmp_buffer) {
+                Ok(n) if n > 0 => {}
+                Err(err) if err.kind() == io::ErrorKind::Interrupted => {}
+                _ => break,
+            }
+        }
+    }
+
+    let mut timeout = poll_timers(&mut poller);
+    if !block {
+        timeout = Some(Duration::from_secs(0));
+    }
+    poll_io(&mut poller, timeout);
+
+    true
+}
+
+fn poll_timers(poller: &mut Poller) -> Option<Duration> {
+    let now = Instant::now();
+
+    let (ready, next_event) = {
+        let mut timers = RT.timers.lock();
+        let pending = timers.split_off(&(now, 0));
+        let ready = mem::replace(&mut *timers, pending);
+        let next_event = timers.keys().next().map(|(when, _)| *when - now);
+        (ready, next_event)
+    };
+
+    // Wake up ready timers.
+    for (_, waker) in ready {
+        waker.wake();
+    }
+
+    next_event
+}
+
+fn poll_io(poller: &mut Poller, timeout: Option<Duration>) {
+    let timeout_ms = match timeout {
+        None => -1,
+        Some(t) => t.as_millis().try_into().expect("timer duration overflow"),
+    };
+    let n = epoll_wait(RT.epoll, &mut poller.epoll_events, timeout_ms).unwrap();
+
+    if n == 0 {
+        return;
+    }
+
+    let entries = RT.entries.lock();
+
+    for ev in &poller.epoll_events[..n] {
+        let events = ev.events();
+        let index = ev.data() as usize;
+
+        if let Some(entry) = entries.get(index) {
+            // TODO: wake outside the lock
+            if events != EpollFlags::EPOLLOUT {
+                for waker in entry.readers.lock().drain(..) {
+                    waker.wake();
+                }
+            }
+            if events != EpollFlags::EPOLLIN {
+                for waker in entry.writers.lock().drain(..) {
+                    waker.wake();
+                }
+            }
+        }
+    }
+}
+
+fn notify() {
+    if !RT.notified.load(Ordering::SeqCst) {
+        if !RT.notified.swap(true, Ordering::SeqCst) {
+            loop {
+                match (&RT.socket_notify).write(&[1]) {
+                    Err(err) if err.kind() == io::ErrorKind::Interrupted => {}
+                    _ => break,
+                }
+            }
+        }
+    }
 }
 
 // ----- Executor -----
@@ -298,7 +301,6 @@ impl<T> Future for Task<T> {
     type Output = T;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        // NOTE: always resume panics into Task with a "task cancelled" message on cancel
         match Pin::new(&mut self.0).poll(cx) {
             Poll::Pending => Poll::Pending,
             Poll::Ready(output) => Poll::Ready(output.expect("task failed")),
@@ -335,7 +337,7 @@ impl Drop for Timer {
     fn drop(&mut self) {
         if self.inserted {
             let id = self as *mut Timer as usize;
-            RT.timers.lock().unwrap().remove(&(self.when, id));
+            RT.timers.lock().remove(&(self.when, id));
         }
     }
 }
@@ -345,7 +347,7 @@ impl Future for Timer {
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let id = &mut *self as *mut Timer as usize;
-        let mut timers = RT.timers.lock().unwrap();
+        let mut timers = RT.timers.lock();
 
         if Instant::now() >= self.when {
             timers.remove(&(self.when, id));
@@ -386,7 +388,7 @@ struct Registration<T> {
 impl<T> Drop for Registration<T> {
     fn drop(&mut self) {
         epoll_ctl(RT.epoll, EpollOp::EpollCtlDel, self.fd, None).unwrap();
-        RT.entries.lock().unwrap().remove(self.entry.index);
+        RT.entries.lock().remove(self.entry.index);
     }
 }
 
@@ -394,18 +396,20 @@ impl<T> Drop for Registration<T> {
 pub struct Async<T>(Arc<Registration<T>>);
 
 impl<T: AsRawFd> Async<T> {
-    // note: make sure source is in non-blocking mode
+    /// Turns a non-blocking I/O handle into an async I/O handle.
     pub fn register(source: T) -> Async<T> {
-        let mut entries = RT.entries.lock().unwrap();
-        let vacant = entries.vacant_entry();
-        let index = vacant.key();
-        let entry = Arc::new(Entry {
-            index,
-            readers: Mutex::new(Vec::new()),
-            writers: Mutex::new(Vec::new()),
-        });
-        vacant.insert(entry.clone());
-        drop(entries);
+        let (index, entry) = {
+            let mut entries = RT.entries.lock();
+            let vacant = entries.vacant_entry();
+            let index = vacant.key();
+            let entry = Arc::new(Entry {
+                index,
+                readers: Mutex::new(Vec::new()),
+                writers: Mutex::new(Vec::new()),
+            });
+            vacant.insert(entry.clone());
+            (index, entry)
+        };
 
         // TODO: handle epoll errors
         epoll_ctl(
@@ -462,7 +466,7 @@ impl<T> Async<T> {
         }
 
         // Acquire a lock on the waker list.
-        let mut wakers = wakers.lock().unwrap();
+        let mut wakers = wakers.lock();
 
         // Attempt the non-blocking operation again.
         match f(self.source()) {
@@ -486,37 +490,69 @@ impl<T> Clone for Async<T> {
 
 // ----- Networking -----
 
-impl<T> AsyncRead for Async<T>
-where
-    for<'a> &'a T: Read,
-{
-    fn poll_read(
-        self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &mut [u8],
-    ) -> Poll<io::Result<usize>> {
-        self.poll_with(cx, &self.0.entry.readers, |mut source| source.read(buf))
-    }
+macro_rules! async_io_impls {
+    ($type:ty) => {
+        impl<T> AsyncRead for $type
+        where
+            for<'a> &'a T: Read,
+        {
+            fn poll_read(
+                self: Pin<&mut Self>,
+                cx: &mut Context<'_>,
+                buf: &mut [u8],
+            ) -> Poll<io::Result<usize>> {
+                self.poll_with(cx, &self.0.entry.readers, |mut source| source.read(buf))
+            }
+        }
+
+        impl<T> AsyncWrite for $type
+        where
+            for<'a> &'a T: Write,
+        {
+            fn poll_write(
+                self: Pin<&mut Self>,
+                cx: &mut Context<'_>,
+                buf: &[u8],
+            ) -> Poll<io::Result<usize>> {
+                self.poll_with(cx, &self.0.entry.writers, |mut source| source.write(buf))
+            }
+
+            fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+                self.poll_with(cx, &self.0.entry.writers, |mut source| source.flush())
+            }
+
+            fn poll_close(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<io::Result<()>> {
+                Poll::Ready(Ok(()))
+            }
+        }
+    };
 }
+async_io_impls!(Async<T>);
+async_io_impls!(&Async<T>);
 
-impl<T> AsyncWrite for Async<T>
-where
-    for<'a> &'a T: Write,
-{
-    fn poll_write(
-        self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &[u8],
-    ) -> Poll<io::Result<usize>> {
-        self.poll_with(cx, &self.0.entry.writers, |mut source| source.write(buf))
+impl Async<TcpListener> {
+    /// TODO
+    pub fn bind<A: ToSocketAddrs>(addr: A) -> io::Result<Async<TcpListener>> {
+        // Bind and make the listener async.
+        let listener = TcpListener::bind(addr)?;
+        listener.set_nonblocking(true)?;
+        Ok(Async::register(listener))
     }
 
-    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        self.poll_with(cx, &self.0.entry.writers, |mut source| source.flush())
+    /// TODO
+    pub async fn accept(&self) -> io::Result<(Async<TcpStream>, SocketAddr)> {
+        // Accept and make the stream async.
+        let (stream, addr) = self.read_with(|source| source.accept()).await?;
+        stream.set_nonblocking(true)?;
+        Ok((Async::register(stream), addr))
     }
 
-    fn poll_close(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<io::Result<()>> {
-        Poll::Ready(Ok(()))
+    /// TODO
+    pub fn incoming(&self) -> impl Stream<Item = io::Result<Async<TcpStream>>> + Unpin + '_ {
+        Box::pin(stream::unfold(self, |listener| async move {
+            let res = listener.accept().await.map(|(stream, _)| stream);
+            Some((res, listener))
+        }))
     }
 }
 
@@ -542,7 +578,6 @@ impl Async<TcpStream> {
         }))
     }
 
-    // TODO: extract into each_addr()
     async fn connect_to(addr: SocketAddr) -> io::Result<Async<TcpStream>> {
         // Create a socket.
         let domain = if addr.is_ipv6() {
@@ -558,34 +593,128 @@ impl Async<TcpStream> {
         let stream = Async::register(socket.into_tcp_stream());
 
         // Wait for connect to complete.
-        let check_connected = |stream: &TcpStream| match stream.peer_addr() {
+        let wait_connect = |stream: &TcpStream| match stream.peer_addr() {
             Err(err) if err.kind() == io::ErrorKind::NotConnected => {
                 Err(io::Error::new(io::ErrorKind::WouldBlock, ""))
             }
-            res => res,
+            res => res.map(|_| ()),
         };
-        stream.write_with(check_connected).await?;
-        Ok(stream)
+        // The stream becomes writable when connected.
+        stream.write_with(|source| wait_connect(source)).await?;
+
+        // Check for connect errors.
+        match stream.source().take_error()? {
+            None => Ok(stream),
+            Some(err) => Err(err),
+        }
+    }
+
+    async fn peek(&self, buf: &mut [u8]) -> io::Result<usize> {
+        self.read_with(|source| source.peek(buf)).await
     }
 }
 
-impl Async<TcpListener> {
-    /// TODO
-    pub fn bind<A: ToSocketAddrs>(addr: A) -> io::Result<Async<TcpListener>> {
-        // Bind and make the listener async.
-        let listener = TcpListener::bind(addr)?;
+impl Async<UdpSocket> {
+    pub fn bind<A: ToSocketAddrs>(addr: A) -> io::Result<Async<UdpSocket>> {
+        let socket = UdpSocket::bind(addr)?;
+        socket.set_nonblocking(true)?;
+        Ok(Async::register(socket))
+    }
+
+    pub async fn send_to<A: ToSocketAddrs>(&self, buf: &[u8], addr: A) -> io::Result<usize> {
+        self.write_with(|source| source.send_to(buf, &addr)).await
+    }
+
+    pub async fn recv_from(&self, buf: &mut [u8]) -> io::Result<(usize, SocketAddr)> {
+        self.read_with(|source| source.recv_from(buf)).await
+    }
+
+    pub async fn peek_from(&self, buf: &mut [u8]) -> io::Result<(usize, SocketAddr)> {
+        self.read_with(|source| source.peek_from(buf)).await
+    }
+
+    pub async fn send<A: ToSocketAddrs>(&self, buf: &[u8]) -> io::Result<usize> {
+        self.write_with(|source| source.send(buf)).await
+    }
+
+    pub async fn recv(&self, buf: &mut [u8]) -> io::Result<usize> {
+        self.read_with(|source| source.recv(buf)).await
+    }
+
+    pub async fn peek(&self, buf: &mut [u8]) -> io::Result<usize> {
+        self.read_with(|source| source.peek(buf)).await
+    }
+}
+
+impl Async<UnixListener> {
+    pub fn bind<P: AsRef<Path>>(path: P) -> io::Result<Async<UnixListener>> {
+        let listener = UnixListener::bind(path)?;
         listener.set_nonblocking(true)?;
         Ok(Async::register(listener))
     }
 
-    /// TODO
-    pub async fn accept(&self) -> io::Result<(Async<TcpStream>, SocketAddr)> {
-        // Accept and make the stream async.
-        let (stream, addr) = self.read_with(TcpListener::accept).await?;
+    pub async fn accept(&self) -> io::Result<(Async<UnixStream>, UnixSocketAddr)> {
+        let (stream, addr) = self.read_with(|source| source.accept()).await?;
         stream.set_nonblocking(true)?;
-        let stream = Async::register(stream);
-        Ok((stream, addr))
+        Ok((Async::register(stream), addr))
     }
 
-    // TODO: incoming()
+    pub fn incoming(&self) -> impl Stream<Item = io::Result<Async<UnixStream>>> + Unpin + '_ {
+        Box::pin(stream::unfold(self, |listener| async move {
+            let res = listener.accept().await.map(|(stream, _)| stream);
+            Some((res, listener))
+        }))
+    }
+}
+
+impl Async<UnixStream> {
+    pub fn connect<P: AsRef<Path>>(path: P) -> io::Result<Async<UnixStream>> {
+        let stream = UnixStream::connect(path)?;
+        stream.set_nonblocking(true)?;
+        Ok(Async::register(stream))
+    }
+
+    pub fn pair() -> io::Result<(Async<UnixStream>, Async<UnixStream>)> {
+        let (stream1, stream2) = UnixStream::pair()?;
+        stream1.set_nonblocking(true)?;
+        stream2.set_nonblocking(true)?;
+        Ok((Async::register(stream1), Async::register(stream2)))
+    }
+}
+
+impl Async<UnixDatagram> {
+    pub fn bind<P: AsRef<Path>>(path: P) -> io::Result<Async<UnixDatagram>> {
+        let socket = UnixDatagram::bind(path)?;
+        socket.set_nonblocking(true)?;
+        Ok(Async::register(socket))
+    }
+
+    pub fn unbound() -> io::Result<Async<UnixDatagram>> {
+        let socket = UnixDatagram::unbound()?;
+        socket.set_nonblocking(true)?;
+        Ok(Async::register(socket))
+    }
+
+    pub fn pair() -> io::Result<(Async<UnixDatagram>, Async<UnixDatagram>)> {
+        let (socket1, socket2) = UnixDatagram::pair()?;
+        socket1.set_nonblocking(true)?;
+        socket2.set_nonblocking(true)?;
+        Ok((Async::register(socket1), Async::register(socket2)))
+    }
+
+    pub async fn send_to<P: AsRef<Path>>(&self, buf: &[u8], path: P) -> io::Result<usize> {
+        self.write_with(|source| source.send_to(buf, &path)).await
+    }
+
+    pub async fn recv_from(&self, buf: &mut [u8]) -> io::Result<(usize, UnixSocketAddr)> {
+        self.read_with(|source| source.recv_from(buf)).await
+    }
+
+    pub async fn send<A: ToSocketAddrs>(&self, buf: &[u8]) -> io::Result<usize> {
+        self.write_with(|source| source.send(buf)).await
+    }
+
+    pub async fn recv(&self, buf: &mut [u8]) -> io::Result<usize> {
+        self.read_with(|source| source.recv(buf)).await
+    }
 }
