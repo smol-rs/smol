@@ -47,6 +47,8 @@ compile_error!("smol does not support this target OS");
 // TODO: task cancellation?
 // TODO: fix unwraps
 // TODO: if epoll/kqueue/wepoll gets EINTR, then retry - maybe just call notify()
+// TODO: catch panics in wake()
+// TODO: use async mutex for locking timer and poller?
 
 // ----- Globals -----
 
@@ -61,13 +63,6 @@ struct Runtime {
     notified: AtomicBool,
     // sock_notify: Socket,
     // sock_wakeup: Async<Socket>,
-}
-
-enum Operation {
-    AddTimer(Instant, usize),
-    DelTimer(Instant, usize),
-    AddEntry(usize, Arc<Entry>),
-    DelEntry(usize),
 }
 
 static SOCKETS: Lazy<(Socket, Async<Socket>)> = Lazy::new(|| {
@@ -96,7 +91,7 @@ fn initialize() -> io::Result<Runtime> {
         timers: Mutex::new(BTreeMap::new()),
         queue: sender,
         poller: Mutex::new(Poller {
-            epoll_events: vec![EpollEvent::empty(); 1000],
+            epoll_events: vec![EpollEvent::empty(); 1000].into_boxed_slice(),
         }),
         notified: AtomicBool::new(false),
         // sock_notify: sock1,
@@ -109,7 +104,7 @@ static RT: Lazy<Runtime> = Lazy::new(|| initialize().expect("cannot initialize s
 // ----- Poller -----
 
 struct Poller {
-    epoll_events: Vec<EpollEvent>,
+    epoll_events: Box<[EpollEvent]>,
 }
 
 fn poll(block: bool) -> bool {
@@ -129,8 +124,6 @@ fn poll(block: bool) -> bool {
         }
     }
 
-    // TODO: handle operations
-
     let mut timeout = poll_timers(&mut poller);
     if !block {
         timeout = Some(Duration::from_secs(0));
@@ -142,16 +135,19 @@ fn poll(block: bool) -> bool {
 
 fn poll_timers(poller: &mut Poller) -> Option<Duration> {
     let now = Instant::now();
+
     let mut timers = RT.timers.lock().unwrap();
     let pending = timers.split_off(&(now, 0));
     let ready = mem::replace(&mut *timers, pending);
+    let next_timer = timers.keys().next().map(|(when, _)| *when - now);
+    drop(timers);
 
     // Wake up ready timers.
     for (_, waker) in ready {
         waker.wake();
     }
 
-    timers.keys().next().map(|(when, _)| *when - now)
+    next_timer
 }
 
 fn poll_io(poller: &mut Poller, timeout: Option<Duration>) {
@@ -160,6 +156,10 @@ fn poll_io(poller: &mut Poller, timeout: Option<Duration>) {
         Some(t) => t.as_millis().try_into().expect("timer duration overflow"),
     };
     let n = epoll_wait(RT.epoll, &mut poller.epoll_events, timeout_ms).unwrap();
+
+    if n == 0 {
+        return;
+    }
 
     let entries = RT.entries.lock().unwrap();
 
@@ -235,6 +235,9 @@ where
     T: Send + 'static,
 {
     // TODO: run() should propagate panics into caller
+    // TODO: when run() finishes, we need to wake another worker()
+    //   - because all workers could be stuck on the parker and nobody on epoll
+    //   - should we also poll to clear up timers, pending operations, and so on?
 
     // let handle = spawn(future);
     todo!("run tasks from the queue until handle completes")
@@ -402,6 +405,7 @@ impl<T: AsRawFd> Async<T> {
             writers: Mutex::new(Vec::new()),
         });
         vacant.insert(entry.clone());
+        drop(entries);
 
         // TODO: handle epoll errors
         epoll_ctl(
@@ -582,4 +586,6 @@ impl Async<TcpListener> {
         let stream = Async::register(stream);
         Ok((stream, addr))
     }
+
+    // TODO: incoming()
 }
