@@ -11,6 +11,7 @@ use std::os::unix::net::{SocketAddr as UnixSocketAddr, UnixDatagram, UnixListene
 use std::panic::catch_unwind;
 use std::path::Path;
 use std::pin::Pin;
+use std::process::{Child, Command, ExitStatus, Output};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::task::{Context, Poll, Waker};
@@ -34,13 +35,13 @@ compile_error!("smol does not support this target OS");
 
 // TODO: hello world example
 // TODO: example with stdin
+// TODO: example with pinned threads
 // TODO: example with process spawn and output
+// TODO: example with process child I/O
 // TODO: example with timeout
 // TODO: example with OS timers
-// TODO: do we need a crate like async-pipe, which is like async byte channel?
-//   - impls AsyncRead and AsyncWrite
-//   - impls Stream
-//   - that allows us to "pipe" stdin into main task
+// TODO: example with Async::reader(std::io::stdin())
+// TODO: example with Async::writer(std::io::stdout())
 // TODO: example with filesystem
 // TODO: example that prints a file
 // TODO: example with ctrl-c
@@ -371,10 +372,6 @@ impl<T> Future for Task<T> {
     }
 }
 
-// ----- Blocking -----
-
-// TODO
-
 // ----- Timer -----
 
 /// Completes at a certain point in time.
@@ -504,7 +501,19 @@ impl<T> Async<T> {
     pub fn source(&self) -> &T {
         &self.0.source
     }
+}
 
+impl<T: Read + 'static> Async<T> {
+    // NOTE: stop task if the returned handle is dropped
+    // TODO: fn reader(t: T) -> impl AsyncRead + Unpin {}
+}
+
+impl<T: Write + 'static> Async<T> {
+    // NOTE: stop task if the returned handle is dropped
+    // TODO: fn reader(t: T) -> impl AsyncWrite + Unpin {}
+}
+
+impl<T> Async<T> {
     /// Turns a non-blocking read into an async operation.
     pub async fn read_with<'a, R>(
         &'a self,
@@ -597,12 +606,37 @@ macro_rules! async_io_impls {
 async_io_impls!(Async<T>);
 async_io_impls!(&Async<T>);
 
+// ------ Process -----
+
+impl Async<Command> {
+    /// Executes a command and returns its output.
+    pub async fn output(mut cmd: Command) -> io::Result<Output> {
+        Task::blocking(async move { cmd.output() }).await
+    }
+
+    /// Executes a command and returns its exit status.
+    pub async fn status(mut cmd: Command) -> io::Result<ExitStatus> {
+        Task::blocking(async move { cmd.status() }).await
+    }
+}
+
+impl Async<Child> {
+    /// Waits for a child process to exit and returns its exit status.
+    pub async fn wait(mut child: Child) -> io::Result<ExitStatus> {
+        Task::blocking(async move { child.wait() }).await
+    }
+
+    /// Waits for a child process to exit and returns its output.
+    pub async fn wait_with_output(child: Child) -> io::Result<Output> {
+        Task::blocking(async move { child.wait_with_output() }).await
+    }
+}
+
 // ----- Networking -----
 
 impl Async<TcpListener> {
     /// Creates a listener bound to the specified address.
     pub fn bind<A: ToSocketAddrs>(addr: A) -> io::Result<Async<TcpListener>> {
-        // Bind and make the listener async.
         let listener = TcpListener::bind(addr)?;
         listener.set_nonblocking(true)?;
         Ok(Async::register(listener))
@@ -610,7 +644,6 @@ impl Async<TcpListener> {
 
     /// Accepts a new incoming connection.
     pub async fn accept(&self) -> io::Result<(Async<TcpStream>, SocketAddr)> {
-        // Accept and make the stream async.
         let (stream, addr) = self.read_with(|source| source.accept()).await?;
         stream.set_nonblocking(true)?;
         Ok((Async::register(stream), addr))
@@ -627,12 +660,15 @@ impl Async<TcpListener> {
 
 impl Async<TcpStream> {
     /// Connects to the specified address.
-    pub async fn connect<T: ToSocketAddrs>(addr: T) -> io::Result<Async<TcpStream>> {
+    pub async fn connect<T: ToSocketAddrs>(addr: T) -> io::Result<Async<TcpStream>>
+    where
+        T: Send + 'static,
+        T::Iter: Send + 'static,
+    {
         let mut last_err = None;
 
         // Try connecting to each address one by one.
-        // TODO: use blocking pool to resolve
-        for addr in addr.to_socket_addrs()? {
+        for addr in Task::blocking(async move { addr.to_socket_addrs() }).await? {
             match Self::connect_to(addr).await {
                 Ok(stream) => return Ok(stream),
                 Err(err) => last_err = Some(err),

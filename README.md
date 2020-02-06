@@ -1,6 +1,4 @@
-## Features
-
-**NOTE:** Not everything in this list is true yet. WIP :)
+## Goals
 
 * Small - Fits into a single source file.
 * Fast - On par with async-std and Tokio.
@@ -8,9 +6,14 @@
 * Documented - Easy to understand and tweak.
 * Portable - Works on Linux, Android, macOS, iOS, and Windows.
 * Lightweight - Built from scratch, hooks directly into epoll/kqueue/wepoll.
-* Networking - TCP, UDP, Unix domain sockets, and custom files/sockets.
+
+## Features
+
 * Executor - Configurable threads, work stealing, supports non-send futures.
 * Blocking - Thread pool for isolating blocking code.
+* Networking - TCP, UDP, Unix domain sockets, and custom files/sockets.
+* Process - Can spawn child processes and interact with their I/O.
+* Stdio - Asynchronous stdin, stdout, and stderr.
 * Timer - Efficient userspace timers.
 
 ## License
