@@ -5,9 +5,7 @@ use std::convert::TryInto;
 use std::future::Future;
 use std::io::{self, Read, Write};
 use std::mem;
-use std::net::{
-    Ipv4Addr, SocketAddr, SocketAddrV4, TcpListener, TcpStream, ToSocketAddrs, UdpSocket,
-};
+use std::net::{SocketAddr, TcpListener, TcpStream, ToSocketAddrs, UdpSocket};
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::os::unix::net::{SocketAddr as UnixSocketAddr, UnixDatagram, UnixListener, UnixStream};
 use std::panic::catch_unwind;
@@ -54,21 +52,32 @@ compile_error!("smol does not support this target OS");
 // TODO: fix unwraps
 // TODO: if epoll/kqueue/wepoll gets EINTR, then retry - maybe just call notify()
 // TODO: catch panics in wake() and Waker::drop()
-// TODO: use parking lot
+// TODO: readme for inspiration: https://github.com/piscisaureus/wepoll
 
-// ----- Globals -----
+// ----- Event loop -----
 
 struct Runtime {
-    epoll: RawFd,
-    entries: Mutex<Slab<Arc<Entry>>>,
-    timers: Mutex<BTreeMap<(Instant, usize), Waker>>,
+    // Executor
     queue: channel::Sender<Runnable>,
 
+    // Timers
+    timers: Mutex<BTreeMap<(Instant, usize), Waker>>,
+
+    // Polling I/O events
+    epoll: RawFd,
+    entries: Mutex<Slab<Arc<Entry>>>,
     poller: Mutex<Poller>,
 
+    // Interrupting epoll/kqueue/wepoll
     notified: AtomicBool,
     socket_notify: Socket,
     socket_wakeup: Lazy<Async<Socket>, Box<dyn FnOnce() -> Async<Socket> + Send>>,
+}
+
+struct Poller {
+    epoll_events: Box<[EpollEvent]>,
+    bytes: Box<[u8]>,
+    wakers: Vec<Waker>,
 }
 
 fn initialize() -> io::Result<Runtime> {
@@ -86,8 +95,6 @@ fn initialize() -> io::Result<Runtime> {
         });
     }
 
-    // Returns a (writer, reader) pair of sockets for waking up the poller.
-    //
     // https://stackoverflow.com/questions/24933411/how-to-emulate-socket-socketpair-on-windows
     // https://github.com/mhils/backports.socketpair/blob/master/backports/socketpair/__init__.py
     // https://github.com/python-trio/trio/blob/master/trio/_core/_wakeup_socketpair.py
@@ -95,8 +102,7 @@ fn initialize() -> io::Result<Runtime> {
     //
     // Create a temporary listener.
     let listener = Socket::new(Domain::ipv4(), Type::stream(), None)?;
-    let addr = SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0).into();
-    listener.bind(&addr)?;
+    listener.bind(&SocketAddr::from(([127, 0, 0, 1], 0)).into())?;
     listener.listen(1)?;
     let addr = listener.local_addr()?;
 
@@ -120,7 +126,8 @@ fn initialize() -> io::Result<Runtime> {
         queue: sender,
         poller: Mutex::new(Poller {
             epoll_events: vec![EpollEvent::empty(); 1000].into_boxed_slice(),
-            tmp_buffer: vec![0; 1000].into_boxed_slice(),
+            bytes: vec![0; 1000].into_boxed_slice(),
+            wakers: Vec::new(),
         }),
         notified: AtomicBool::new(false),
         socket_notify: sock1,
@@ -130,22 +137,16 @@ fn initialize() -> io::Result<Runtime> {
 
 static RT: Lazy<Runtime> = Lazy::new(|| initialize().expect("cannot initialize smol runtime"));
 
-// ----- Poller -----
-
-struct Poller {
-    epoll_events: Box<[EpollEvent]>,
-    tmp_buffer: Box<[u8]>,
-}
-
 fn poll(block: bool) -> bool {
     let mut poller = match RT.poller.try_lock() {
         None => return false,
         Some(poller) => poller,
     };
 
+    // Reset the interrupt flag and the wakeup socket.
     if RT.notified.swap(false, Ordering::SeqCst) {
         loop {
-            match RT.socket_wakeup.source().read(&mut poller.tmp_buffer) {
+            match RT.socket_wakeup.source().read(&mut poller.bytes) {
                 Ok(n) if n > 0 => {}
                 Err(err) if err.kind() == io::ErrorKind::Interrupted => {}
                 _ => break,
@@ -182,39 +183,38 @@ fn poll_timers(poller: &mut Poller) -> Option<Duration> {
 }
 
 fn poll_io(poller: &mut Poller, timeout: Option<Duration>) {
+    poller.wakers.clear();
+
     let timeout_ms = match timeout {
         None => -1,
         Some(t) => t.as_millis().try_into().expect("timer duration overflow"),
     };
     let n = epoll_wait(RT.epoll, &mut poller.epoll_events, timeout_ms).unwrap();
 
-    if n == 0 {
-        return;
-    }
+    if n > 0 {
+        let entries = RT.entries.lock();
+        for ev in &poller.epoll_events[..n] {
+            let is_read = ev.events() != EpollFlags::EPOLLOUT;
+            let is_write = ev.events() != EpollFlags::EPOLLIN;
+            let index = ev.data() as usize;
 
-    let entries = RT.entries.lock();
-
-    for ev in &poller.epoll_events[..n] {
-        let events = ev.events();
-        let index = ev.data() as usize;
-
-        if let Some(entry) = entries.get(index) {
-            // TODO: wake outside the lock
-            if events != EpollFlags::EPOLLOUT {
-                for waker in entry.readers.lock().drain(..) {
-                    waker.wake();
+            if let Some(entry) = entries.get(index) {
+                if is_read {
+                    poller.wakers.append(&mut entry.readers.lock());
                 }
-            }
-            if events != EpollFlags::EPOLLIN {
-                for waker in entry.writers.lock().drain(..) {
-                    waker.wake();
+                if is_write {
+                    poller.wakers.append(&mut entry.writers.lock());
                 }
             }
         }
     }
+
+    for waker in poller.wakers.drain(..) {
+        waker.wake();
+    }
 }
 
-fn notify() {
+fn interrupt() {
     if !RT.notified.load(Ordering::SeqCst) {
         if !RT.notified.swap(true, Ordering::SeqCst) {
             loop {
@@ -234,8 +234,8 @@ fn notify() {
 /// Starts an executor and runs a future on it.
 pub fn run<F, T>(future: F) -> T
 where
-    F: Future<Output = T> + Send + 'static,
-    T: Send + 'static,
+    F: Future<Output = T>,
+    T: Send,
 {
     // TODO: run() should propagate panics into caller
     // TODO: when run() finishes, we need to wake another worker()
@@ -243,21 +243,7 @@ where
     //   - should we also poll to clear up timers, pending operations, and so on?
 
     // let handle = spawn(future);
-    todo!("run tasks from the queue until handle completes")
-
-    // Start a threadpool.
-    // for _ in 0..num_cpus::get().max(1) {
-    //     thread::spawn(|| smol::run(future::pending()));
-    // }
-
-    // Start a stoppable threadpool.
-    // let mut pool = vec![];
-    // for _ in 0..num_cpus::get().max(1) {
-    //     let (s, r) = oneshot::channel<()>();
-    //     pool.push(s);
-    //     thread::spawn(|| smol::run(async move { drop(r.await) }));
-    // }
-    // drop(pool); // stops the threadpool!
+    todo!()
 }
 
 /// A spawned future and its current state.
@@ -274,7 +260,7 @@ impl<T> Task<T> {
         T: Send + 'static,
     {
         // Create a runnable and schedule it for execution.
-        let (runnable, handle) = async_task::spawn(future, |t| RT.queue.send(t).unwrap(), ());
+        let (runnable, handle) = async_task::spawn(future, |r| RT.queue.send(r).unwrap(), ());
         runnable.schedule();
 
         // Return a join handle that retrieves the output of the future.
@@ -283,8 +269,12 @@ impl<T> Task<T> {
 
     pub fn local<F>(future: F) -> Task<T>
     where
-        F: Future<Output = T>,
+        F: Future<Output = T> + 'static,
+        T: 'static,
     {
+        // let (runnable, handle) = async_task::spawn_local(future, |t| todo!(), ());
+        // runnable.schedule();
+        // TODO: panic if not called inside a worker started with run()
         todo!()
     }
 
@@ -293,7 +283,80 @@ impl<T> Task<T> {
         F: Future<Output = T> + Send + 'static,
         T: Send + 'static,
     {
-        todo!()
+        // TODO: ignore panics
+
+        use std::sync::atomic::*;
+        static SLEEPING: AtomicUsize = AtomicUsize::new(0);
+
+        struct Pool {
+            sender: channel::Sender<Runnable>,
+            receiver: channel::Receiver<Runnable>,
+        }
+
+        static POOL: Lazy<Pool> = Lazy::new(|| {
+            // Start a single worker thread waiting for the first task.
+            start_thread();
+
+            let (sender, receiver) = channel::unbounded();
+            Pool { sender, receiver }
+        });
+
+        fn start_thread() {
+            SLEEPING.fetch_add(1, Ordering::SeqCst);
+            let timeout = Duration::from_secs(1);
+
+            thread::Builder::new()
+                .name("async-std/blocking".to_string())
+                .spawn(move || {
+                    loop {
+                        let mut runnable = match POOL.receiver.recv_timeout(timeout) {
+                            Ok(runnable) => runnable,
+                            Err(_) => {
+                                // Check whether this is the last sleeping thread.
+                                if SLEEPING.fetch_sub(1, Ordering::SeqCst) == 1 {
+                                    // If so, then restart the thread to make sure there is always at least
+                                    // one sleeping thread.
+                                    if SLEEPING.compare_and_swap(0, 1, Ordering::SeqCst) == 0 {
+                                        continue;
+                                    }
+                                }
+
+                                // Stop the thread.
+                                return;
+                            }
+                        };
+
+                        // If there are no sleeping threads, then start one to make sure there is always at
+                        // least one sleeping thread.
+                        if SLEEPING.fetch_sub(1, Ordering::SeqCst) == 1 {
+                            start_thread();
+                        }
+
+                        loop {
+                            let _ = catch_unwind(|| runnable.run());
+
+                            // Try taking another runnable if there are any available.
+                            runnable = match POOL.receiver.try_recv() {
+                                Ok(runnable) => runnable,
+                                Err(_) => break,
+                            };
+                        }
+
+                        // If there is at least one sleeping thread, stop this thread instead of putting it
+                        // to sleep.
+                        if SLEEPING.load(Ordering::SeqCst) > 0 {
+                            return;
+                        }
+
+                        SLEEPING.fetch_add(1, Ordering::SeqCst);
+                    }
+                })
+                .expect("cannot start a blocking thread");
+        }
+
+        let (runnable, handle) = async_task::spawn(future, |r| POOL.sender.send(r).unwrap(), ());
+        runnable.schedule();
+        Task(handle)
     }
 }
 
@@ -355,16 +418,21 @@ impl Future for Timer {
         }
 
         if !self.inserted {
+            let mut is_earliest = false;
             if let Some((first, _)) = timers.keys().next() {
                 if self.when < *first {
-                    todo!("notify epoller");
+                    is_earliest = true;
                 }
             }
 
             let waker = cx.waker().clone();
             timers.insert((self.when, id), waker);
             self.inserted = true;
-            notify();
+
+            if is_earliest {
+                drop(timers);
+                interrupt();
+            }
         }
 
         Poll::Pending
@@ -488,8 +556,7 @@ impl<T> Clone for Async<T> {
     }
 }
 
-// ----- Networking -----
-
+// Generate `AsyncRead` and `AsyncWrite` impls for `Async<T>` and `&Async<T>`.
 macro_rules! async_io_impls {
     ($type:ty) => {
         impl<T> AsyncRead for $type
@@ -530,8 +597,10 @@ macro_rules! async_io_impls {
 async_io_impls!(Async<T>);
 async_io_impls!(&Async<T>);
 
+// ----- Networking -----
+
 impl Async<TcpListener> {
-    /// TODO
+    /// Creates a listener bound to the specified address.
     pub fn bind<A: ToSocketAddrs>(addr: A) -> io::Result<Async<TcpListener>> {
         // Bind and make the listener async.
         let listener = TcpListener::bind(addr)?;
@@ -539,7 +608,7 @@ impl Async<TcpListener> {
         Ok(Async::register(listener))
     }
 
-    /// TODO
+    /// Accepts a new incoming connection.
     pub async fn accept(&self) -> io::Result<(Async<TcpStream>, SocketAddr)> {
         // Accept and make the stream async.
         let (stream, addr) = self.read_with(|source| source.accept()).await?;
@@ -547,7 +616,7 @@ impl Async<TcpListener> {
         Ok((Async::register(stream), addr))
     }
 
-    /// TODO
+    /// Returns a stream over incoming connections.
     pub fn incoming(&self) -> impl Stream<Item = io::Result<Async<TcpStream>>> + Unpin + '_ {
         Box::pin(stream::unfold(self, |listener| async move {
             let res = listener.accept().await.map(|(stream, _)| stream);
@@ -557,6 +626,7 @@ impl Async<TcpListener> {
 }
 
 impl Async<TcpStream> {
+    /// Connects to the specified address.
     pub async fn connect<T: ToSocketAddrs>(addr: T) -> io::Result<Async<TcpStream>> {
         let mut last_err = None;
 
@@ -578,6 +648,7 @@ impl Async<TcpStream> {
         }))
     }
 
+    /// Attempts connecting to a single address.
     async fn connect_to(addr: SocketAddr) -> io::Result<Async<TcpStream>> {
         // Create a socket.
         let domain = if addr.is_ipv6() {
@@ -609,56 +680,67 @@ impl Async<TcpStream> {
         }
     }
 
-    async fn peek(&self, buf: &mut [u8]) -> io::Result<usize> {
+    /// Receives data from the stream without removing it from the buffer.
+    pub async fn peek(&self, buf: &mut [u8]) -> io::Result<usize> {
         self.read_with(|source| source.peek(buf)).await
     }
 }
 
 impl Async<UdpSocket> {
+    /// Creates a socket bound to the specified address.
     pub fn bind<A: ToSocketAddrs>(addr: A) -> io::Result<Async<UdpSocket>> {
         let socket = UdpSocket::bind(addr)?;
         socket.set_nonblocking(true)?;
         Ok(Async::register(socket))
     }
 
+    /// Sends data to the specified address.
     pub async fn send_to<A: ToSocketAddrs>(&self, buf: &[u8], addr: A) -> io::Result<usize> {
         self.write_with(|source| source.send_to(buf, &addr)).await
     }
 
-    pub async fn recv_from(&self, buf: &mut [u8]) -> io::Result<(usize, SocketAddr)> {
-        self.read_with(|source| source.recv_from(buf)).await
-    }
-
-    pub async fn peek_from(&self, buf: &mut [u8]) -> io::Result<(usize, SocketAddr)> {
-        self.read_with(|source| source.peek_from(buf)).await
-    }
-
+    /// Sends data to the socket's peer.
     pub async fn send<A: ToSocketAddrs>(&self, buf: &[u8]) -> io::Result<usize> {
         self.write_with(|source| source.send(buf)).await
     }
 
+    /// Receives data from the socket.
+    pub async fn recv_from(&self, buf: &mut [u8]) -> io::Result<(usize, SocketAddr)> {
+        self.read_with(|source| source.recv_from(buf)).await
+    }
+
+    /// Receives data from the socket's peer.
     pub async fn recv(&self, buf: &mut [u8]) -> io::Result<usize> {
         self.read_with(|source| source.recv(buf)).await
     }
 
+    /// Receives data without removing it from the buffer.
+    pub async fn peek_from(&self, buf: &mut [u8]) -> io::Result<(usize, SocketAddr)> {
+        self.read_with(|source| source.peek_from(buf)).await
+    }
+
+    /// Receives data from the socket's peer without removing it from the buffer.
     pub async fn peek(&self, buf: &mut [u8]) -> io::Result<usize> {
         self.read_with(|source| source.peek(buf)).await
     }
 }
 
 impl Async<UnixListener> {
+    /// Creates a listener bound to the specified path.
     pub fn bind<P: AsRef<Path>>(path: P) -> io::Result<Async<UnixListener>> {
         let listener = UnixListener::bind(path)?;
         listener.set_nonblocking(true)?;
         Ok(Async::register(listener))
     }
 
+    /// Accepts a new incoming connection.
     pub async fn accept(&self) -> io::Result<(Async<UnixStream>, UnixSocketAddr)> {
         let (stream, addr) = self.read_with(|source| source.accept()).await?;
         stream.set_nonblocking(true)?;
         Ok((Async::register(stream), addr))
     }
 
+    /// Returns a stream over incoming connections.
     pub fn incoming(&self) -> impl Stream<Item = io::Result<Async<UnixStream>>> + Unpin + '_ {
         Box::pin(stream::unfold(self, |listener| async move {
             let res = listener.accept().await.map(|(stream, _)| stream);
@@ -668,12 +750,14 @@ impl Async<UnixListener> {
 }
 
 impl Async<UnixStream> {
+    /// Connects to the specified path.
     pub fn connect<P: AsRef<Path>>(path: P) -> io::Result<Async<UnixStream>> {
         let stream = UnixStream::connect(path)?;
         stream.set_nonblocking(true)?;
         Ok(Async::register(stream))
     }
 
+    /// Creates an unnamed pair of connected streams.
     pub fn pair() -> io::Result<(Async<UnixStream>, Async<UnixStream>)> {
         let (stream1, stream2) = UnixStream::pair()?;
         stream1.set_nonblocking(true)?;
@@ -683,18 +767,21 @@ impl Async<UnixStream> {
 }
 
 impl Async<UnixDatagram> {
+    /// Creates a socket bound to the specified path.
     pub fn bind<P: AsRef<Path>>(path: P) -> io::Result<Async<UnixDatagram>> {
         let socket = UnixDatagram::bind(path)?;
         socket.set_nonblocking(true)?;
         Ok(Async::register(socket))
     }
 
+    /// Creates a socket not bound to any address.
     pub fn unbound() -> io::Result<Async<UnixDatagram>> {
         let socket = UnixDatagram::unbound()?;
         socket.set_nonblocking(true)?;
         Ok(Async::register(socket))
     }
 
+    /// Creates an unnamed pair of connected sockets.
     pub fn pair() -> io::Result<(Async<UnixDatagram>, Async<UnixDatagram>)> {
         let (socket1, socket2) = UnixDatagram::pair()?;
         socket1.set_nonblocking(true)?;
@@ -702,18 +789,22 @@ impl Async<UnixDatagram> {
         Ok((Async::register(socket1), Async::register(socket2)))
     }
 
+    /// Sends data to the specified address.
     pub async fn send_to<P: AsRef<Path>>(&self, buf: &[u8], path: P) -> io::Result<usize> {
         self.write_with(|source| source.send_to(buf, &path)).await
     }
 
-    pub async fn recv_from(&self, buf: &mut [u8]) -> io::Result<(usize, UnixSocketAddr)> {
-        self.read_with(|source| source.recv_from(buf)).await
-    }
-
+    /// Sends data to the socket's peer.
     pub async fn send<A: ToSocketAddrs>(&self, buf: &[u8]) -> io::Result<usize> {
         self.write_with(|source| source.send(buf)).await
     }
 
+    /// Receives data from the socket.
+    pub async fn recv_from(&self, buf: &mut [u8]) -> io::Result<(usize, UnixSocketAddr)> {
+        self.read_with(|source| source.recv_from(buf)).await
+    }
+
+    /// Receives data from the socket's peer.
     pub async fn recv(&self, buf: &mut [u8]) -> io::Result<usize> {
         self.read_with(|source| source.recv(buf)).await
     }
