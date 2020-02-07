@@ -4,9 +4,9 @@
 * Fast - On par with async-std and Tokio.
 * Safe - Written in 100% safe Rust.
 * Complete - Fully featured and ready for production.
-* Documented - Code is easy to understand and modify.
+* Documented - Simple code, easy to understand and modify.
 * Portable - Works on Linux, Android, macOS, iOS, and Windows.
-* Lightweight - Simple dependencies, hooks into epoll/kqueue/wepoll.
+* Lightweight - Small dependencies, relies on epoll/kqueue/WSApoll.
 
 ## Features
 
