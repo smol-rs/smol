@@ -11,9 +11,9 @@ use std::net::{TcpListener, TcpStream};
 use futures::io;
 use smol::{Async, Task};
 
-async fn process(mut stream: Async<TcpStream>) -> io::Result<()> {
+async fn process(stream: Async<TcpStream>) -> io::Result<()> {
     println!("Peer: {}", stream.source().peer_addr()?);
-    io::copy(stream.clone(), &mut stream).await?;
+    io::copy(&stream, &mut &stream).await?;
     Ok(())
 }
 
