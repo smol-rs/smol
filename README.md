@@ -18,6 +18,14 @@
 * Stdio - Asynchronous stdin, stdout, and stderr.
 * Timer - Efficient userspace timers.
 
+## Examples (TODO: turn these into links)
+
+* Hello world
+* HTTP request
+* Hyper server
+* Timer
+* More...
+
 ## License
 
 <sup>

@@ -299,10 +299,7 @@ pub struct Task<T>(async_task::JoinHandle<T, ()>);
 
 impl<T> Task<T> {
     /// Starts an executor and runs a future on it.
-    pub fn run<F>(future: F) -> T
-    where
-        F: Future<Output = T>,
-    {
+    pub fn run(future: impl Future<Output = T>) -> T {
         // TODO: run() should propagate panics into caller
         // TODO: when run() finishes, we need to wake another worker()
         //   - because all workers could be stuck on the parker and nobody on epoll
@@ -311,15 +308,13 @@ impl<T> Task<T> {
         // let handle = spawn(future);
         todo!()
     }
+}
 
+impl<T: Send + 'static> Task<T> {
     /// Schedules a future for execution.
     ///
     /// This future is allowed to be stolen by another executor.
-    pub fn schedule<F>(future: F) -> Task<T>
-    where
-        F: Future<Output = T> + Send + 'static,
-        T: Send + 'static,
-    {
+    pub fn schedule(future: impl Future<Output = T> + Send + 'static) -> Task<T> {
         // Create a runnable and schedule it for execution.
         let (runnable, handle) = async_task::spawn(future, |r| RT.queue.send(r).unwrap(), ());
         runnable.schedule();
@@ -328,26 +323,8 @@ impl<T> Task<T> {
         Task(handle)
     }
 
-    /// Schedules a future on the current executor.
-    ///
-    /// Panics if not called within an executor.
-    pub fn local<F>(future: F) -> Task<T>
-    where
-        F: Future<Output = T> + 'static,
-        T: 'static,
-    {
-        // let (runnable, handle) = async_task::spawn_local(future, |t| todo!(), ());
-        // runnable.schedule();
-        // TODO: panic if not called inside a worker started with run()
-        todo!()
-    }
-
     /// Schedules a future on the blocking thread pool.
-    pub fn blocking<F>(future: F) -> Task<T>
-    where
-        F: Future<Output = T> + Send + 'static,
-        T: Send + 'static,
-    {
+    pub fn blocking(future: impl Future<Output = T> + Send + 'static) -> Task<T> {
         // TODO: ignore panics
 
         use std::sync::atomic::*;
@@ -422,6 +399,21 @@ impl<T> Task<T> {
         let (runnable, handle) = async_task::spawn(future, |r| POOL.sender.send(r).unwrap(), ());
         runnable.schedule();
         Task(handle)
+    }
+}
+
+impl<T: 'static> Task<T> {
+    /// Schedules a future on the current executor.
+    ///
+    /// Panics if not called within an executor.
+    pub fn local(future: impl Future<Output = T> + 'static) -> Task<T>
+    where
+        T: 'static,
+    {
+        // let (runnable, handle) = async_task::spawn_local(future, |t| todo!(), ());
+        // runnable.schedule();
+        // TODO: panic if not called inside a worker started with run()
+        todo!()
     }
 }
 

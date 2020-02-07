@@ -11,7 +11,7 @@ async-task = "1.3.0"
 crossbeam-channel = "0.4.0"
 futures-core = "0.3.3"
 futures-io = "0.3.3"
-futures-util = { version = "0.3.3", default-features = false, features = ["std"] }
+futures-util = { version = "0.3.3", default-features = false, features = [] }
 nix = "0.16.1"
 num_cpus = "1.12.0"
 once_cell = "1.3.1"
@@ -21,6 +21,7 @@ slab = "0.4.2"
 socket2 = "0.3.11"
 
 [dev-dependencies]
+# TODO: delete this once we stop using block_on()
 futures = { version = "0.3.3", default-features = false, features = ["std", "executor"] }
 hyper = "0.13.2"
 pin-utils = "0.1.0-alpha.4"
