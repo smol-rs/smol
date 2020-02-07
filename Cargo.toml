@@ -22,6 +22,6 @@ socket2 = "0.3.11"
 
 [dev-dependencies]
 futures = { version = "0.3.3", default-features = false, features = ["std", "executor"] }
-hyper = { path = "../hyper" }
+hyper = "0.13.2"
 pin-utils = "0.1.0-alpha.4"
 tokio = "0.2.11"
