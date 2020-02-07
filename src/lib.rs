@@ -35,6 +35,7 @@ use socket2::{Domain, Protocol, Socket, Type};
 compile_error!("smol does not support this target OS");
 
 // TODO: hello world example
+// TODO: example with uds_windows crate
 // TODO: example with stdin
 // TODO: example with pinned threads
 // TODO: example with process spawn and output
@@ -52,11 +53,9 @@ compile_error!("smol does not support this target OS");
 //       #[cfg_attr(docsrs, doc(cfg(windows)))]
 // TODO: task cancellation?
 // TODO: fix unwraps
-// TODO: if epoll/kqueue/wepoll gets EINTR, then retry - maybe just call notify()
+// TODO: if epoll/kqueue/wepoll gets EINTR, then retry - or maybe just call notify()
 // TODO: catch panics in wake() and Waker::drop()
 // TODO: readme for inspiration: https://github.com/piscisaureus/wepoll
-// TODO: Async::stream(impl Iterator) -> impl Stream + Unpin
-// TODO: filesystem operations (with OS-specific extensions), don't do Async<File>
 
 // ----- Event loop -----
 
@@ -179,7 +178,7 @@ impl Registry {
         .unwrap();
 
         // TODO: if epoll fails, remove the entry
-        Async(Arc::new(Registration { fd, source, entry }))
+        Async(Flavor::Socket(Arc::new(Registration { fd, source, entry })))
     }
 }
 
@@ -277,21 +276,6 @@ fn interrupt() {
 
 // ----- Executor -----
 
-/// Starts an executor and runs a future on it.
-pub fn run<F, T>(future: F) -> T
-where
-    F: Future<Output = T>,
-    T: Send,
-{
-    // TODO: run() should propagate panics into caller
-    // TODO: when run() finishes, we need to wake another worker()
-    //   - because all workers could be stuck on the parker and nobody on epoll
-    //   - should we also poll to clear up timers, pending operations, and so on?
-
-    // let handle = spawn(future);
-    todo!()
-}
-
 /// A runnable future, ready for execution.
 type Runnable = async_task::Task<()>;
 
@@ -299,7 +283,23 @@ type Runnable = async_task::Task<()>;
 pub struct Task<T>(async_task::JoinHandle<T, ()>);
 
 impl<T> Task<T> {
+    /// Starts an executor and runs a future on it.
+    pub fn run<F>(future: F) -> T
+    where
+        F: Future<Output = T>,
+    {
+        // TODO: run() should propagate panics into caller
+        // TODO: when run() finishes, we need to wake another worker()
+        //   - because all workers could be stuck on the parker and nobody on epoll
+        //   - should we also poll to clear up timers, pending operations, and so on?
+
+        // let handle = spawn(future);
+        todo!()
+    }
+
     /// Schedules a future for execution.
+    ///
+    /// This future is allowed to be stolen by another executor.
     pub fn schedule<F>(future: F) -> Task<T>
     where
         F: Future<Output = T> + Send + 'static,
@@ -423,68 +423,6 @@ impl<T> Future for Task<T> {
 
 // ----- Timer -----
 
-/// Completes at a certain point in time.
-pub struct Timer {
-    when: Instant,
-    inserted: bool,
-}
-
-impl Timer {
-    pub fn at(when: Instant) -> Timer {
-        Timer {
-            when,
-            inserted: false,
-        }
-    }
-
-    pub fn after(dur: Duration) -> Timer {
-        Timer::at(Instant::now() + dur)
-    }
-}
-
-impl Drop for Timer {
-    fn drop(&mut self) {
-        if self.inserted {
-            let id = self as *mut Timer as usize;
-            RT.timers.lock().remove(&(self.when, id));
-        }
-    }
-}
-
-impl Future for Timer {
-    type Output = Instant;
-
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let id = &mut *self as *mut Timer as usize;
-        let mut timers = RT.timers.lock();
-
-        if Instant::now() >= self.when {
-            timers.remove(&(self.when, id));
-            return Poll::Ready(self.when);
-        }
-
-        if !self.inserted {
-            let mut is_earliest = false;
-            if let Some((first, _)) = timers.keys().next() {
-                if self.when < *first {
-                    is_earliest = true;
-                }
-            }
-
-            let waker = cx.waker().clone();
-            timers.insert((self.when, id), waker);
-            self.inserted = true;
-
-            if is_earliest {
-                drop(timers);
-                interrupt();
-            }
-        }
-
-        Poll::Pending
-    }
-}
-
 // ----- Async I/O -----
 
 struct Entry {
@@ -506,60 +444,77 @@ impl<T> Drop for Registration<T> {
     }
 }
 
-/// An async I/O handle.
-pub struct Async<T>(Arc<Registration<T>>);
+/// Asynchronous I/O.
+pub struct Async<T>(Flavor<T>);
+
+enum Flavor<T> {
+    Socket(Arc<Registration<T>>),
+    Timer { when: Instant, inserted: bool },
+}
 
 impl<T> Async<T> {
-    /// Turns a non-blocking I/O handle into an async I/O handle.
-    pub fn nonblocking(source: T) -> Async<T>
+    /// Turns a blocking iterator into an async stream.
+    pub fn iter(t: T) -> impl Stream<Item = T::Item> + Unpin
     where
-        T: AsRawFd,
+        T: Iterator + 'static,
     {
+        // NOTE: stop task if the returned handle is dropped
+        todo!();
+        stream::empty::<T::Item>()
+    }
+
+    /// Turns a blocking reader into an async reader.
+    pub fn reader(t: T) -> impl AsyncRead + Unpin
+    where
+        T: Read + 'static,
+    {
+        // NOTE: stop task if the returned handle is dropped
+        todo!();
+        futures_util::io::empty()
+    }
+
+    /// Turns a blocking writer into an async writer.
+    pub fn writer(t: T) -> impl AsyncWrite + Unpin
+    where
+        T: Write + 'static,
+    {
+        // NOTE: stop task if the returned handle is dropped
+        todo!();
+        futures_util::io::sink()
+    }
+}
+
+impl Async<Instant> {
+    /// Completes after the specified duration of time.
+    pub fn timer(dur: Duration) -> Async<Instant> {
+        Async(Flavor::Timer {
+            when: Instant::now() + dur,
+            inserted: false,
+        })
+    }
+}
+
+impl<T: AsRawFd> Async<T> {
+    /// Turns a non-blocking I/O handle into an async I/O handle.
+    pub fn nonblocking(source: T) -> Async<T> {
         RT.registry.register(source)
     }
 
-    // NOTE: stop task if the returned handle is dropped
-
-    // Turns a blocking iterator into an async stream.
-    // fn streamer(t: T) -> impl Stream<Item = T::Item> + Unpin
-    // where
-    //     T: Iterator + 'static,
-    // {
-    //     todo!()
-    // }
-
-    // Turns a blocking reader into an async reader.
-    // fn reader(t: T) -> impl AsyncRead + Unpin
-    // where
-    //     T: Read + 'static,
-    // {
-    //     todo!()
-    // }
-
-    // Turns a blocking writer into an async writer.
-    // fn writer(t: T) -> impl AsyncWrite + Unpin
-    // where
-    //     T: Write + 'static,
-    // {
-    //     todo!()
-    // }
-}
-
-impl<T> Async<T> {
-    /// Gets a reference to the source I/O handle.
+    /// Gets a reference to the I/O source.
     pub fn source(&self) -> &T {
-        &self.0.source
+        match &self.0 {
+            Flavor::Socket(reg) => &reg.source,
+            Flavor::Timer { .. } => unreachable!(),
+        }
     }
-}
 
-impl<T> Async<T> {
     /// Turns a non-blocking read into an async operation.
     pub async fn read_with<'a, R>(
         &'a self,
         f: impl FnMut(&'a T) -> io::Result<R>,
     ) -> io::Result<R> {
         let mut f = f;
-        future::poll_fn(|cx| self.poll_with(cx, &self.0.entry.readers, &mut f)).await
+        future::poll_fn(|cx| self.poll_with(cx, &self.entry().readers, &mut f)).await
     }
 
     /// Turns a non-blocking write into an async operation.
@@ -568,7 +523,7 @@ impl<T> Async<T> {
         f: impl FnMut(&'a T) -> io::Result<R>,
     ) -> io::Result<R> {
         let mut f = f;
-        future::poll_fn(|cx| self.poll_with(cx, &self.0.entry.writers, &mut f)).await
+        future::poll_fn(|cx| self.poll_with(cx, &self.entry().writers, &mut f)).await
     }
 
     fn poll_with<'a, R>(
@@ -600,18 +555,78 @@ impl<T> Async<T> {
         }
         Poll::Pending
     }
+
+    fn entry(&self) -> &Entry {
+        match &self.0 {
+            Flavor::Socket(reg) => &reg.entry,
+            Flavor::Timer { .. } => unreachable!(),
+        }
+    }
 }
 
-impl<T> Clone for Async<T> {
+impl<T> Drop for Async<T> {
+    fn drop(&mut self) {
+        let id = self as *mut Async<T> as usize;
+        if let Flavor::Timer { when, inserted } = &self.0 {
+            if *inserted {
+                RT.timers.lock().remove(&(*when, id));
+            }
+        }
+    }
+}
+
+impl Future for Async<Instant> {
+    type Output = Instant;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let id = &mut *self as *mut Async<Instant> as usize;
+        let mut timers = RT.timers.lock();
+
+        match &mut self.0 {
+            Flavor::Socket(..) => Poll::Pending,
+            Flavor::Timer { when, inserted } => {
+                if Instant::now() >= *when {
+                    timers.remove(&(*when, id));
+                    return Poll::Ready(*when);
+                }
+
+                if !*inserted {
+                    let mut is_earliest = false;
+                    if let Some((first, _)) = timers.keys().next() {
+                        if *when < *first {
+                            is_earliest = true;
+                        }
+                    }
+
+                    let waker = cx.waker().clone();
+                    timers.insert((*when, id), waker);
+                    *inserted = true;
+
+                    if is_earliest {
+                        drop(timers);
+                        interrupt();
+                    }
+                }
+
+                Poll::Pending
+            }
+        }
+    }
+}
+
+impl<T: AsRawFd> Clone for Async<T> {
     fn clone(&self) -> Async<T> {
-        Async(self.0.clone())
+        match &self.0 {
+            Flavor::Socket(reg) => Async(Flavor::Socket(reg.clone())),
+            Flavor::Timer { when, .. } => unreachable!(),
+        }
     }
 }
 
 // Generate `AsyncRead` and `AsyncWrite` impls for `Async<T>` and `&Async<T>`.
 macro_rules! async_io_impls {
     ($type:ty) => {
-        impl<T> AsyncRead for $type
+        impl<T: AsRawFd> AsyncRead for $type
         where
             for<'a> &'a T: Read,
         {
@@ -620,11 +635,11 @@ macro_rules! async_io_impls {
                 cx: &mut Context<'_>,
                 buf: &mut [u8],
             ) -> Poll<io::Result<usize>> {
-                self.poll_with(cx, &self.0.entry.readers, |mut source| source.read(buf))
+                self.poll_with(cx, &self.entry().readers, |mut source| source.read(buf))
             }
         }
 
-        impl<T> AsyncWrite for $type
+        impl<T: AsRawFd> AsyncWrite for $type
         where
             for<'a> &'a T: Write,
         {
@@ -633,11 +648,11 @@ macro_rules! async_io_impls {
                 cx: &mut Context<'_>,
                 buf: &[u8],
             ) -> Poll<io::Result<usize>> {
-                self.poll_with(cx, &self.0.entry.writers, |mut source| source.write(buf))
+                self.poll_with(cx, &self.entry().writers, |mut source| source.write(buf))
             }
 
             fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-                self.poll_with(cx, &self.0.entry.writers, |mut source| source.flush())
+                self.poll_with(cx, &self.entry().writers, |mut source| source.flush())
             }
 
             fn poll_close(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<io::Result<()>> {
@@ -651,22 +666,18 @@ async_io_impls!(&Async<T>);
 
 // ----- Stdio -----
 
-// impl Async<Stdin> {
-    // Returns an async writer into stdin.
-    // TODO: Async::stdin() -> impl AsyncWrite + Unpin
+// impl Async<()> {
+// Returns an async writer into stdin.
+// TODO: Async::stdin() -> impl AsyncWrite + Unpin
+
+// Returns an async reader from stdout.
+// TODO: Async::stdout() -> impl AsyncRead + Unpin
+
+// Returns an async reader from stderr.
+// TODO: Async::stderr() -> impl AsyncRead + Unpin
 // }
 
-// impl Async<Stdout> {
-    // Returns an async reader from stdout.
-    // TODO: Async::stdout() -> impl AsyncRead + Unpin
-// }
-
-// impl Async<Stderr> {
-    // Returns an async reader from stderr.
-    // TODO: Async::stderr() -> impl AsyncRead + Unpin
-// }
-
-// ------ Process -----
+// ----- Process -----
 
 impl Async<Command> {
     /// Executes a command and returns its output.
@@ -694,6 +705,13 @@ impl Async<Child> {
         Task::blocking(async move { child.wait_with_output() }).await
     }
 }
+
+// ----- Filesystem -----
+
+// TODO: filesystem operations (with OS-specific extensions), don't do Async<File>
+// Async<DirBuilder>::create(builder, path)
+// Async<File>::create(path) -> File // then you can put it into reader() or writer()
+// Async<OpenOptions>::open(options, path)
 
 // ----- Networking -----
 
@@ -723,15 +741,19 @@ impl Async<TcpListener> {
 
 impl Async<TcpStream> {
     /// Connects to the specified address.
-    pub async fn connect<T: ToSocketAddrs>(addr: T) -> io::Result<Async<TcpStream>>
-    where
-        T: Send + 'static,
-        T::Iter: Send + 'static,
-    {
+    pub async fn connect<T: ToSocketAddrs + Send + 'static>(
+        addr: T,
+    ) -> io::Result<Async<TcpStream>> {
+        let addrs = Task::blocking(async move {
+            let iter = addr.to_socket_addrs()?;
+            io::Result::Ok(iter.collect::<Vec<_>>())
+        })
+        .await?;
+
         let mut last_err = None;
 
         // Try connecting to each address one by one.
-        for addr in Task::blocking(async move { addr.to_socket_addrs() }).await? {
+        for addr in addrs {
             match Self::connect_to(addr).await {
                 Ok(stream) => return Ok(stream),
                 Err(err) => last_err = Some(err),

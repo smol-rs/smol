@@ -1,13 +1,13 @@
 use std::time::{Duration, Instant};
 
-use smol::Timer;
+use smol::Async;
 
 fn main() {
     futures::executor::block_on(async {
-        let start = std::time::Instant::now();
+        let start = Instant::now();
 
         let dur = Duration::from_secs(1);
-        Timer::after(dur).await;
+        Async::timer(dur).await;
 
         dbg!(start.elapsed());
     })
