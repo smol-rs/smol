@@ -1,9 +1,9 @@
 use std::time::{Duration, Instant};
 
-use smol::Async;
+use smol::{Async, Task};
 
 fn main() {
-    futures::executor::block_on(async {
+    Task::run(async {
         let start = Instant::now();
 
         let dur = Duration::from_secs(1);

@@ -3,6 +3,7 @@
 
 use std::collections::BTreeMap;
 use std::convert::TryInto;
+use std::error::Error;
 use std::fs;
 use std::future::Future;
 use std::io::{self, Read, Write};
@@ -29,7 +30,7 @@ use nix::sys::epoll::{
     epoll_create1, epoll_ctl, epoll_wait, EpollCreateFlags, EpollEvent, EpollFlags, EpollOp,
 };
 use once_cell::sync::Lazy;
-use parking_lot::Mutex;
+use parking_lot::{Condvar, Mutex};
 use slab::Slab;
 use socket2::{Domain, Protocol, Socket, Type};
 
@@ -61,12 +62,21 @@ compile_error!("smol does not support this target OS");
 // TODO: catch panics in wake() and Waker::drop()
 // TODO: readme for inspiration: https://github.com/piscisaureus/wepoll
 // TODO: constructors like Async::<TcpStream>::new(std_tcpstream)
+//    - we need to implement all of them
+//    - also implement From<>
+// TODO: implement FusedFuture for Task?
 
 // ----- Event loop -----
 
 struct Runtime {
+    // TODO: rename Runtime to Reactor?
+    // TODO: move executor into separate Executor struct (and maybe also have Blocking)
+    // TODO: also make Reactor::poll() and Reactor::interrupt()
     // Executor
+    receiver: channel::Receiver<Runnable>,
     queue: channel::Sender<Runnable>,
+    cvar: Condvar,
+    mutex: Mutex<bool>,
 
     // Timers
     timers: Mutex<BTreeMap<(Instant, usize), Waker>>,
@@ -92,26 +102,17 @@ struct Poller {
     wakers: Vec<Waker>,
 }
 
+/// Converts any error into an I/O error.
+fn io_err(err: impl Error + Send + Sync + 'static) -> io::Error {
+    io::Error::new(io::ErrorKind::Other, Box::new(err))
+}
+
 fn initialize() -> io::Result<Runtime> {
-    thread::spawn(|| loop {
-        poll(true);
-    });
-
-    let (sender, receiver) = channel::unbounded::<Runnable>();
-    for _ in 0..num_cpus::get().max(1) {
-        let receiver = receiver.clone();
-        thread::spawn(move || {
-            receiver.iter().for_each(|runnable| {
-                let _ = catch_unwind(|| runnable.run());
-            })
-        });
-    }
-
     // https://stackoverflow.com/questions/24933411/how-to-emulate-socket-socketpair-on-windows
     // https://github.com/mhils/backports.socketpair/blob/master/backports/socketpair/__init__.py
     // https://github.com/python-trio/trio/blob/master/trio/_core/_wakeup_socketpair.py
     // https://gist.github.com/geertj/4325783
-    //
+
     // Create a temporary listener.
     let listener = Socket::new(Domain::ipv4(), Type::stream(), None)?;
     listener.bind(&SocketAddr::from(([127, 0, 0, 1], 0)).into())?;
@@ -131,21 +132,28 @@ fn initialize() -> io::Result<Runtime> {
     sock2.set_recv_buffer_size(1)?;
 
     let registry = Registry {
-        epoll: epoll_create1(EpollCreateFlags::EPOLL_CLOEXEC).expect("cannot create epoll"),
+        epoll: epoll_create1(EpollCreateFlags::EPOLL_CLOEXEC).map_err(io_err)?,
         entries: Mutex::new(Slab::new()),
     };
-    let sock2 = registry.register(sock2);
+    let sock2 = registry.register(sock2)?;
 
+    let (sender, receiver) = channel::unbounded::<Runnable>();
     Ok(Runtime {
-        registry,
-        // TODO: convert Result to io::Result
-        timers: Mutex::new(BTreeMap::new()),
+        receiver,
         queue: sender,
+        cvar: Condvar::new(),
+        mutex: Mutex::new(false),
+
+        timers: Mutex::new(BTreeMap::new()),
+
+        // TODO: convert Result to io::Result
         poller: Mutex::new(Poller {
             epoll_events: vec![EpollEvent::empty(); 1000].into_boxed_slice(),
             bytes: vec![0; 1000].into_boxed_slice(),
             wakers: Vec::new(),
         }),
+        registry,
+
         notified: AtomicBool::new(false),
         socket_notify: sock1,
         socket_wakeup: sock2,
@@ -153,7 +161,7 @@ fn initialize() -> io::Result<Runtime> {
 }
 
 impl Registry {
-    fn register<T: AsRawFd>(&self, source: T) -> Async<T> {
+    fn register<T: AsRawFd>(&self, source: T) -> io::Result<Async<T>> {
         let fd = source.as_raw_fd();
         let entry = {
             let mut entries = self.entries.lock();
@@ -181,19 +189,20 @@ impl Registry {
                 entry.index as u64,
             )),
         )
-        .unwrap();
+        .map_err(io_err)?;
 
         // TODO: if epoll fails, remove the entry
-        Async {
+        Ok(Async {
             source: Some(Box::new(source)),
             flavor: Flavor::Socket(entry),
-        }
+        })
     }
 
     // TODO: we probably don't need to pass fd because it's in the entry
-    fn unregister(&self, fd: RawFd, index: usize) {
+    fn unregister(&self, fd: RawFd, index: usize) -> io::Result<()> {
         self.entries.lock().remove(index);
-        epoll_ctl(self.epoll, EpollOp::EpollCtlDel, fd, None).unwrap();
+        epoll_ctl(self.epoll, EpollOp::EpollCtlDel, fd, None).map_err(io_err)?;
+        Ok(())
     }
 }
 
@@ -206,7 +215,8 @@ fn poll(block: bool) -> bool {
     };
 
     // Reset the interrupt flag and the wakeup socket.
-    if RT.notified.swap(false, Ordering::SeqCst) {
+    let notified = RT.notified.swap(false, Ordering::SeqCst);
+    if notified {
         loop {
             match RT.socket_wakeup.source().read(&mut poller.bytes) {
                 Ok(n) if n > 0 => {}
@@ -217,7 +227,7 @@ fn poll(block: bool) -> bool {
     }
 
     let mut timeout = poll_timers(&mut poller);
-    if !block {
+    if notified || !block {
         timeout = Some(Duration::from_secs(0));
     }
     poll_io(&mut poller, timeout);
@@ -300,13 +310,61 @@ pub struct Task<T>(async_task::JoinHandle<T, ()>);
 impl<T> Task<T> {
     /// Starts an executor and runs a future on it.
     pub fn run(future: impl Future<Output = T>) -> T {
-        // TODO: run() should propagate panics into caller
-        // TODO: when run() finishes, we need to wake another worker()
-        //   - because all workers could be stuck on the parker and nobody on epoll
-        //   - should we also poll to clear up timers, pending operations, and so on?
+        pin_utils::pin_mut!(future);
 
-        // let handle = spawn(future);
-        todo!()
+        // TODO: what is the behavior of nested run()s
+
+        // TODO Optimization: use thread-local cache
+        let ready = Arc::new(AtomicBool::new(true));
+
+        let waker = async_task::waker_fn({
+            let ready = ready.clone();
+            move || {
+                if !ready.swap(true, Ordering::SeqCst) {
+                    interrupt();
+                    let _m = RT.mutex.lock();
+                    RT.cvar.notify_all();
+                }
+            }
+        });
+
+        loop {
+            while !ready.load(Ordering::SeqCst) {
+                match RT.receiver.try_recv() {
+                    Ok(runnable) => {
+                        let _ = catch_unwind(|| runnable.run());
+                    }
+                    Err(_) => {
+                        let mut m = RT.mutex.lock();
+
+                        if *m {
+                            if !ready.load(Ordering::SeqCst) {
+                                RT.cvar.wait(&mut m);
+                            }
+                            continue;
+                        }
+
+                        *m = true;
+                        drop(m);
+                        // TODO: if this panics, set m to false and notify
+
+                        if !ready.load(Ordering::SeqCst) {
+                            poll(true);
+                        }
+
+                        m = RT.mutex.lock();
+                        *m = false;
+                        RT.cvar.notify_one();
+                    }
+                }
+            }
+
+            ready.store(false, Ordering::SeqCst);
+            match future.as_mut().poll(&mut Context::from_waker(&waker)) {
+                Poll::Pending => {}
+                Poll::Ready(val) => return val,
+            }
+        }
     }
 }
 
@@ -316,7 +374,11 @@ impl<T: Send + 'static> Task<T> {
     /// This future is allowed to be stolen by another executor.
     pub fn schedule(future: impl Future<Output = T> + Send + 'static) -> Task<T> {
         // Create a runnable and schedule it for execution.
-        let (runnable, handle) = async_task::spawn(future, |r| RT.queue.send(r).unwrap(), ());
+        let schedule = |runnable| {
+            RT.queue.send(runnable).unwrap();
+            interrupt();
+        };
+        let (runnable, handle) = async_task::spawn(future, schedule, ());
         runnable.schedule();
 
         // Return a join handle that retrieves the output of the future.
@@ -430,15 +492,8 @@ impl<T> Future for Task<T> {
 
 // ----- Async I/O -----
 
-struct Entry {
-    fd: RawFd,
-    index: usize,
-    readers: Mutex<Vec<Waker>>,
-    writers: Mutex<Vec<Waker>>,
-}
-
 /// Asynchronous I/O.
-pub struct Async<T: ?Sized> {
+pub struct Async<T> {
     flavor: Flavor,
     source: Option<Box<T>>,
 }
@@ -446,40 +501,44 @@ pub struct Async<T: ?Sized> {
 enum Flavor {
     Socket(Arc<Entry>),
     Timer(Instant, bool),
+    // TODO: Reader()
+    // TODO: Writer()
+    // TODO: Iter()
 }
 
-impl<T> Async<T> {
-    /// Turns a blocking iterator into an async stream.
-    pub fn iter(t: T) -> Async<dyn Iterator<Item = T::Item>>
-    where
-        T: Iterator + 'static,
-    {
-        // NOTE: stop task if the returned handle is dropped
-        todo!()
-    }
+impl<T> Drop for Async<T> {
+    fn drop(&mut self) {
+        let id = self as *mut Async<T> as usize;
 
-    /// Turns a blocking reader into an async reader.
-    pub fn reader(t: T) -> Async<dyn Read>
-    where
-        T: Read + 'static,
-    {
-        // NOTE: stop task if the returned handle is dropped
-        todo!()
+        match &mut self.flavor {
+            Flavor::Socket(entry) => {
+                // TODO: call entry.unregister();
+                // TODO: what about this unwrap?
+                RT.registry.unregister(entry.fd, entry.index).unwrap();
+            }
+            Flavor::Timer(when, inserted) => {
+                // TODO: call timer.unregister();
+                if *inserted {
+                    RT.timers.lock().remove(&(*when, id));
+                    *inserted = false;
+                }
+            }
+        }
     }
+}
 
-    /// Turns a blocking writer into an async writer.
-    pub fn writer(t: T) -> Async<dyn Write>
-    where
-        T: Write + 'static,
-    {
-        // NOTE: stop task if the returned handle is dropped
-        todo!()
-    }
+// ----- Async sockets -----
+
+struct Entry {
+    fd: RawFd,
+    index: usize,
+    readers: Mutex<Vec<Waker>>,
+    writers: Mutex<Vec<Waker>>,
 }
 
 impl<T: AsRawFd> Async<T> {
-    /// Turns a non-blocking I/O handle into an async I/O handle.
-    pub fn nonblocking(source: T) -> Async<T> {
+    /// Converts a non-blocking I/O handle into an async I/O handle.
+    pub fn nonblocking(source: T) -> io::Result<Async<T>> {
         RT.registry.register(source)
     }
 
@@ -493,15 +552,7 @@ impl<T: AsRawFd> Async<T> {
         self.source.as_mut().unwrap()
     }
 
-    pub fn into_source(mut self) -> T {
-        let source = self.source.take().unwrap();
-        if let Flavor::Socket(entry) = &self.flavor {
-            RT.registry.unregister(entry.fd, entry.index);
-        }
-        *source
-    }
-
-    /// Turns a non-blocking read into an async operation.
+    /// Converts a non-blocking read into an async operation.
     pub async fn read_with<R>(&self, f: impl FnMut(&T) -> io::Result<R>) -> io::Result<R> {
         let mut f = f;
         let mut source = self.source.as_ref().unwrap();
@@ -512,7 +563,7 @@ impl<T: AsRawFd> Async<T> {
         future::poll_fn(|cx| Self::poll_io(cx, |s| f(s), &mut source, wakers)).await
     }
 
-    /// Turns a non-blocking read into an async operation.
+    /// Converts a non-blocking read into an async operation.
     pub async fn read_with_mut<R>(
         &mut self,
         f: impl FnMut(&mut T) -> io::Result<R>,
@@ -526,7 +577,7 @@ impl<T: AsRawFd> Async<T> {
         future::poll_fn(|cx| Self::poll_io(cx, |s| f(s), &mut source, wakers)).await
     }
 
-    /// Turns a non-blocking write into an async operation.
+    /// Converts a non-blocking write into an async operation.
     pub async fn write_with<R>(&self, f: impl FnMut(&T) -> io::Result<R>) -> io::Result<R> {
         let mut f = f;
         let mut source = self.source.as_ref().unwrap();
@@ -537,7 +588,7 @@ impl<T: AsRawFd> Async<T> {
         future::poll_fn(|cx| Self::poll_io(cx, |s| f(s), &mut source, wakers)).await
     }
 
-    /// Turns a non-blocking write into an async operation.
+    /// Converts a non-blocking write into an async operation.
     pub async fn write_with_mut<R>(
         &mut self,
         f: impl FnMut(&mut T) -> io::Result<R>,
@@ -577,112 +628,6 @@ impl<T: AsRawFd> Async<T> {
             wakers.push(cx.waker().clone());
         }
         Poll::Pending
-    }
-}
-
-impl Async<Instant> {
-    /// Completes after the specified duration of time.
-    pub fn timer(dur: Duration) -> Async<Instant> {
-        Async {
-            source: None,
-            flavor: Flavor::Timer(Instant::now() + dur, false),
-        }
-    }
-}
-
-impl<T: ?Sized> Drop for Async<T> {
-    fn drop(&mut self) {
-        let id = self as *mut Async<T> as usize;
-
-        match &mut self.flavor {
-            Flavor::Socket(entry) => {
-                if self.source.is_some() {
-                    RT.registry.unregister(entry.fd, entry.index);
-                }
-            }
-            Flavor::Timer(when, inserted) => {
-                if *inserted {
-                    RT.timers.lock().remove(&(*when, id));
-                }
-            }
-        }
-    }
-}
-
-impl Future for Async<Instant> {
-    type Output = Instant;
-
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let id = &mut *self as *mut Async<Instant> as usize;
-        let mut timers = RT.timers.lock();
-
-        match &mut self.flavor {
-            Flavor::Socket(..) => Poll::Pending,
-            Flavor::Timer(when, inserted) => {
-                if Instant::now() >= *when {
-                    timers.remove(&(*when, id));
-                    return Poll::Ready(*when);
-                }
-
-                if !*inserted {
-                    let mut is_earliest = false;
-                    if let Some((first, _)) = timers.keys().next() {
-                        if *when < *first {
-                            is_earliest = true;
-                        }
-                    }
-
-                    let waker = cx.waker().clone();
-                    timers.insert((*when, id), waker);
-                    *inserted = true;
-
-                    if is_earliest {
-                        drop(timers);
-                        interrupt();
-                    }
-                }
-
-                Poll::Pending
-            }
-        }
-    }
-}
-
-// ----- Async trait impls -----
-
-impl<T> Stream for Async<dyn Iterator<Item = T>> {
-    type Item = T;
-
-    fn poll_next(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        todo!()
-    }
-}
-
-impl AsyncRead for Async<dyn Read> {
-    fn poll_read(
-        self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &mut [u8],
-    ) -> Poll<io::Result<usize>> {
-        todo!()
-    }
-}
-
-impl AsyncWrite for Async<dyn Write> {
-    fn poll_write(
-        self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &[u8],
-    ) -> Poll<io::Result<usize>> {
-        todo!()
-    }
-
-    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        todo!()
-    }
-
-    fn poll_close(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<io::Result<()>> {
-        Poll::Ready(Ok(()))
     }
 }
 
@@ -760,6 +705,57 @@ where
     }
 }
 
+// ----- Timer -----
+
+impl Async<Instant> {
+    /// Completes after the specified duration of time.
+    pub fn timer(dur: Duration) -> Async<Instant> {
+        Async {
+            source: None,
+            flavor: Flavor::Timer(Instant::now() + dur, false),
+        }
+    }
+}
+
+impl Future for Async<Instant> {
+    type Output = Instant;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let id = &mut *self as *mut Async<Instant> as usize;
+        let mut timers = RT.timers.lock();
+
+        match &mut self.flavor {
+            Flavor::Socket(..) => Poll::Pending,
+            Flavor::Timer(when, inserted) => {
+                if Instant::now() >= *when {
+                    timers.remove(&(*when, id));
+                    return Poll::Ready(*when);
+                }
+
+                if !*inserted {
+                    let mut is_earliest = false;
+                    if let Some((first, _)) = timers.keys().next() {
+                        if *when < *first {
+                            is_earliest = true;
+                        }
+                    }
+
+                    let waker = cx.waker().clone();
+                    timers.insert((*when, id), waker);
+                    *inserted = true;
+
+                    if is_earliest {
+                        drop(timers);
+                        interrupt();
+                    }
+                }
+
+                Poll::Pending
+            }
+        }
+    }
+}
+
 // ----- Stdio -----
 
 // NOTE: we can return Async<Stdin> because in AsyncRead we can read from the byte channel
@@ -832,14 +828,14 @@ impl Async<TcpListener> {
     pub fn bind<A: ToSocketAddrs>(addr: A) -> io::Result<Async<TcpListener>> {
         let listener = TcpListener::bind(addr)?;
         listener.set_nonblocking(true)?;
-        Ok(Async::nonblocking(listener))
+        Ok(Async::nonblocking(listener)?)
     }
 
     /// Accepts a new incoming connection.
     pub async fn accept(&self) -> io::Result<(Async<TcpStream>, SocketAddr)> {
         let (stream, addr) = self.read_with(|source| source.accept()).await?;
         stream.set_nonblocking(true)?;
-        Ok((Async::nonblocking(stream), addr))
+        Ok((Async::nonblocking(stream)?, addr))
     }
 
     /// Returns a stream over incoming connections.
@@ -895,7 +891,7 @@ impl Async<TcpStream> {
         // Begin async connect and ignore the inevitable "not yet connected" error.
         socket.set_nonblocking(true)?;
         let _ = socket.connect(&addr.into());
-        let stream = Async::nonblocking(socket.into_tcp_stream());
+        let stream = Async::nonblocking(socket.into_tcp_stream())?;
 
         // Wait for connect to complete.
         let wait_connect = |stream: &TcpStream| match stream.peer_addr() {
@@ -925,7 +921,7 @@ impl Async<UdpSocket> {
     pub fn bind<A: ToSocketAddrs>(addr: A) -> io::Result<Async<UdpSocket>> {
         let socket = UdpSocket::bind(addr)?;
         socket.set_nonblocking(true)?;
-        Ok(Async::nonblocking(socket))
+        Ok(Async::nonblocking(socket)?)
     }
 
     /// Sends data to the specified address.
@@ -964,14 +960,14 @@ impl Async<UnixListener> {
     pub fn bind<P: AsRef<Path>>(path: P) -> io::Result<Async<UnixListener>> {
         let listener = UnixListener::bind(path)?;
         listener.set_nonblocking(true)?;
-        Ok(Async::nonblocking(listener))
+        Ok(Async::nonblocking(listener)?)
     }
 
     /// Accepts a new incoming connection.
     pub async fn accept(&self) -> io::Result<(Async<UnixStream>, UnixSocketAddr)> {
         let (stream, addr) = self.read_with(|source| source.accept()).await?;
         stream.set_nonblocking(true)?;
-        Ok((Async::nonblocking(stream), addr))
+        Ok((Async::nonblocking(stream)?, addr))
     }
 
     /// Returns a stream over incoming connections.
@@ -989,7 +985,7 @@ impl Async<UnixStream> {
     pub fn connect<P: AsRef<Path>>(path: P) -> io::Result<Async<UnixStream>> {
         let stream = UnixStream::connect(path)?;
         stream.set_nonblocking(true)?;
-        Ok(Async::nonblocking(stream))
+        Ok(Async::nonblocking(stream)?)
     }
 
     /// Creates an unnamed pair of connected streams.
@@ -997,7 +993,7 @@ impl Async<UnixStream> {
         let (stream1, stream2) = UnixStream::pair()?;
         stream1.set_nonblocking(true)?;
         stream2.set_nonblocking(true)?;
-        Ok((Async::nonblocking(stream1), Async::nonblocking(stream2)))
+        Ok((Async::nonblocking(stream1)?, Async::nonblocking(stream2)?))
     }
 }
 
@@ -1006,14 +1002,14 @@ impl Async<UnixDatagram> {
     pub fn bind<P: AsRef<Path>>(path: P) -> io::Result<Async<UnixDatagram>> {
         let socket = UnixDatagram::bind(path)?;
         socket.set_nonblocking(true)?;
-        Ok(Async::nonblocking(socket))
+        Ok(Async::nonblocking(socket)?)
     }
 
     /// Creates a socket not bound to any address.
     pub fn unbound() -> io::Result<Async<UnixDatagram>> {
         let socket = UnixDatagram::unbound()?;
         socket.set_nonblocking(true)?;
-        Ok(Async::nonblocking(socket))
+        Ok(Async::nonblocking(socket)?)
     }
 
     /// Creates an unnamed pair of connected sockets.
@@ -1021,7 +1017,7 @@ impl Async<UnixDatagram> {
         let (socket1, socket2) = UnixDatagram::pair()?;
         socket1.set_nonblocking(true)?;
         socket2.set_nonblocking(true)?;
-        Ok((Async::nonblocking(socket1), Async::nonblocking(socket2)))
+        Ok((Async::nonblocking(socket1)?, Async::nonblocking(socket2)?))
     }
 
     /// Sends data to the specified address.
@@ -1042,6 +1038,34 @@ impl Async<UnixDatagram> {
     /// Receives data from the socket's peer.
     pub async fn recv(&self, buf: &mut [u8]) -> io::Result<usize> {
         self.read_with(|source| source.recv(buf)).await
+    }
+}
+
+// ----- Blocking -----
+
+impl Async<()> {
+    //     /// Converts a blocking reader into an async reader.
+    //     pub fn reader(t: impl Read + Send + 'static) -> impl AsyncRead + Unpin + 'static {
+    //         // NOTE: stop task if the returned handle is dropped
+    //         todo!();
+    //         futures_util::io::empty()
+    //     }
+    //
+    //     /// Converts a blocking writer into an async writer.
+    //     pub fn writer(t: impl Write + Send + 'static) -> impl AsyncWrite + Unpin + 'static {
+    //         // NOTE: stop task if the returned handle is dropped
+    //         todo!();
+    //         futures_util::io::sink()
+    //     }
+
+    /// Converts an iterator into a stream.
+    pub fn iter<T>(t: T) -> impl Stream<Item = T::Item> + Unpin + 'static
+    where
+        T: Iterator + Send + 'static,
+    {
+        // NOTE: stop task if the returned handle is dropped
+        todo!();
+        stream::empty()
     }
 }
 
@@ -1085,9 +1109,12 @@ impl Async<()> {
         Task::blocking(async move { fs::read(path) }).await
     }
 
-    pub async fn read_dir<P: AsRef<Path>>(path: P) -> io::Result<Async<fs::ReadDir>> {
+    pub async fn read_dir<P: AsRef<Path>>(
+        path: P,
+    ) -> io::Result<impl Stream<Item = io::Result<fs::DirEntry>> + Unpin + 'static> {
         let path = path.as_ref().to_owned();
-        Task::blocking(async move { todo!() }).await
+        let iter = Task::blocking(async move { fs::read_dir(path) }).await?;
+        Ok(Async::iter(iter))
     }
 
     pub async fn read_link<P: AsRef<Path>>(path: P) -> io::Result<PathBuf> {
@@ -1157,12 +1184,4 @@ impl Async<()> {
     //     let dst = dst.as_ref().to_owned();
     //     Task::blocking(async move { os::windows::fs::symlink_dir(src, dst) }).await
     // }
-}
-
-impl Stream for Async<fs::ReadDir> {
-    type Item = io::Result<fs::DirEntry>;
-
-    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        todo!()
-    }
 }

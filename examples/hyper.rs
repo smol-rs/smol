@@ -1,5 +1,4 @@
 use std::convert::Infallible;
-use std::future::Future;
 use std::io;
 use std::net::{TcpListener, TcpStream};
 use std::pin::Pin;
@@ -75,7 +74,7 @@ where
 }
 
 pub fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    futures::executor::block_on(Task::schedule(async {
+    Task::run(Task::schedule(async {
         // For every connection, we must make a `Service` to handle all
         // incoming HTTP requests on said connection.
         let make_svc = make_service_fn(|_conn| {
