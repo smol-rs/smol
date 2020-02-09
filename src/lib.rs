@@ -4,18 +4,16 @@
 use std::collections::BTreeMap;
 use std::convert::TryInto;
 use std::error::Error;
-use std::fs;
+use std::fmt::Debug;
 use std::future::Future;
 use std::io::{self, Read, Write};
 use std::mem;
 use std::net::{SocketAddr, TcpListener, TcpStream, ToSocketAddrs, UdpSocket};
-use std::os;
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::os::unix::net::{SocketAddr as UnixSocketAddr, UnixDatagram, UnixListener, UnixStream};
 use std::panic::catch_unwind;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::pin::Pin;
-use std::process::{Child, Command, ExitStatus, Output};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::task::{Context, Poll, Waker};
@@ -25,7 +23,9 @@ use std::time::{Duration, Instant};
 use crossbeam_channel as channel;
 use futures_core::stream::Stream;
 use futures_io::{AsyncBufRead, AsyncRead, AsyncWrite};
-use futures_util::{future, stream};
+use futures_util::future;
+use futures_util::io::{AsyncReadExt, AsyncWriteExt};
+use futures_util::stream::{self, StreamExt};
 use nix::sys::epoll::{
     epoll_create1, epoll_ctl, epoll_wait, EpollCreateFlags, EpollEvent, EpollFlags, EpollOp,
 };
@@ -354,13 +354,13 @@ impl Future for Timer {
 type Runnable = async_task::Task<()>;
 
 /// A spawned future.
-#[must_use]
 pub struct Task<T>(async_task::JoinHandle<T, ()>);
 
 impl<T: Send + 'static> Task<T> {
     /// Spawns a global future.
     ///
     /// This future is allowed to be stolen by another executor.
+    #[must_use]
     pub fn spawn(future: impl Future<Output = T> + Send + 'static) -> Task<T> {
         // Create a runnable and schedule it for execution.
         let schedule = |runnable| {
@@ -375,7 +375,9 @@ impl<T: Send + 'static> Task<T> {
     }
 
     /// Spawns a future onto the blocking thread pool.
+    #[must_use]
     pub fn blocking(future: impl Future<Output = T> + Send + 'static) -> Task<T> {
+        // TODO: do THREAD_POOL.spawn(future)
         crate::blocking(future)
     }
 }
@@ -384,6 +386,7 @@ impl<T: 'static> Task<T> {
     /// Spawns a future onto the current executor.
     ///
     /// Panics if not called within an executor.
+    #[must_use]
     pub fn local(future: impl Future<Output = T> + 'static) -> Task<T>
     where
         T: 'static,
@@ -396,13 +399,10 @@ impl<T: 'static> Task<T> {
     }
 }
 
-impl Task<()> {
-    pub fn detach(self) {}
-}
-
-impl<E: std::fmt::Debug + Send + 'static> Task<Result<(), E>> {
-    pub fn detach(self) {
-        Task::spawn(async { self.await.unwrap() }).detach();
+impl<E: Debug + Send + 'static> Task<Result<(), E>> {
+    /// Spawns a global future that unwraps the result.
+    pub fn unwrap(self) -> Task<()> {
+        Task::spawn(async { self.await.unwrap() })
     }
 }
 
@@ -519,7 +519,31 @@ pub fn writer(t: impl Write + Send + 'static) -> impl AsyncWrite + Unpin + 'stat
 }
 
 /// Blocks on async I/O.
-pub struct BlockOn; // TODO
+pub struct BlockOn<T>(pub T);
+
+impl<T: Stream + Unpin> Iterator for BlockOn<T> {
+    type Item = T::Item;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        block_on(Pin::new(&mut self.0).next())
+    }
+}
+
+impl<T: AsyncRead + Unpin> Read for BlockOn<T> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        block_on(Pin::new(&mut self.0).read(buf))
+    }
+}
+
+impl<T: AsyncWrite + Unpin> Write for BlockOn<T> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        block_on(Pin::new(&mut self.0).write(buf))
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        block_on(Pin::new(&mut self.0).flush())
+    }
+}
 
 // TODO: struct ThreadPool and method fn spawn()
 //   - Task::blocking(fut) then calls THREAD_POOL.spawn(fut)
@@ -630,7 +654,9 @@ impl<T: AsRawFd> Async<T> {
     pub fn nonblocking(source: T) -> io::Result<Async<T>> {
         RT.registry.register(source)
     }
+}
 
+impl<T> Async<T> {
     /// Gets a reference to the I/O source.
     pub fn source(&self) -> &T {
         &self.source
@@ -708,7 +734,7 @@ impl<T: AsRawFd> Async<T> {
     }
 }
 
-impl<T: AsRawFd + Read> AsyncRead for Async<T> {
+impl<T: Read> AsyncRead for Async<T> {
     fn poll_read(
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
@@ -720,7 +746,7 @@ impl<T: AsRawFd + Read> AsyncRead for Async<T> {
     }
 }
 
-impl<T: AsRawFd> AsyncRead for &Async<T>
+impl<T> AsyncRead for &Async<T>
 where
     for<'a> &'a T: Read,
 {
@@ -735,7 +761,7 @@ where
     }
 }
 
-impl<T: AsRawFd + Write> AsyncWrite for Async<T> {
+impl<T: Write> AsyncWrite for Async<T> {
     fn poll_write(
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
@@ -757,7 +783,7 @@ impl<T: AsRawFd + Write> AsyncWrite for Async<T> {
     }
 }
 
-impl<T: AsRawFd> AsyncWrite for &Async<T>
+impl<T> AsyncWrite for &Async<T>
 where
     for<'a> &'a T: Write,
 {
