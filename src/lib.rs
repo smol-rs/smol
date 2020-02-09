@@ -159,7 +159,6 @@ impl Poller {
 struct Entry {
     #[cfg(unix)]
     fd: RawFd,
-
     #[cfg(windows)]
     socket: RawSocket,
 
@@ -182,34 +181,38 @@ impl AsRawSocket for Entry {
     }
 }
 
+#[cfg(target_os = "linux")]
 struct Registry {
-    #[cfg(target_os = "linux")]
     epoll: RawFd,
-    #[cfg(target_os = "linux")]
     events: Mutex<Box<[EpollEvent]>>,
+    io_handles: Mutex<Slab<Arc<Entry>>>,
+    timers: Mutex<BTreeMap<(Instant, usize), Waker>>,
+}
 
-    #[cfg(target_os = "windows")]
+#[cfg(target_os = "windows")]
+struct Registry {
     epoll: Epoll,
-    #[cfg(target_os = "windows")]
     events: Mutex<Events>,
-
     io_handles: Mutex<Slab<Arc<Entry>>>,
     timers: Mutex<BTreeMap<(Instant, usize), Waker>>,
 }
 
 impl Registry {
+    #[cfg(target_os = "linux")]
     fn create() -> io::Result<Registry> {
         Ok(Registry {
-            #[cfg(target_os = "linux")]
             epoll: epoll_create1(EpollCreateFlags::EPOLL_CLOEXEC).map_err(io_err)?,
-            #[cfg(target_os = "linux")]
             events: Mutex::new(vec![EpollEvent::empty(); 1000].into_boxed_slice()),
+            io_handles: Mutex::new(Slab::new()),
+            timers: Mutex::new(BTreeMap::new()),
+        })
+    }
 
-            #[cfg(target_os = "windows")]
+    #[cfg(target_os = "windows")]
+    fn create() -> io::Result<Registry> {
+        Ok(Registry {
             epoll: Epoll::new()?,
-            #[cfg(target_os = "windows")]
             events: Mutex::new(Events::with_capacity(1000)),
-
             io_handles: Mutex::new(Slab::new()),
             timers: Mutex::new(BTreeMap::new()),
         })
@@ -249,7 +252,6 @@ impl Registry {
         let entry = Arc::new(Entry {
             #[cfg(unix)]
             fd: source.as_raw_fd(),
-
             #[cfg(windows)]
             socket: source.as_raw_socket(),
 
@@ -353,7 +355,7 @@ impl Registry {
                     self.epoll.reregister(
                         entry,
                         EventFlag::ONESHOT | EventFlag::IN | EventFlag::OUT | EventFlag::RDHUP,
-                        entry.index as u64
+                        entry.index as u64,
                     )?;
                 }
             }
@@ -910,8 +912,7 @@ impl<T> Async<T> {
 
 impl<T> Drop for Async<T> {
     fn drop(&mut self) {
-        // Ignore errors because an event in oneshot mode may deregister the fd before we do.
-        let _ = POLLER.registry.deregister(&self.entry);
+        POLLER.registry.deregister(&self.entry).unwrap();
     }
 }
 
