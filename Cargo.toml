@@ -13,12 +13,17 @@ crossbeam-utils = "0.7.0"
 futures-core = "0.3.3"
 futures-io = "0.3.3"
 futures-util = { version = "0.3.3", default-features = false, features = [] }
-nix = "0.16.1"
 once_cell = "1.3.1"
 parking_lot = "0.10.0"
 pin-utils = "0.1.0-alpha.4"
 slab = "0.4.2"
 socket2 = "0.3.11"
+
+[target.'cfg(unix)'.dependencies]
+nix = "0.16.1"
+
+[target.'cfg(windows)'.dependencies]
+wepoll-binding = "1.0.5"
 
 [dev-dependencies]
 futures = { version = "0.3.3", default-features = false, features = ["std"] }
