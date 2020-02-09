@@ -24,7 +24,7 @@ use std::time::{Duration, Instant};
 
 use crossbeam_channel as channel;
 use futures_core::stream::Stream;
-use futures_io::{AsyncRead, AsyncWrite};
+use futures_io::{AsyncBufRead, AsyncRead, AsyncWrite};
 use futures_util::{future, stream};
 use nix::sys::epoll::{
     epoll_create1, epoll_ctl, epoll_wait, EpollCreateFlags, EpollEvent, EpollFlags, EpollOp,
@@ -37,34 +37,11 @@ use socket2::{Domain, Protocol, Socket, Type};
 #[cfg(not(any(target_os = "linux", target_os = "android")))]
 compile_error!("smol does not support this target OS");
 
-// TODO: hello world example
-// TODO: example with uds_windows crate
-// TODO: example with stdin
-// TODO: example with pinned threads
-// TODO: example with process spawn and output
-// TODO: example with process child I/O
-// TODO: example with timeout
-// TODO: example with OS timers
-// TODO: example with Async::reader(std::io::stdin())
-// TODO: example with Async::writer(std::io::stdout())
-// TODO: example with signal-hook
-//  - Async::iter(Signals::new(&[SIGINT])?)
-// TODO: example with ctrl-c
-// TODO: example with filesystem
-// TODO: example that prints a file
-// TODO: example with hyper
-// TODO: generate OS-specific docs with --cfg docsrs
-//       #[cfg(any(windows, docsrs))]
-//       #[cfg_attr(docsrs, doc(cfg(windows)))]
-// TODO: task cancellation?
 // TODO: fix unwraps
 // TODO: if epoll/kqueue/wepoll gets EINTR, then retry - or maybe just call notify()
 // TODO: catch panics in wake() and Waker::drop()
 // TODO: readme for inspiration: https://github.com/piscisaureus/wepoll
-// TODO: constructors like Async::<TcpStream>::new(std_tcpstream)
-//    - we need to implement all of them
-//    - also implement From<>
-// TODO: implement FusedFuture for Task?
+// TODO: implement FusedFuture for Task and Timer?
 
 // ----- Event loop -----
 
@@ -99,7 +76,7 @@ struct Registry {
 struct Poller {
     epoll_events: Box<[EpollEvent]>,
     bytes: Box<[u8]>,
-    wakers: Vec<Waker>,
+    wakers: std::collections::VecDeque<Waker>,
 }
 
 /// Converts any error into an I/O error.
@@ -150,7 +127,7 @@ fn initialize() -> io::Result<Runtime> {
         poller: Mutex::new(Poller {
             epoll_events: vec![EpollEvent::empty(); 1000].into_boxed_slice(),
             bytes: vec![0; 1000].into_boxed_slice(),
-            wakers: Vec::new(),
+            wakers: Default::default(),
         }),
         registry,
 
@@ -193,16 +170,16 @@ impl Registry {
 
         // TODO: if epoll fails, remove the entry
         Ok(Async {
-            source: Some(Box::new(source)),
-            flavor: Flavor::Socket(entry),
+            source: Box::new(source),
+            entry,
         })
     }
 
     // TODO: we probably don't need to pass fd because it's in the entry
-    fn unregister(&self, fd: RawFd, index: usize) -> io::Result<()> {
+    fn unregister(&self, fd: RawFd, index: usize) {
         self.entries.lock().remove(index);
-        epoll_ctl(self.epoll, EpollOp::EpollCtlDel, fd, None).map_err(io_err)?;
-        Ok(())
+        // Ignore errors because an event in oneshot mode may unregister the fd before we do.
+        let _ = epoll_ctl(self.epoll, EpollOp::EpollCtlDel, fd, None);
     }
 }
 
@@ -272,10 +249,14 @@ fn poll_io(poller: &mut Poller, timeout: Option<Duration>) {
 
             if let Some(entry) = entries.get(index) {
                 if is_read {
-                    poller.wakers.append(&mut entry.readers.lock());
+                    for w in entry.readers.lock().drain(..) {
+                        poller.wakers.push_back(w);
+                    }
                 }
                 if is_write {
-                    poller.wakers.append(&mut entry.writers.lock());
+                    for w in entry.writers.lock().drain(..) {
+                        poller.wakers.push_front(w);
+                    }
                 }
             }
         }
@@ -299,80 +280,88 @@ fn interrupt() {
     }
 }
 
+// ----- Timer -----
+
+/// Fires at an instant in time.
+pub struct Timer {
+    when: Instant,
+    inserted: bool,
+}
+
+impl Timer {
+    /// Fires after the specified duration of time.
+    pub fn after(dur: Duration) -> Timer {
+        Timer {
+            when: Instant::now() + dur,
+            inserted: false,
+        }
+    }
+
+    /// Fires at the specified instant in time.
+    pub fn at(dur: Duration) -> Timer {
+        Timer {
+            when: Instant::now() + dur,
+            inserted: false,
+        }
+    }
+}
+
+impl Drop for Timer {
+    fn drop(&mut self) {
+        let id = self as *mut Timer as usize;
+        RT.timers.lock().remove(&(self.when, id));
+        self.inserted = false;
+    }
+}
+
+impl Future for Timer {
+    type Output = Instant;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let id = &mut *self as *mut Timer as usize;
+        let mut timers = RT.timers.lock();
+
+        if Instant::now() >= self.when {
+            timers.remove(&(self.when, id));
+            return Poll::Ready(self.when);
+        }
+
+        if !self.inserted {
+            let mut is_earliest = false;
+            if let Some((first, _)) = timers.keys().next() {
+                if self.when < *first {
+                    is_earliest = true;
+                }
+            }
+
+            let waker = cx.waker().clone();
+            timers.insert((self.when, id), waker);
+            self.inserted = true;
+
+            if is_earliest {
+                drop(timers);
+                interrupt();
+            }
+        }
+
+        Poll::Pending
+    }
+}
+
 // ----- Executor -----
 
 /// A runnable future, ready for execution.
 type Runnable = async_task::Task<()>;
 
-/// A scheduled future.
+/// A spawned future.
+#[must_use]
 pub struct Task<T>(async_task::JoinHandle<T, ()>);
 
-impl<T> Task<T> {
-    /// Starts an executor and runs a future on it.
-    pub fn run(future: impl Future<Output = T>) -> T {
-        pin_utils::pin_mut!(future);
-
-        // TODO: what is the behavior of nested run()s
-
-        // TODO Optimization: use thread-local cache
-        let ready = Arc::new(AtomicBool::new(true));
-
-        let waker = async_task::waker_fn({
-            let ready = ready.clone();
-            move || {
-                if !ready.swap(true, Ordering::SeqCst) {
-                    interrupt();
-                    let _m = RT.mutex.lock();
-                    RT.cvar.notify_all();
-                }
-            }
-        });
-
-        loop {
-            while !ready.load(Ordering::SeqCst) {
-                match RT.receiver.try_recv() {
-                    Ok(runnable) => {
-                        let _ = catch_unwind(|| runnable.run());
-                    }
-                    Err(_) => {
-                        let mut m = RT.mutex.lock();
-
-                        if *m {
-                            if !ready.load(Ordering::SeqCst) {
-                                RT.cvar.wait(&mut m);
-                            }
-                            continue;
-                        }
-
-                        *m = true;
-                        drop(m);
-                        // TODO: if this panics, set m to false and notify
-
-                        if !ready.load(Ordering::SeqCst) {
-                            poll(true);
-                        }
-
-                        m = RT.mutex.lock();
-                        *m = false;
-                        RT.cvar.notify_one();
-                    }
-                }
-            }
-
-            ready.store(false, Ordering::SeqCst);
-            match future.as_mut().poll(&mut Context::from_waker(&waker)) {
-                Poll::Pending => {}
-                Poll::Ready(val) => return val,
-            }
-        }
-    }
-}
-
 impl<T: Send + 'static> Task<T> {
-    /// Schedules a future for execution.
+    /// Spawns a global future.
     ///
     /// This future is allowed to be stolen by another executor.
-    pub fn schedule(future: impl Future<Output = T> + Send + 'static) -> Task<T> {
+    pub fn spawn(future: impl Future<Output = T> + Send + 'static) -> Task<T> {
         // Create a runnable and schedule it for execution.
         let schedule = |runnable| {
             RT.queue.send(runnable).unwrap();
@@ -385,87 +374,14 @@ impl<T: Send + 'static> Task<T> {
         Task(handle)
     }
 
-    /// Schedules a future on the blocking thread pool.
+    /// Spawns a future onto the blocking thread pool.
     pub fn blocking(future: impl Future<Output = T> + Send + 'static) -> Task<T> {
-        // TODO: ignore panics
-
-        use std::sync::atomic::*;
-        static SLEEPING: AtomicUsize = AtomicUsize::new(0);
-
-        struct Pool {
-            sender: channel::Sender<Runnable>,
-            receiver: channel::Receiver<Runnable>,
-        }
-
-        static POOL: Lazy<Pool> = Lazy::new(|| {
-            // Start a single worker thread waiting for the first task.
-            start_thread();
-
-            let (sender, receiver) = channel::unbounded();
-            Pool { sender, receiver }
-        });
-
-        fn start_thread() {
-            SLEEPING.fetch_add(1, Ordering::SeqCst);
-            let timeout = Duration::from_secs(1);
-
-            thread::Builder::new()
-                .name("async-std/blocking".to_string())
-                .spawn(move || {
-                    loop {
-                        let mut runnable = match POOL.receiver.recv_timeout(timeout) {
-                            Ok(runnable) => runnable,
-                            Err(_) => {
-                                // Check whether this is the last sleeping thread.
-                                if SLEEPING.fetch_sub(1, Ordering::SeqCst) == 1 {
-                                    // If so, then restart the thread to make sure there is always at least
-                                    // one sleeping thread.
-                                    if SLEEPING.compare_and_swap(0, 1, Ordering::SeqCst) == 0 {
-                                        continue;
-                                    }
-                                }
-
-                                // Stop the thread.
-                                return;
-                            }
-                        };
-
-                        // If there are no sleeping threads, then start one to make sure there is always at
-                        // least one sleeping thread.
-                        if SLEEPING.fetch_sub(1, Ordering::SeqCst) == 1 {
-                            start_thread();
-                        }
-
-                        loop {
-                            let _ = catch_unwind(|| runnable.run());
-
-                            // Try taking another runnable if there are any available.
-                            runnable = match POOL.receiver.try_recv() {
-                                Ok(runnable) => runnable,
-                                Err(_) => break,
-                            };
-                        }
-
-                        // If there is at least one sleeping thread, stop this thread instead of putting it
-                        // to sleep.
-                        if SLEEPING.load(Ordering::SeqCst) > 0 {
-                            return;
-                        }
-
-                        SLEEPING.fetch_add(1, Ordering::SeqCst);
-                    }
-                })
-                .expect("cannot start a blocking thread");
-        }
-
-        let (runnable, handle) = async_task::spawn(future, |r| POOL.sender.send(r).unwrap(), ());
-        runnable.schedule();
-        Task(handle)
+        crate::blocking(future)
     }
 }
 
 impl<T: 'static> Task<T> {
-    /// Schedules a future on the current executor.
+    /// Spawns a future onto the current executor.
     ///
     /// Panics if not called within an executor.
     pub fn local(future: impl Future<Output = T> + 'static) -> Task<T>
@@ -474,8 +390,19 @@ impl<T: 'static> Task<T> {
     {
         // let (runnable, handle) = async_task::spawn_local(future, |t| todo!(), ());
         // runnable.schedule();
-        // TODO: panic if not called inside a worker started with run()
+        // TODO: panic if not called inside a worker started with worker()
+        // TODO
         todo!()
+    }
+}
+
+impl Task<()> {
+    pub fn detach(self) {}
+}
+
+impl<E: std::fmt::Debug + Send + 'static> Task<Result<(), E>> {
+    pub fn detach(self) {
+        Task::spawn(async { self.await.unwrap() }).detach();
     }
 }
 
@@ -490,44 +417,206 @@ impl<T> Future for Task<T> {
     }
 }
 
-// ----- Async I/O -----
+/// Executes all futures until the main one completes.
+pub fn run<T>(future: impl Future<Output = T>) -> T {
+    pin_utils::pin_mut!(future);
 
-/// Asynchronous I/O.
-pub struct Async<T> {
-    flavor: Flavor,
-    source: Option<Box<T>>,
-}
+    // TODO: what is the behavior of nested run()s
+    //  - maybe just panic
 
-enum Flavor {
-    Socket(Arc<Entry>),
-    Timer(Instant, bool),
-    // TODO: Reader()
-    // TODO: Writer()
-    // TODO: Iter()
-}
+    // TODO Optimization: use thread-local cache for ready and queue
+    let ready = Arc::new(AtomicBool::new(true));
 
-impl<T> Drop for Async<T> {
-    fn drop(&mut self) {
-        let id = self as *mut Async<T> as usize;
-
-        match &mut self.flavor {
-            Flavor::Socket(entry) => {
-                // TODO: call entry.unregister();
-                // TODO: what about this unwrap?
-                RT.registry.unregister(entry.fd, entry.index).unwrap();
+    let waker = async_task::waker_fn({
+        let ready = ready.clone();
+        move || {
+            if !ready.swap(true, Ordering::SeqCst) {
+                interrupt();
+                let _m = RT.mutex.lock();
+                RT.cvar.notify_all();
             }
-            Flavor::Timer(when, inserted) => {
-                // TODO: call timer.unregister();
-                if *inserted {
-                    RT.timers.lock().remove(&(*when, id));
-                    *inserted = false;
+        }
+    });
+
+    loop {
+        while !ready.load(Ordering::SeqCst) {
+            match RT.receiver.try_recv() {
+                Ok(runnable) => {
+                    let _ = catch_unwind(|| runnable.run());
+                }
+                Err(_) => {
+                    let mut m = RT.mutex.lock();
+
+                    if *m {
+                        if !ready.load(Ordering::SeqCst) {
+                            RT.cvar.wait(&mut m);
+                        }
+                        continue;
+                    }
+
+                    *m = true;
+                    drop(m);
+                    // TODO: if this panics, set m to false and notify
+
+                    if !ready.load(Ordering::SeqCst) {
+                        poll(true);
+                    }
+
+                    m = RT.mutex.lock();
+                    *m = false;
+                    RT.cvar.notify_one();
                 }
             }
+        }
+
+        ready.store(false, Ordering::SeqCst);
+        match future.as_mut().poll(&mut Context::from_waker(&waker)) {
+            Poll::Pending => {}
+            Poll::Ready(val) => return val,
         }
     }
 }
 
-// ----- Async sockets -----
+// ----- Blocking -----
+
+/// Moves blocking code onto a thread.
+#[macro_export]
+macro_rules! blocking {
+    ($($expr:tt)*) => {
+        smol::Task::blocking(async move { $($expr)* }).await
+    };
+}
+
+/// Blocks on a single future.
+pub fn block_on<T>(future: impl Future<Output = T>) -> T {
+    todo!()
+}
+
+/// Converts a blocking iterator into a stream.
+pub fn iter<T>(t: T) -> impl Stream<Item = T::Item> + Unpin + 'static
+where
+    T: Iterator + Send + 'static,
+{
+    // NOTE: stop task if the returned handle is dropped
+    todo!();
+    stream::empty()
+}
+
+/// Converts a blocking reader into an async reader.
+pub fn reader(t: impl Read + Send + 'static) -> impl AsyncBufRead + Unpin + 'static {
+    // TODO: should we simply return Reader here?
+    // NOTE: stop task if the returned handle is dropped
+    todo!();
+    futures_util::io::empty()
+}
+
+/// Converts a blocking writer into an async writer.
+pub fn writer(t: impl Write + Send + 'static) -> impl AsyncWrite + Unpin + 'static {
+    // TODO: should we simply return Writer here?
+    // NOTE: stop task if the returned handle is dropped
+    todo!();
+    futures_util::io::sink()
+}
+
+/// Blocks on async I/O.
+pub struct BlockOn; // TODO
+
+// TODO: struct ThreadPool and method fn spawn()
+//   - Task::blocking(fut) then calls THREAD_POOL.spawn(fut)
+
+/// Spawns a future onto the blocking thread pool.
+fn blocking<T: Send + 'static>(future: impl Future<Output = T> + Send + 'static) -> Task<T> {
+    // TODO: ignore panics
+
+    use std::sync::atomic::*;
+    static SLEEPING: AtomicUsize = AtomicUsize::new(0);
+
+    struct Pool {
+        sender: channel::Sender<Runnable>,
+        receiver: channel::Receiver<Runnable>,
+    }
+
+    static POOL: Lazy<Pool> = Lazy::new(|| {
+        // Start a single worker thread waiting for the first task.
+        start_thread();
+
+        let (sender, receiver) = channel::unbounded();
+        Pool { sender, receiver }
+    });
+
+    fn start_thread() {
+        SLEEPING.fetch_add(1, Ordering::SeqCst);
+        let timeout = Duration::from_secs(1);
+
+        thread::Builder::new()
+            .name("async-std/blocking".to_string())
+            .spawn(move || {
+                loop {
+                    let mut runnable = match POOL.receiver.recv_timeout(timeout) {
+                        Ok(runnable) => runnable,
+                        Err(_) => {
+                            // Check whether this is the last sleeping thread.
+                            if SLEEPING.fetch_sub(1, Ordering::SeqCst) == 1 {
+                                // If so, then restart the thread to make sure there is always at least
+                                // one sleeping thread.
+                                if SLEEPING.compare_and_swap(0, 1, Ordering::SeqCst) == 0 {
+                                    continue;
+                                }
+                            }
+
+                            // Stop the thread.
+                            return;
+                        }
+                    };
+
+                    // If there are no sleeping threads, then start one to make sure there is always at
+                    // least one sleeping thread.
+                    if SLEEPING.fetch_sub(1, Ordering::SeqCst) == 1 {
+                        start_thread();
+                    }
+
+                    loop {
+                        let _ = catch_unwind(|| runnable.run());
+
+                        // Try taking another runnable if there are any available.
+                        runnable = match POOL.receiver.try_recv() {
+                            Ok(runnable) => runnable,
+                            Err(_) => break,
+                        };
+                    }
+
+                    // If there is at least one sleeping thread, stop this thread instead of putting it
+                    // to sleep.
+                    if SLEEPING.load(Ordering::SeqCst) > 0 {
+                        return;
+                    }
+
+                    SLEEPING.fetch_add(1, Ordering::SeqCst);
+                }
+            })
+            .expect("cannot start a blocking thread");
+    }
+
+    let (runnable, handle) = async_task::spawn(future, |r| POOL.sender.send(r).unwrap(), ());
+    runnable.schedule();
+    Task(handle)
+}
+
+// ----- Async I/O -----
+
+/// Asynchronous I/O.
+pub struct Async<T> {
+    source: Box<T>,
+    entry: Arc<Entry>,
+}
+
+impl<T> Drop for Async<T> {
+    fn drop(&mut self) {
+        // TODO: call entry.unregister();
+        // TODO: what about this unwrap?
+        RT.registry.unregister(self.entry.fd, self.entry.index);
+    }
+}
 
 struct Entry {
     fd: RawFd,
@@ -544,22 +633,19 @@ impl<T: AsRawFd> Async<T> {
 
     /// Gets a reference to the I/O source.
     pub fn source(&self) -> &T {
-        self.source.as_ref().unwrap()
+        &self.source
     }
 
     /// Gets a mutable reference to the I/O source.
     pub fn source_mut(&mut self) -> &mut T {
-        self.source.as_mut().unwrap()
+        &mut self.source
     }
 
     /// Converts a non-blocking read into an async operation.
     pub async fn read_with<R>(&self, f: impl FnMut(&T) -> io::Result<R>) -> io::Result<R> {
         let mut f = f;
-        let mut source = self.source.as_ref().unwrap();
-        let wakers = match &self.flavor {
-            Flavor::Socket(entry) => &entry.readers,
-            Flavor::Timer(..) => unreachable!(),
-        };
+        let mut source = &self.source;
+        let wakers = &self.entry.readers;
         future::poll_fn(|cx| Self::poll_io(cx, |s| f(s), &mut source, wakers)).await
     }
 
@@ -569,22 +655,16 @@ impl<T: AsRawFd> Async<T> {
         f: impl FnMut(&mut T) -> io::Result<R>,
     ) -> io::Result<R> {
         let mut f = f;
-        let mut source = self.source.as_mut().unwrap();
-        let wakers = match &self.flavor {
-            Flavor::Socket(entry) => &entry.readers,
-            Flavor::Timer(..) => unreachable!(),
-        };
+        let mut source = &mut self.source;
+        let wakers = &self.entry.readers;
         future::poll_fn(|cx| Self::poll_io(cx, |s| f(s), &mut source, wakers)).await
     }
 
     /// Converts a non-blocking write into an async operation.
     pub async fn write_with<R>(&self, f: impl FnMut(&T) -> io::Result<R>) -> io::Result<R> {
         let mut f = f;
-        let mut source = self.source.as_ref().unwrap();
-        let wakers = match &self.flavor {
-            Flavor::Socket(entry) => &entry.writers,
-            Flavor::Timer(..) => unreachable!(),
-        };
+        let mut source = &self.source;
+        let wakers = &self.entry.writers;
         future::poll_fn(|cx| Self::poll_io(cx, |s| f(s), &mut source, wakers)).await
     }
 
@@ -594,11 +674,8 @@ impl<T: AsRawFd> Async<T> {
         f: impl FnMut(&mut T) -> io::Result<R>,
     ) -> io::Result<R> {
         let mut f = f;
-        let mut source = self.source.as_mut().unwrap();
-        let wakers = match &self.flavor {
-            Flavor::Socket(entry) => &entry.writers,
-            Flavor::Timer(..) => unreachable!(),
-        };
+        let mut source = &mut self.source;
+        let wakers = &self.entry.writers;
         future::poll_fn(|cx| Self::poll_io(cx, |s| f(s), &mut source, wakers)).await
     }
 
@@ -705,122 +782,6 @@ where
     }
 }
 
-// ----- Timer -----
-
-impl Async<Instant> {
-    /// Completes after the specified duration of time.
-    pub fn timer(dur: Duration) -> Async<Instant> {
-        Async {
-            source: None,
-            flavor: Flavor::Timer(Instant::now() + dur, false),
-        }
-    }
-}
-
-impl Future for Async<Instant> {
-    type Output = Instant;
-
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let id = &mut *self as *mut Async<Instant> as usize;
-        let mut timers = RT.timers.lock();
-
-        match &mut self.flavor {
-            Flavor::Socket(..) => Poll::Pending,
-            Flavor::Timer(when, inserted) => {
-                if Instant::now() >= *when {
-                    timers.remove(&(*when, id));
-                    return Poll::Ready(*when);
-                }
-
-                if !*inserted {
-                    let mut is_earliest = false;
-                    if let Some((first, _)) = timers.keys().next() {
-                        if *when < *first {
-                            is_earliest = true;
-                        }
-                    }
-
-                    let waker = cx.waker().clone();
-                    timers.insert((*when, id), waker);
-                    *inserted = true;
-
-                    if is_earliest {
-                        drop(timers);
-                        interrupt();
-                    }
-                }
-
-                Poll::Pending
-            }
-        }
-    }
-}
-
-// ----- Stdio -----
-
-// NOTE: we can return Async<Stdin> because in AsyncRead we can read from the byte channel
-// - but wait! Async<Stdin> doesn't impl AsyncRead because &Stdin doesn't impl Read
-// - so we have to use Async<dyn Read> or impl AsyncRead manually for all types
-// - if we do it manually, what about uds_windows?
-// NOTE: Async<TcpStream> can be converted to Async<dyn Read>
-
-impl Async<io::Stdin> {
-    /// Returns an async writer into stdin.
-    pub fn stdin() -> Async<io::Stdin> {
-        todo!()
-    }
-
-    pub async fn read_line(&self, buf: &mut String) -> io::Result<usize> {
-        todo!()
-    }
-}
-
-// NOTE: what happens if we drop stdout? how do we know when data is flushed
-//   - solution: there is poll_flush()
-
-impl Async<io::Stdout> {
-    // Returns an async reader from stdout.
-    pub fn stdout() -> Async<io::Stdout> {
-        todo!()
-    }
-}
-
-impl Async<io::Stderr> {
-    /// Returns an async reader from stderr.
-    pub fn stderr() -> Async<io::Stderr> {
-        todo!()
-    }
-}
-
-// ----- Process -----
-
-impl Async<Command> {
-    /// Executes a command and returns its output.
-    pub async fn output(cmd: Command) -> io::Result<Output> {
-        let mut cmd = cmd;
-        Task::blocking(async move { cmd.output() }).await
-    }
-
-    /// Executes a command and returns its exit status.
-    pub async fn status(cmd: Command) -> io::Result<ExitStatus> {
-        let mut cmd = cmd;
-        Task::blocking(async move { cmd.status() }).await
-    }
-}
-
-impl Async<Child> {
-    /// Waits for a child process to exit and returns its exit status.
-    pub async fn wait(child: Child) -> io::Result<ExitStatus> {
-        let mut child = child;
-        Task::blocking(async move { child.wait() }).await
-    }
-
-    /// Waits for a child process to exit and returns its output.
-    pub async fn wait_with_output(child: Child) -> io::Result<Output> {
-        Task::blocking(async move { child.wait_with_output() }).await
-    }
-}
-
 // ----- Networking -----
 
 impl Async<TcpListener> {
@@ -840,7 +801,6 @@ impl Async<TcpListener> {
 
     /// Returns a stream over incoming connections.
     pub fn incoming(&self) -> impl Stream<Item = io::Result<Async<TcpStream>>> + Unpin + '_ {
-        // TODO: can we return Async<Incoming>?
         Box::pin(stream::unfold(self, |listener| async move {
             let res = listener.accept().await.map(|(stream, _)| stream);
             Some((res, listener))
@@ -972,7 +932,6 @@ impl Async<UnixListener> {
 
     /// Returns a stream over incoming connections.
     pub fn incoming(&self) -> impl Stream<Item = io::Result<Async<UnixStream>>> + Unpin + '_ {
-        // TODO: can we return Async<Incoming>?
         Box::pin(stream::unfold(self, |listener| async move {
             let res = listener.accept().await.map(|(stream, _)| stream);
             Some((res, listener))
@@ -1039,149 +998,4 @@ impl Async<UnixDatagram> {
     pub async fn recv(&self, buf: &mut [u8]) -> io::Result<usize> {
         self.read_with(|source| source.recv(buf)).await
     }
-}
-
-// ----- Blocking -----
-
-impl Async<()> {
-    //     /// Converts a blocking reader into an async reader.
-    //     pub fn reader(t: impl Read + Send + 'static) -> impl AsyncRead + Unpin + 'static {
-    //         // NOTE: stop task if the returned handle is dropped
-    //         todo!();
-    //         futures_util::io::empty()
-    //     }
-    //
-    //     /// Converts a blocking writer into an async writer.
-    //     pub fn writer(t: impl Write + Send + 'static) -> impl AsyncWrite + Unpin + 'static {
-    //         // NOTE: stop task if the returned handle is dropped
-    //         todo!();
-    //         futures_util::io::sink()
-    //     }
-
-    /// Converts an iterator into a stream.
-    pub fn iter<T>(t: T) -> impl Stream<Item = T::Item> + Unpin + 'static
-    where
-        T: Iterator + Send + 'static,
-    {
-        // NOTE: stop task if the returned handle is dropped
-        todo!();
-        stream::empty()
-    }
-}
-
-// ----- Filesystem -----
-
-impl Async<()> {
-    pub async fn canonicalize<P: AsRef<Path>>(path: P) -> io::Result<PathBuf> {
-        let path = path.as_ref().to_owned();
-        Task::blocking(async move { fs::canonicalize(path) }).await
-    }
-
-    pub async fn copy<P: AsRef<Path>, Q: AsRef<Path>>(src: P, dst: Q) -> io::Result<u64> {
-        let src = src.as_ref().to_owned();
-        let dst = dst.as_ref().to_owned();
-        Task::blocking(async move { fs::copy(src, dst) }).await
-    }
-
-    pub async fn create_dir<P: AsRef<Path>>(path: P) -> io::Result<()> {
-        let path = path.as_ref().to_owned();
-        Task::blocking(async move { fs::create_dir(path) }).await
-    }
-
-    pub async fn create_dir_all<P: AsRef<Path>>(path: P) -> io::Result<()> {
-        let path = path.as_ref().to_owned();
-        Task::blocking(async move { fs::create_dir_all(path) }).await
-    }
-
-    pub async fn hard_link<P: AsRef<Path>, Q: AsRef<Path>>(src: P, dst: Q) -> io::Result<()> {
-        let src = src.as_ref().to_owned();
-        let dst = dst.as_ref().to_owned();
-        Task::blocking(async move { fs::hard_link(src, dst) }).await
-    }
-
-    pub async fn metadata<P: AsRef<Path>>(path: P) -> io::Result<fs::Metadata> {
-        let path = path.as_ref().to_owned();
-        Task::blocking(async move { fs::metadata(path) }).await
-    }
-
-    pub async fn read<P: AsRef<Path>>(path: P) -> io::Result<Vec<u8>> {
-        let path = path.as_ref().to_owned();
-        Task::blocking(async move { fs::read(path) }).await
-    }
-
-    pub async fn read_dir<P: AsRef<Path>>(
-        path: P,
-    ) -> io::Result<impl Stream<Item = io::Result<fs::DirEntry>> + Unpin + 'static> {
-        let path = path.as_ref().to_owned();
-        let iter = Task::blocking(async move { fs::read_dir(path) }).await?;
-        Ok(Async::iter(iter))
-    }
-
-    pub async fn read_link<P: AsRef<Path>>(path: P) -> io::Result<PathBuf> {
-        let path = path.as_ref().to_owned();
-        Task::blocking(async move { fs::read_link(path) }).await
-    }
-
-    pub async fn read_to_string<P: AsRef<Path>>(path: P) -> io::Result<String> {
-        let path = path.as_ref().to_owned();
-        Task::blocking(async move { fs::read_to_string(path) }).await
-    }
-
-    pub async fn remove_dir<P: AsRef<Path>>(path: P) -> io::Result<()> {
-        let path = path.as_ref().to_owned();
-        Task::blocking(async move { fs::remove_dir(path) }).await
-    }
-
-    pub async fn remove_dir_all<P: AsRef<Path>>(path: P) -> io::Result<()> {
-        let path = path.as_ref().to_owned();
-        Task::blocking(async move { fs::remove_dir_all(path) }).await
-    }
-
-    pub async fn remove_file<P: AsRef<Path>>(path: P) -> io::Result<()> {
-        let path = path.as_ref().to_owned();
-        Task::blocking(async move { fs::remove_file(path) }).await
-    }
-
-    pub async fn rename<P: AsRef<Path>, Q: AsRef<Path>>(from: P, to: Q) -> io::Result<()> {
-        let from = from.as_ref().to_owned();
-        let to = to.as_ref().to_owned();
-        Task::blocking(async move { fs::rename(from, to) }).await
-    }
-
-    pub async fn set_permissions<P: AsRef<Path>>(path: P, perm: fs::Permissions) -> io::Result<()> {
-        let path = path.as_ref().to_owned();
-        Task::blocking(async move { fs::set_permissions(path, perm) }).await
-    }
-
-    pub async fn symlink_metadata<P: AsRef<Path>>(path: P) -> io::Result<fs::Metadata> {
-        let path = path.as_ref().to_owned();
-        Task::blocking(async move { fs::symlink_metadata(path) }).await
-    }
-
-    pub async fn write<P: AsRef<Path>, C: AsRef<[u8]>>(path: P, contents: C) -> io::Result<()> {
-        let path = path.as_ref().to_owned();
-        let contents = contents.as_ref().to_owned();
-        Task::blocking(async move { fs::write(path, contents) }).await
-    }
-
-    // TODO: unix-only
-    pub async fn symlink<P: AsRef<Path>, Q: AsRef<Path>>(src: P, dst: Q) -> io::Result<()> {
-        let src = src.as_ref().to_owned();
-        let dst = dst.as_ref().to_owned();
-        Task::blocking(async move { os::unix::fs::symlink(src, dst) }).await
-    }
-
-    // TODO: windows-only
-    // pub async fn symlink_dir<P: AsRef<Path>, Q: AsRef<Path>>(src: P, dst: Q) -> io::Result<()> {
-    //     let src = src.as_ref().to_owned();
-    //     let dst = dst.as_ref().to_owned();
-    //     Task::blocking(async move { os::windows::fs::symlink_dir(src, dst) }).await
-    // }
-
-    // TODO: windows-only
-    // pub async fn symlink_file<P: AsRef<Path>, Q: AsRef<Path>>(src: P, dst: Q) -> io::Result<()> {
-    //     let src = src.as_ref().to_owned();
-    //     let dst = dst.as_ref().to_owned();
-    //     Task::blocking(async move { os::windows::fs::symlink_dir(src, dst) }).await
-    // }
 }

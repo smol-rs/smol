@@ -6,18 +6,22 @@
 //! $ nc localhost 8080
 //! ```
 
+use std::net::{TcpListener, TcpStream};
+
 use futures::io;
 use smol::{Async, Task};
-use std::net::TcpListener;
+
+async fn echo(stream: Async<TcpStream>) -> io::Result<()> {
+    io::copy(&stream, &mut &stream).await?;
+    Ok(())
+}
 
 fn main() -> io::Result<()> {
-    Task::run(async {
+    smol::run(async {
         let listener = Async::<TcpListener>::bind("127.0.0.1:8080")?;
         loop {
             let (stream, _) = listener.accept().await?;
-            Task::schedule(async move {
-                io::copy(&stream, &mut &stream).await.expect("failed");
-            });
+            Task::spawn(echo(stream)).detach();
         }
     })
 }

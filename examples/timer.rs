@@ -1,13 +1,13 @@
 use std::time::{Duration, Instant};
 
-use smol::{Async, Task};
+use smol::Timer;
 
 fn main() {
-    Task::run(async {
+    smol::run(async {
         let start = Instant::now();
 
         let dur = Duration::from_secs(1);
-        Async::timer(dur).await;
+        Timer::after(dur).await;
 
         dbg!(start.elapsed());
     })

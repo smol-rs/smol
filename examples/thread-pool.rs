@@ -6,10 +6,10 @@ use smol::Task;
 fn main() {
     // Start a thread pool.
     for _ in 0..num_cpus::get().max(1) {
-        thread::spawn(|| Task::run(future::pending::<()>()));
+        thread::spawn(|| smol::run(future::pending::<()>()));
     }
 
-    let val = Task::run(Task::schedule(async { 1 + 2 }));
+    let val = smol::block_on(Task::spawn(async { 1 + 2 }));
     assert_eq!(val, 3);
 
     // Start a stoppable threadpool.
@@ -17,7 +17,7 @@ fn main() {
     // for _ in 0..num_cpus::get().max(1) {
     //     let (s, r) = oneshot::channel<()>();
     //     pool.push(s);
-    //     thread::spawn(|| Task::run(async move { drop(r.await) }));
+    //     thread::spawn(|| smol::run(async move { drop(r.await) }));
     // }
     // drop(pool); // stops the threadpool!
 }
