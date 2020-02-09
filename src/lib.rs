@@ -1,5 +1,4 @@
 #![forbid(unsafe_code)]
-#![cfg_attr(docsrs, feature(doc_cfg))]
 // TODO: #![warn(missing_docs, missing_debug_implementations, rust_2018_idioms)]
 
 #[cfg(not(any(target_os = "linux", target_os = "android", target_os = "windows")))]
@@ -49,7 +48,7 @@ use nix::sys::epoll::{
 };
 
 #[cfg(target_os = "windows")]
-use wepoll_binding::{Epoll, EpollFlags, Events};
+use wepoll_binding::{Epoll, EventFlag, Events};
 
 // TODO: fix unwraps
 // TODO: if epoll/kqueue/wepoll gets EINTR, then retry - or maybe just call notify()
@@ -809,8 +808,7 @@ pub struct Async<T> {
     entry: Arc<Entry>,
 }
 
-#[cfg(any(unix, docsrs))]
-#[cfg_attr(docsrs, doc(cfg(unix)))]
+#[cfg(unix)]
 impl<T: AsRawFd> Async<T> {
     /// Converts a non-blocking I/O handle into an async I/O handle.
     pub fn nonblocking(source: T) -> io::Result<Async<T>> {
@@ -821,8 +819,7 @@ impl<T: AsRawFd> Async<T> {
     }
 }
 
-#[cfg(any(windows, docsrs))]
-#[cfg_attr(docsrs, doc(cfg(windows)))]
+#[cfg(windows)]
 impl<T: AsRawSocket> Async<T> {
     /// Converts a non-blocking I/O handle into an async I/O handle.
     pub fn nonblocking(source: T) -> io::Result<Async<T>> {
@@ -1125,8 +1122,7 @@ impl Async<UdpSocket> {
     }
 }
 
-#[cfg(any(unix, docsrs))]
-#[cfg_attr(docsrs, doc(cfg(unix)))]
+#[cfg(any(unix))]
 impl Async<UnixListener> {
     /// Creates a listener bound to the specified path.
     pub fn bind<P: AsRef<Path>>(path: P) -> io::Result<Async<UnixListener>> {
@@ -1151,8 +1147,7 @@ impl Async<UnixListener> {
     }
 }
 
-#[cfg(any(unix, docsrs))]
-#[cfg_attr(docsrs, doc(cfg(unix)))]
+#[cfg(any(unix))]
 impl Async<UnixStream> {
     /// Connects to the specified path.
     pub fn connect<P: AsRef<Path>>(path: P) -> io::Result<Async<UnixStream>> {
@@ -1170,8 +1165,7 @@ impl Async<UnixStream> {
     }
 }
 
-#[cfg(any(unix, docsrs))]
-#[cfg_attr(docsrs, doc(cfg(unix)))]
+#[cfg(any(unix))]
 impl Async<UnixDatagram> {
     /// Creates a socket bound to the specified path.
     pub fn bind<P: AsRef<Path>>(path: P) -> io::Result<Async<UnixDatagram>> {
