@@ -43,7 +43,6 @@ compile_error!("smol does not support this target OS");
 // TODO: if epoll/kqueue/wepoll gets EINTR, then retry - or maybe just call notify()
 // TODO: catch panics in wake() and Waker::drop()
 // TODO: readme for inspiration: https://github.com/piscisaureus/wepoll
-// TODO: implement FusedFuture for Task and Timer?
 
 // ----- Poller -----
 
@@ -51,7 +50,7 @@ struct Poller {
     registry: Registry,
     flag: AtomicBool,
     socket_notify: Socket,
-    socket_wakeup: Async<Socket>,
+    socket_wakeup: Socket,
 }
 
 static POLLER: Lazy<Poller> = Lazy::new(|| Poller::create().expect("cannot create poller"));
@@ -82,7 +81,7 @@ impl Poller {
         sock2.set_recv_buffer_size(1)?;
 
         let registry = Registry::create()?;
-        let sock2 = registry.register(sock2)?;
+        registry.register(sock2.as_raw_fd())?;
 
         Ok(Poller {
             registry,
@@ -131,7 +130,7 @@ impl Poller {
         let value = self.flag.swap(false, Ordering::SeqCst);
         if value {
             loop {
-                match self.socket_wakeup.source().read(&mut [0; 64]) {
+                match (&self.socket_wakeup).read(&mut [0; 64]) {
                     Ok(n) if n > 0 => {}
                     Err(err) if err.kind() == io::ErrorKind::Interrupted => {}
                     _ => break,
@@ -140,6 +139,15 @@ impl Poller {
         }
         value
     }
+}
+
+// ----- Registry -----
+
+struct Entry {
+    fd: RawFd,
+    index: usize,
+    readers: Mutex<Vec<Waker>>,
+    writers: Mutex<Vec<Waker>>,
 }
 
 struct Registry {
@@ -160,8 +168,7 @@ impl Registry {
     }
 
     // TODO: insert/delete terminology?
-    fn register<T: AsRawFd>(&self, source: T) -> io::Result<Async<T>> {
-        let fd = source.as_raw_fd();
+    fn register(&self, fd: RawFd) -> io::Result<Arc<Entry>> {
         let entry = {
             let mut io_handles = self.io_handles.lock();
             let vacant = io_handles.vacant_entry();
@@ -190,17 +197,13 @@ impl Registry {
         .map_err(io_err)?;
 
         // TODO: if epoll fails, remove the entry
-        Ok(Async {
-            source: Box::new(source),
-            entry,
-        })
+        Ok(entry)
     }
 
-    // TODO: we probably don't need to pass fd because it's in the entry
-    fn unregister(&self, fd: RawFd, index: usize) {
-        self.io_handles.lock().remove(index);
-        // Ignore errors because an event in oneshot mode may unregister the fd before we do.
-        let _ = epoll_ctl(self.epoll, EpollOp::EpollCtlDel, fd, None);
+    fn unregister(&self, entry: &Entry) -> io::Result<()> {
+        self.io_handles.lock().remove(entry.index);
+        epoll_ctl(self.epoll, EpollOp::EpollCtlDel, entry.fd, None).map_err(io_err)?;
+        Ok(())
     }
 
     fn poll_timers(&self) -> Option<Instant> {
@@ -238,34 +241,31 @@ impl Registry {
         // TODO: handle unwrap
         let n = epoll_wait(self.epoll, &mut events, timeout_ms).unwrap();
 
-        if n == 0 {
-            return;
-        }
-
         let mut wakers = VecDeque::new();
-        let io_handles = self.io_handles.lock();
+        if n > 0 {
+            let io_handles = self.io_handles.lock();
 
-        for ev in &events[..n] {
-            let is_read = ev.events() != EpollFlags::EPOLLOUT;
-            let is_write = ev.events() != EpollFlags::EPOLLIN;
-            let index = ev.data() as usize;
+            for ev in &events[..n] {
+                let is_read = ev.events() != EpollFlags::EPOLLOUT;
+                let is_write = ev.events() != EpollFlags::EPOLLIN;
+                let index = ev.data() as usize;
 
-            // TODO: https://twitter.com/kingprotty/status/1222152589405384705?s=19
-            if let Some(entry) = io_handles.get(index) {
-                if is_read {
-                    for w in entry.readers.lock().drain(..) {
-                        wakers.push_back(w);
+                // In order to minimize latencies, wake writers before readers.
+                // Source: https://twitter.com/kingprotty/status/1222152589405384705?s=19
+                if let Some(entry) = io_handles.get(index) {
+                    if is_read {
+                        for w in entry.readers.lock().drain(..) {
+                            wakers.push_back(w);
+                        }
                     }
-                }
-                if is_write {
-                    for w in entry.writers.lock().drain(..) {
-                        wakers.push_front(w);
+                    if is_write {
+                        for w in entry.writers.lock().drain(..) {
+                            wakers.push_front(w);
+                        }
                     }
                 }
             }
         }
-
-        drop(io_handles);
 
         // Wake up ready I/O.
         for waker in wakers {
@@ -429,7 +429,10 @@ impl<T: 'static> Task<T> {
     }
 }
 
-impl<E: Debug + Send + 'static> Task<Result<(), E>> {
+impl<E> Task<Result<(), E>>
+where
+    E: Debug + Send + 'static,
+{
     /// Spawns a global future that unwraps the result.
     pub fn unwrap(self) -> Task<()> {
         Task::spawn(async { self.await.unwrap() })
@@ -449,8 +452,6 @@ impl<T> Future for Task<T> {
 
 // ----- Blocking -----
 
-// TODO: struct ThreadPool and method fn spawn()
-//   - Task::blocking(fut) then calls THREAD_POOL.spawn(fut)
 struct ThreadPool {
     sender: channel::Sender<Runnable>,
     receiver: channel::Receiver<Runnable>,
@@ -685,25 +686,13 @@ pub struct Async<T> {
     entry: Arc<Entry>,
 }
 
-impl<T> Drop for Async<T> {
-    fn drop(&mut self) {
-        // TODO: call entry.unregister();
-        // TODO: what about this unwrap?
-        POLLER.registry.unregister(self.entry.fd, self.entry.index);
-    }
-}
-
-struct Entry {
-    fd: RawFd,
-    index: usize,
-    readers: Mutex<Vec<Waker>>,
-    writers: Mutex<Vec<Waker>>,
-}
-
 impl<T: AsRawFd> Async<T> {
     /// Converts a non-blocking I/O handle into an async I/O handle.
     pub fn nonblocking(source: T) -> io::Result<Async<T>> {
-        POLLER.registry.register(source)
+        Ok(Async {
+            entry: POLLER.registry.register(source.as_raw_fd())?,
+            source: Box::new(source),
+        })
     }
 }
 
@@ -782,6 +771,13 @@ impl<T> Async<T> {
             wakers.push(cx.waker().clone());
         }
         Poll::Pending
+    }
+}
+
+impl<T> Drop for Async<T> {
+    fn drop(&mut self) {
+        // Ignore errors because an event in oneshot mode may unregister the fd before we do.
+        let _ = POLLER.registry.unregister(&self.entry);
     }
 }
 
