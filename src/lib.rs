@@ -1254,6 +1254,7 @@ mod sys {
     use std::time::Duration;
 
     use wepoll_binding as wepoll;
+    use wepoll::{Epoll, EventFlag};
 
     #[derive(Clone, Copy)]
     pub struct RawSource(RawSocket);
@@ -1268,10 +1269,10 @@ mod sys {
         }
     }
 
-    pub struct Poller(wepoll::Epoll);
+    pub struct Poller(Epoll);
     impl Poller {
         pub fn create() -> io::Result<Poller> {
-            Ok(Poller(wepoll::Epoll::new()?))
+            Ok(Poller(Epoll::new()?))
         }
         pub fn register(&self, source: RawSource, index: usize) -> io::Result<()> {
             self.0.register(&source, flags(), index as u64)
@@ -1287,7 +1288,7 @@ mod sys {
             self.0.poll(&mut events.0, timeout)
         }
     }
-    fn flags() -> wepoll::EventFlag {
+    fn flags() -> EventFlag {
         EventFlag::ONESHOT | EventFlag::IN | EventFlag::OUT | EventFlag::RDHUP
     }
 
@@ -1298,8 +1299,8 @@ mod sys {
         }
         pub fn iter(&self) -> impl Iterator<Item = Event> + '_ {
             self.0.iter().map(|ev| Event {
-                is_read: ev.flags() != wepoll::EventFlag::OUT,
-                is_write: ev.flags() != wepoll::EventFlag::IN,
+                is_read: ev.flags() != EventFlag::OUT,
+                is_write: ev.flags() != EventFlag::IN,
                 index: ev.data() as usize,
             })
         }
