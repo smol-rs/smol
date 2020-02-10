@@ -927,8 +927,16 @@ impl Async<TcpStream> {
         let _ = socket.connect(&addr.into());
         let stream = Async::nonblocking(socket.into_tcp_stream())?;
 
+        // Wait for connect to complete.
+        let wait_connect = |mut stream: &TcpStream| match stream.write(&[]) {
+            Err(err) if err.kind() == io::ErrorKind::NotConnected => {
+                Err(io::Error::new(io::ErrorKind::WouldBlock, ""))
+            }
+            res => res.map(|_| ()),
+        };
         // The stream becomes writable when connected.
-        stream.write_with(|mut source| source.write(&[])).await?;
+        stream.write_with(|source| wait_connect(source)).await?;
+
         Ok(stream)
     }
 
@@ -1253,8 +1261,8 @@ mod sys {
     use std::os::windows::io::{AsRawSocket, RawSocket};
     use std::time::Duration;
 
-    use wepoll_binding as wepoll;
     use wepoll::{Epoll, EventFlag};
+    use wepoll_binding as wepoll;
 
     #[derive(Clone, Copy)]
     pub struct RawSource(RawSocket);
