@@ -12,13 +12,18 @@ use std::io::{self, Read, Write};
 use std::mem;
 use std::net::{SocketAddr, TcpListener, TcpStream, ToSocketAddrs, UdpSocket};
 use std::panic::catch_unwind;
-use std::path::Path;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::task::{Context, Poll, Waker};
 use std::thread;
 use std::time::{Duration, Instant};
+
+#[cfg(unix)]
+use std::{
+    os::unix::net::{SocketAddr as UnixSocketAddr, UnixDatagram, UnixListener, UnixStream},
+    path::Path,
+};
 
 use crossbeam_channel as channel;
 use crossbeam_utils::sync::Parker;
@@ -321,14 +326,12 @@ pub fn run<T>(future: impl Future<Output = T>) -> T {
                     }
 
                     let mut m = EXECUTOR.mutex.lock();
-
                     if *m {
                         if !ready.load(Ordering::SeqCst) {
                             EXECUTOR.cvar.wait(&mut m);
                         }
                         continue;
                     }
-
                     *m = true;
                     drop(m);
 
@@ -552,7 +555,6 @@ pub fn reader(t: impl Read + Send + 'static) -> impl AsyncBufRead + Send + Unpin
 
 /// Converts a blocking writer into an async writer.
 pub fn writer(t: impl Write + Send + 'static) -> impl AsyncWrite + Send + Unpin + 'static {
-    // TODO: should we simply return Writer here?
     // NOTE: stop task if the returned handle is dropped
     todo!();
     futures_util::io::sink()
@@ -975,9 +977,6 @@ impl Async<UdpSocket> {
 }
 
 #[cfg(unix)]
-use std::os::unix::net::{SocketAddr as UnixSocketAddr, UnixDatagram, UnixListener, UnixStream};
-
-#[cfg(unix)]
 impl Async<UnixListener> {
     /// Creates a listener bound to the specified path.
     pub fn bind<P: AsRef<Path>>(path: P) -> io::Result<Async<UnixListener>> {
@@ -1150,7 +1149,6 @@ mod sys {
 
 #[cfg(target_os = "windows")]
 mod sys {
-    use std::convert::TryInto;
     use std::io;
     use std::os::windows::io::{AsRawSocket, RawSocket};
     use std::time::Duration;
@@ -1176,22 +1174,22 @@ mod sys {
             Ok(Poller(wepoll::Epoll::new()?))
         }
         pub fn register(&self, source: RawSource, index: usize) -> io::Result<()> {
-            self.0.register(source, flags(), index as u64)
+            self.0.register(&source, flags(), index as u64)
         }
         pub fn reregister(&self, source: RawSource, index: usize) -> io::Result<()> {
-            self.0.reregister(source, flags(), index as u64)?
+            self.0.reregister(&source, flags(), index as u64)
         }
         pub fn deregister(&self, source: RawSource) -> io::Result<()> {
-            self.0.deregister(source)
+            self.0.deregister(&source)
         }
         pub fn poll(&self, events: &mut Events, timeout: Option<Duration>) -> io::Result<usize> {
             events.0.clear();
-            self.0.poll(events, timeout)
+            self.0.poll(&mut events.0, timeout)
         }
     }
     fn flags() -> wepoll::EventFlag {
-        use wepoll::EventFlag::*;
-        ONESHOT | IN | OUT | RDHUP
+        use wepoll::EventFlag;
+        EventFlag::ONESHOT | EventFlag::IN | EventFlag::OUT | EventFlag::RDHUP
     }
 
     pub struct Events(wepoll::Events);
