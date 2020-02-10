@@ -23,7 +23,7 @@ socket2 = "0.3.11"
 nix = "0.16.1"
 
 [target.'cfg(windows)'.dependencies]
-wepoll-binding = { git = "https://gitlab.com/stjepang/wepoll-binding.git" }
+wepoll-binding = "1.1.0"
 
 [dev-dependencies]
 futures = { version = "0.3.3", default-features = false, features = ["std"] }

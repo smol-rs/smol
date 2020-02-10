@@ -60,6 +60,7 @@ struct Reactor {
     flag: AtomicBool,
     socket_notify: Socket,
     socket_wakeup: Socket,
+    // TODO: move timers here
 }
 
 static REACTOR: Lazy<Reactor> = Lazy::new(|| Reactor::create().expect("cannot create reactor"));
@@ -161,6 +162,7 @@ struct Entry {
     writers: Mutex<Vec<Waker>>,
 }
 
+// TODO: call this Poller, and have inner: sys::Poller
 struct Registry {
     poller: sys::Poller,
     events: Mutex<sys::Events>,
@@ -571,7 +573,7 @@ pub fn writer(t: impl Write + Send + 'static) -> impl AsyncWrite + Send + Unpin 
     futures_util::io::sink()
 }
 
-/// Blocks on async I/O.
+/// Blocks on a stream or async I/O.
 pub struct BlockOn<T>(pub T);
 
 impl<T: Stream + Unpin> Iterator for BlockOn<T> {
@@ -600,7 +602,7 @@ impl<T: AsyncWrite + Unpin> Write for BlockOn<T> {
 
 // ----- Timer -----
 
-/// Fires at an instant in time.
+/// Fires at a certain point in time.
 pub struct Timer {
     when: Instant,
     inserted: bool,
@@ -925,21 +927,9 @@ impl Async<TcpStream> {
         let _ = socket.connect(&addr.into());
         let stream = Async::nonblocking(socket.into_tcp_stream())?;
 
-        // Wait for connect to complete.
-        let wait_connect = |stream: &TcpStream| match stream.peer_addr() {
-            Err(err) if err.kind() == io::ErrorKind::NotConnected => {
-                Err(io::Error::new(io::ErrorKind::WouldBlock, ""))
-            }
-            res => res.map(|_| ()),
-        };
         // The stream becomes writable when connected.
-        stream.write_with(|source| wait_connect(source)).await?;
-
-        // Check for connect errors.
-        match stream.source().take_error()? {
-            None => Ok(stream),
-            Some(err) => Err(err),
-        }
+        stream.write_with(|mut source| source.write(&[])).await?;
+        Ok(stream)
     }
 
     /// Receives data from the stream without removing it from the buffer.
@@ -1167,7 +1157,92 @@ mod sys {
     target_os = "dragonfly",
 ))]
 mod sys {
-    // TODO
+    use std::convert::TryInto;
+    use std::io;
+    use std::os::unix::io::{AsRawFd, RawFd};
+    use std::time::Duration;
+
+    use nix::{
+        fcntl::{fcntl, FcntlArg, FdFlag},
+        sys::event::{kevent_ts, kqueue, EventFilter::*, EventFlag::*},
+    };
+
+    #[derive(Clone, Copy)]
+    pub struct RawSource(RawFd);
+    impl RawSource {
+        pub fn new(s: &impl AsRawFd) -> RawSource {
+            RawSource(s.as_raw_fd())
+        }
+    }
+
+    pub struct Poller(RawFd);
+    impl Poller {
+        pub fn create() -> io::Result<Poller> {
+            let fd = kqueue().map_err(io_err)?;
+            fcntl(fd, FcntlArg::F_SETFD, FdFlag::FD_CLOEXEC).map_err(io_err)?;
+            Ok(Poller(fd))
+        }
+        pub fn register(&self, source: RawSource, index: usize) -> io::Result<()> {
+            let flags = EV_CLEAR | EV_RECEIPT | EV_ADD;
+            let filter_flags = FilterFlag::empty();
+            let changelist = [
+                KEvent::new(0, EVFILT_WRITE, flags, filter_flags, 0, index as _),
+                KEvent::new(0, EVFILT_READ, flags, filter_flags, 0, index as _),
+            ];
+            let mut eventlist = changelist.clone();
+            kevent_ts(self.0, &changelist, &mut eventlist, None).map_err(io_err)
+            // TODO: need to read errors here (see mio) EPIPE
+        }
+        pub fn reregister(&self, _source: RawSource, _index: usize) -> io::Result<()> {
+            Ok(())
+        }
+        pub fn deregister(&self, source: RawSource) -> io::Result<()> {
+            let flags = EV_RECEIPT | EV_DELETE;
+            let filter_flags = FilterFlag::empty();
+            let changelist = [
+                KEvent::new(0, EVFILT_WRITE, flags, filter_flags, 0, index as _),
+                KEvent::new(0, EVFILT_READ, flags, filter_flags, 0, index as _),
+            ];
+            let mut eventlist = changelist.clone();
+            kevent_ts(self.0, &changelist, &mut eventlist, None).map_err(io_err)
+            // TODO: need to read errors here (see mio) ENOENT and check
+        }
+        pub fn poll(&self, events: &mut Events, timeout: Option<Duration>) -> io::Result<usize> {
+            let timeout_ms = timeout
+                .and_then(|t| t.as_millis().try_into().ok())
+                .unwrap_or(-1);
+
+            todo!()
+        }
+    }
+    fn io_err(err: impl std::error::Error + Send + Sync + 'static) -> io::Error {
+        io::Error::new(io::ErrorKind::Other, Box::new(err))
+    }
+
+    pub struct Events {
+        list: Box<[EpollEvent]>,
+        len: usize,
+    }
+    impl Events {
+        pub fn new() -> Events {
+            Events {
+                list: vec![EpollEvent::empty(); 1000].into_boxed_slice(),
+                len: 0,
+            }
+        }
+        pub fn iter(&self) -> impl Iterator<Item = Event> + '_ {
+            self.list[..self.len].iter().map(|ev| Event {
+                is_read: ev.events() != EpollFlags::EPOLLOUT,
+                is_write: ev.events() != EpollFlags::EPOLLIN,
+                index: ev.data() as usize,
+            })
+        }
+    }
+    pub struct Event {
+        pub is_read: bool,
+        pub is_write: bool,
+        pub index: usize,
+    }
 }
 
 // ----- Windows (WSAPoll) -----
@@ -1213,7 +1288,6 @@ mod sys {
         }
     }
     fn flags() -> wepoll::EventFlag {
-        use wepoll::EventFlag;
         EventFlag::ONESHOT | EventFlag::IN | EventFlag::OUT | EventFlag::RDHUP
     }
 

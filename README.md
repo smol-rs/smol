@@ -5,17 +5,17 @@
 * Safe - Written in 100% safe Rust.
 * Complete - Fully featured and ready for production.
 * Documented - Simple code, easy to understand and modify.
-* Portable - Linux, Android, macOS, iOS, Windows, FreeBSD, OpenBSD, NetBSD, DragonFly BSD, Solaris.
 * Lightweight - Small dependencies, relies on epoll/kqueue/WSAPoll.
+* Portable - Linux, Android, macOS, iOS, Windows, FreeBSD, OpenBSD, NetBSD, DragonFly BSD, Solaris.
 
 ## Features
 
-* Executor - Configurable threads, work stealing, supports non-send futures. (TODO: non-send futures)
+* Executor - Configurable threads, work stealing, supports non-send futures.
 * Blocking - Thread pool for isolating blocking code.
 * Networking - TCP, UDP, Unix domain sockets, and custom files/sockets.
 * Process - Spawns child processes and interacts with their I/O.
-* Files - Filesystem manipulation operations. (TODO: some are not implemented yet)
-* Stdio - Asynchronous stdin, stdout, and stderr. (TODO: not working yet) 
+* Files - Filesystem manipulation operations.
+* Stdio - Asynchronous stdin, stdout, and stderr.
 * Timer - Efficient userspace timers.
 
 ## Examples (TODO: turn these into links)
