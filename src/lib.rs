@@ -1,7 +1,18 @@
 #![forbid(unsafe_code)]
 // TODO: #![warn(missing_docs, missing_debug_implementations, rust_2018_idioms)]
 
-#[cfg(not(any(target_os = "linux", target_os = "android", target_os = "windows")))]
+#[cfg(not(any(
+    target_os = "linux",     // epoll
+    target_os = "android",   // epoll
+    target_os = "solaris",   // epoll
+    target_os = "macos",     // kqueue
+    target_os = "ios",       // kqueue
+    target_os = "freebsd",   // kqueue
+    target_os = "netbsd",    // kqueue
+    target_os = "openbsd",   // kqueue
+    target_os = "dragonfly", // kqueue
+    target_os = "windows",   // WSAPoll
+)))]
 compile_error!("smol does not support this target OS");
 
 use std::cell::RefCell;
@@ -1066,9 +1077,9 @@ impl Async<UnixDatagram> {
     }
 }
 
-// ----- Linux (epoll) -----
+// ----- Linux / Android / Solaris (epoll) -----
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "android", target_os = "solaris"))]
 mod sys {
     use std::convert::TryInto;
     use std::io;
@@ -1143,6 +1154,20 @@ mod sys {
         pub is_write: bool,
         pub index: usize,
     }
+}
+
+// ----- macOS / iOS / FreeBSD / NetBSD / OpenBSD / DragonFly BSD (kqueue) -----
+
+#[cfg(any(
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "freebsd",
+    target_os = "netbsd",
+    target_os = "openbsd",
+    target_os = "dragonfly",
+))]
+mod sys {
+    // TODO
 }
 
 // ----- Windows (WSAPoll) -----
