@@ -6,7 +6,7 @@
 * Complete - Fully featured and ready for production.
 * Documented - Simple code, easy to understand and modify.
 * Portable - Works on Linux, Android, macOS, iOS, and Windows. (TODO: only Linux right now)
-* Lightweight - Small dependencies, relies on epoll/kqueue/WSApoll.
+* Lightweight - Small dependencies, relies on epoll/kqueue/WSAPoll.
 
 ## Features
 
