@@ -375,7 +375,7 @@ pub fn run<T>(future: impl Future<Output = T>) -> T {
 }
 
 /// A spawned future.
-#[must_use = "tasks are dropped when cancelled, use `.forget()` to run in the background"]
+#[must_use = "tasks are canceled when dropped, use `.forget()` to run in the background"]
 pub struct Task<T>(Option<async_task::JoinHandle<T, ()>>);
 
 impl<T: Send + 'static> Task<T> {
@@ -708,13 +708,18 @@ impl<T: std::os::windows::io::AsRawSocket> Async<T> {
 
 impl<T> Async<T> {
     /// Gets a reference to the I/O source.
-    pub fn source(&self) -> &T {
+    pub fn get_ref(&self) -> &T {
         &self.source
     }
 
     /// Gets a mutable reference to the I/O source.
-    pub fn source_mut(&mut self) -> &mut T {
+    pub fn get_mut(&mut self) -> &mut T {
         &mut self.source
+    }
+
+    /// Extracts the inner I/O source.
+    pub fn into_inner(&mut self) -> &mut T {
+        todo!()
     }
 
     /// Converts a non-blocking read into an async operation.
