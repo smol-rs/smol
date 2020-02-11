@@ -707,17 +707,17 @@ impl<T: std::os::windows::io::AsRawSocket> Async<T> {
 }
 
 impl<T> Async<T> {
-    /// Gets a reference to the I/O source.
+    /// Gets a reference to the inner I/O handle.
     pub fn get_ref(&self) -> &T {
         &self.source
     }
 
-    /// Gets a mutable reference to the I/O source.
+    /// Gets a mutable reference to the inner I/O handle.
     pub fn get_mut(&mut self) -> &mut T {
         &mut self.source
     }
 
-    /// Extracts the inner I/O source.
+    /// Extracts the inner I/O handle.
     pub fn into_inner(&mut self) -> &mut T {
         todo!()
     }
@@ -1130,6 +1130,7 @@ mod sys {
             let timeout_ms = timeout
                 .and_then(|t| t.as_millis().try_into().ok())
                 .unwrap_or(-1);
+            // TODO: ignore EINTR
             events.len = epoll_wait(self.0, &mut events.list, timeout_ms).map_err(io_err)?;
             Ok(events.len)
         }
@@ -1184,8 +1185,9 @@ mod sys {
     use std::time::Duration;
 
     use nix::{
+        errno::Errno,
         fcntl::{fcntl, FcntlArg, FdFlag},
-        sys::event::{kevent_ts, kqueue, EventFilter::*, EventFlag::*},
+        sys::event::{kevent_ts, kqueue, EventFilter, EventFlag, FilterFlag, KEvent},
     };
 
     #[derive(Clone, Copy)]
@@ -1200,40 +1202,67 @@ mod sys {
     impl Poller {
         pub fn create() -> io::Result<Poller> {
             let fd = kqueue().map_err(io_err)?;
-            fcntl(fd, FcntlArg::F_SETFD, FdFlag::FD_CLOEXEC).map_err(io_err)?;
+            fcntl(fd, FcntlArg::F_SETFD(FdFlag::FD_CLOEXEC)).map_err(io_err)?;
             Ok(Poller(fd))
         }
         pub fn register(&self, source: RawSource, index: usize) -> io::Result<()> {
-            let flags = EV_CLEAR | EV_RECEIPT | EV_ADD;
-            let filter_flags = FilterFlag::empty();
+            let flags = EventFlag::EV_CLEAR | EventFlag::EV_RECEIPT | EventFlag::EV_ADD;
+            let fflags = FilterFlag::empty();
             let changelist = [
-                KEvent::new(0, EVFILT_WRITE, flags, filter_flags, 0, index as _),
-                KEvent::new(0, EVFILT_READ, flags, filter_flags, 0, index as _),
+                KEvent::new(0, EventFilter::EVFILT_WRITE, flags, fflags, 0, index as _),
+                KEvent::new(0, EventFilter::EVFILT_READ, flags, fflags, 0, index as _),
             ];
             let mut eventlist = changelist.clone();
-            kevent_ts(self.0, &changelist, &mut eventlist, None).map_err(io_err)
-            // TODO: need to read errors here (see mio) EPIPE
+            match kevent_ts(self.0, &changelist, &mut eventlist, None) {
+                Ok(_) => {}
+                Err(nix::Error::Sys(Errno::EINTR)) => {}
+                Err(err) => return Err(io_err(err)),
+            }
+            for ev in &eventlist {
+                let data = ev.data();
+                // See https://github.com/tokio-rs/mio/issues/582
+                if ev.flags().contains(EventFlag::EV_ERROR) && data != Errno::EPIPE as _ {
+                    return Err(io::Error::from_raw_os_error(data as _));
+                }
+            }
+            Ok(())
         }
         pub fn reregister(&self, _source: RawSource, _index: usize) -> io::Result<()> {
             Ok(())
         }
         pub fn deregister(&self, source: RawSource) -> io::Result<()> {
-            let flags = EV_RECEIPT | EV_DELETE;
-            let filter_flags = FilterFlag::empty();
+            let flags = EventFlag::EV_RECEIPT | EventFlag::EV_DELETE;
+            let fflags = FilterFlag::empty();
             let changelist = [
-                KEvent::new(0, EVFILT_WRITE, flags, filter_flags, 0, index as _),
-                KEvent::new(0, EVFILT_READ, flags, filter_flags, 0, index as _),
+                KEvent::new(0, EventFilter::EVFILT_WRITE, flags, fflags, 0, 0),
+                KEvent::new(0, EventFilter::EVFILT_READ, flags, fflags, 0, 0),
             ];
             let mut eventlist = changelist.clone();
-            kevent_ts(self.0, &changelist, &mut eventlist, None).map_err(io_err)
-            // TODO: need to read errors here (see mio) ENOENT and check
+            match kevent_ts(self.0, &changelist, &mut eventlist, None) {
+                Ok(_) => {}
+                Err(nix::Error::Sys(Errno::EINTR)) => {}
+                Err(err) => return Err(io_err(err)),
+            }
+            for ev in &eventlist {
+                let data = ev.data();
+                if ev.flags().contains(EventFlag::EV_ERROR) {
+                    return Err(io::Error::from_raw_os_error(data as _));
+                }
+            }
+            Ok(())
         }
         pub fn poll(&self, events: &mut Events, timeout: Option<Duration>) -> io::Result<usize> {
-            let timeout_ms = timeout
-                .and_then(|t| t.as_millis().try_into().ok())
-                .unwrap_or(-1);
-
-            todo!()
+            let timeout_ms: Option<usize> = timeout.and_then(|t| t.as_millis().try_into().ok());
+            let timeout = timeout_ms.map(|ms| libc::timespec {
+                tv_sec: (ms / 1000) as libc::time_t,
+                tv_nsec: ((ms % 1000) * 1_000_000) as libc::c_long,
+            });
+            events.len = match kevent_ts(self.0, &[], &mut events.list, timeout) {
+                Ok(n) => n,
+                Err(nix::Error::Sys(Errno::EINTR)) => 0,
+                Err(err) => return Err(io_err(err)),
+            };
+            Ok(events.len)
         }
     }
     fn io_err(err: impl std::error::Error + Send + Sync + 'static) -> io::Error {
@@ -1241,21 +1270,24 @@ mod sys {
     }
 
     pub struct Events {
-        list: Box<[EpollEvent]>,
+        list: Box<[KEvent]>,
         len: usize,
     }
     impl Events {
         pub fn new() -> Events {
+            let flags = EventFlag::empty();
+            let fflags = FilterFlag::empty();
+            let event = KEvent::new(0, EventFilter::EVFILT_USER, flags, fflags, 0, 0);
             Events {
-                list: vec![EpollEvent::empty(); 1000].into_boxed_slice(),
+                list: vec![event; 1000].into_boxed_slice(),
                 len: 0,
             }
         }
         pub fn iter(&self) -> impl Iterator<Item = Event> + '_ {
             self.list[..self.len].iter().map(|ev| Event {
-                is_read: ev.events() != EpollFlags::EPOLLOUT,
-                is_write: ev.events() != EpollFlags::EPOLLIN,
-                index: ev.data() as usize,
+                is_read: ev.filter() != EventFilter::EVFILT_WRITE,
+                is_write: ev.filter() != EventFilter::EVFILT_READ,
+                index: ev.udata() as usize,
             })
         }
     }
@@ -1302,10 +1334,13 @@ mod sys {
             self.0.reregister(&source, flags(), index as u64)
         }
         pub fn deregister(&self, source: RawSource) -> io::Result<()> {
-            self.0.deregister(&source)
+            // Ignore errors since an event can deregister the handle at any point (oneshot mode).
+            let _ = self.0.deregister(&source);
+            Ok(())
         }
         pub fn poll(&self, events: &mut Events, timeout: Option<Duration>) -> io::Result<usize> {
             events.0.clear();
+            // TODO: ignore EINTR
             self.0.poll(&mut events.0, timeout)
         }
     }

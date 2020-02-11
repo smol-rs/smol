@@ -18,6 +18,7 @@ parking_lot = "0.10.0"
 pin-utils = "0.1.0-alpha.4"
 slab = "0.4.2"
 socket2 = "0.3.11"
+libc = "0.2.66"
 
 [target.'cfg(unix)'.dependencies]
 nix = "0.16.1"
