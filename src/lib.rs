@@ -314,7 +314,7 @@ pub fn run<T>(future: impl Future<Output = T>) -> T {
 
     loop {
         while !ready.load(Ordering::SeqCst) {
-            if runs >= 64 {
+            if runs >= 50 {
                 runs = 0;
                 REACTOR.poll_quick().unwrap();
             }
@@ -328,13 +328,9 @@ pub fn run<T>(future: impl Future<Output = T>) -> T {
                 Err(_) => {
                     runs = 0;
                     fails += 1;
-                    REACTOR.poll_quick().unwrap();
 
                     if fails <= 1 {
-                        continue;
-                    }
-                    if fails <= 3 {
-                        std::thread::yield_now();
+                        REACTOR.poll_quick().unwrap();
                         continue;
                     }
 
@@ -515,9 +511,7 @@ fn start_thread() {
                 };
             }
 
-            // If there is at least one sleeping thread, stop this thread instead of putting it
-            // to sleep.
-            if SLEEPING.load(Ordering::SeqCst) > 0 {
+            if SLEEPING.load(Ordering::SeqCst) > 5 {
                 return;
             }
 
