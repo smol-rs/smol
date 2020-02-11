@@ -43,7 +43,7 @@ pub mod compat {
         F::Output: Send + 'static,
     {
         fn execute(&self, fut: F) {
-            let _ = Task::spawn(fut);
+            Task::spawn(async { drop(fut.await) }).forget();
         }
     }
 

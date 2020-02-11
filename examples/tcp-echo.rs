@@ -21,7 +21,7 @@ fn main() -> io::Result<()> {
         let listener = Async::<TcpListener>::bind("127.0.0.1:8080")?;
         loop {
             let (stream, _) = listener.accept().await?;
-            Task::spawn(echo(stream)).unwrap();
+            Task::spawn(echo(stream)).unwrap().forget();
         }
     })
 }

@@ -379,13 +379,13 @@ pub fn run<T>(future: impl Future<Output = T>) -> T {
 }
 
 /// A spawned future.
-pub struct Task<T>(async_task::JoinHandle<T, ()>);
+#[must_use = "tasks are dropped when cancelled, use `.forget()` to run in the background"]
+pub struct Task<T>(Option<async_task::JoinHandle<T, ()>>);
 
 impl<T: Send + 'static> Task<T> {
     /// Spawns a global future.
     ///
     /// This future is allowed to be stolen by another executor.
-    #[must_use]
     pub fn spawn(future: impl Future<Output = T> + Send + 'static) -> Task<T> {
         // Create a runnable and schedule it for execution.
         let schedule = |runnable| {
@@ -396,16 +396,15 @@ impl<T: Send + 'static> Task<T> {
         runnable.schedule();
 
         // Return a join handle that retrieves the output of the future.
-        Task(handle)
+        Task(Some(handle))
     }
 
     /// Spawns a future onto the blocking thread pool.
-    #[must_use]
     pub fn blocking(future: impl Future<Output = T> + Send + 'static) -> Task<T> {
         let (runnable, handle) =
             async_task::spawn(future, |r| THREAD_POOL.sender.send(r).unwrap(), ());
         runnable.schedule();
-        Task(handle)
+        Task(Some(handle))
     }
 }
 
@@ -413,7 +412,6 @@ impl<T: 'static> Task<T> {
     /// Spawns a future onto the current executor.
     ///
     /// Panics if not called within an executor.
-    #[must_use]
     pub fn local(future: impl Future<Output = T> + 'static) -> Task<T>
     where
         T: 'static,
@@ -423,13 +421,29 @@ impl<T: 'static> Task<T> {
     }
 }
 
-impl<E> Task<Result<(), E>>
+impl Task<()> {
+    /// Moves the task into the background.
+    pub fn forget(mut self) {
+        self.0.take().unwrap();
+    }
+}
+
+impl<T, E> Task<Result<T, E>>
 where
+    T: Send + 'static,
     E: Debug + Send + 'static,
 {
-    /// Spawns a global future that unwraps the result.
-    pub fn unwrap(self) -> Task<()> {
+    /// Spawns another task that unwraps the result.
+    pub fn unwrap(self) -> Task<T> {
         Task::spawn(async { self.await.unwrap() })
+    }
+}
+
+impl<T> Drop for Task<T> {
+    fn drop(&mut self) {
+        if let Some(t) = &self.0 {
+            t.cancel();
+        }
     }
 }
 
@@ -437,7 +451,7 @@ impl<T> Future for Task<T> {
     type Output = T;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        match Pin::new(&mut self.0).poll(cx) {
+        match Pin::new(&mut self.0.as_mut().unwrap()).poll(cx) {
             Poll::Pending => Poll::Pending,
             Poll::Ready(output) => Poll::Ready(output.expect("task failed")),
         }
