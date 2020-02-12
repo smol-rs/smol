@@ -1206,11 +1206,13 @@ mod sys {
             Ok(Poller(fd))
         }
         pub fn register(&self, source: RawSource, index: usize) -> io::Result<()> {
+            let ident = source.0 as _;
             let flags = EventFlag::EV_CLEAR | EventFlag::EV_RECEIPT | EventFlag::EV_ADD;
             let fflags = FilterFlag::empty();
+            let udata = index as _;
             let changelist = [
-                KEvent::new(0, EventFilter::EVFILT_WRITE, flags, fflags, 0, index as _),
-                KEvent::new(0, EventFilter::EVFILT_READ, flags, fflags, 0, index as _),
+                KEvent::new(ident, EventFilter::EVFILT_WRITE, flags, fflags, 0, udata),
+                KEvent::new(ident, EventFilter::EVFILT_READ, flags, fflags, 0, udata),
             ];
             let mut eventlist = changelist.clone();
             match kevent_ts(self.0, &changelist, &mut eventlist, None) {
@@ -1233,11 +1235,12 @@ mod sys {
             Ok(())
         }
         pub fn deregister(&self, source: RawSource) -> io::Result<()> {
+            let ident = source.0 as _;
             let flags = EventFlag::EV_RECEIPT | EventFlag::EV_DELETE;
             let fflags = FilterFlag::empty();
             let changelist = [
-                KEvent::new(0, EventFilter::EVFILT_WRITE, flags, fflags, 0, 0),
-                KEvent::new(0, EventFilter::EVFILT_READ, flags, fflags, 0, 0),
+                KEvent::new(ident, EventFilter::EVFILT_WRITE, flags, fflags, 0, 0),
+                KEvent::new(source.0 as _, EventFilter::EVFILT_READ, flags, fflags, 0, 0),
             ];
             let mut eventlist = changelist.clone();
             match kevent_ts(self.0, &changelist, &mut eventlist, None) {
