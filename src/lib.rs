@@ -1219,10 +1219,12 @@ mod sys {
                 Err(err) => return Err(io_err(err)),
             }
             for ev in &eventlist {
-                let data = ev.data();
                 // See https://github.com/tokio-rs/mio/issues/582
-                if ev.flags().contains(EventFlag::EV_ERROR) && data != Errno::EPIPE as _ {
-                    return Err(io::Error::from_raw_os_error(data as _));
+                if ev.data() != 0
+                    && ev.data() != Errno::EPIPE as _
+                    && ev.flags().contains(EventFlag::EV_ERROR)
+                {
+                    return Err(io::Error::from_raw_os_error(ev.data() as _));
                 }
             }
             Ok(())
@@ -1244,9 +1246,8 @@ mod sys {
                 Err(err) => return Err(io_err(err)),
             }
             for ev in &eventlist {
-                let data = ev.data();
-                if ev.flags().contains(EventFlag::EV_ERROR) {
-                    return Err(io::Error::from_raw_os_error(data as _));
+                if ev.data() != 0 && ev.flags().contains(EventFlag::EV_ERROR) {
+                    return Err(io::Error::from_raw_os_error(ev.data() as _));
                 }
             }
             Ok(())
