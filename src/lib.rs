@@ -44,7 +44,7 @@ use futures_util::future;
 use futures_util::io::{AsyncReadExt, AsyncWriteExt};
 use futures_util::stream::{self, StreamExt};
 use once_cell::sync::Lazy;
-use parking_lot::{Condvar, Mutex};
+use parking_lot::{Condvar, Mutex, MutexGuard};
 use slab::Slab;
 use socket2::{Domain, Protocol, Socket, Type};
 
@@ -411,8 +411,7 @@ impl<T: Send + 'static> Task<T> {
 
     /// Spawns a future onto a thread where blocking is allowed.
     pub fn blocking(future: impl Future<Output = T> + Send + 'static) -> Task<T> {
-        let (runnable, handle) =
-            async_task::spawn(future, |r| THREAD_POOL.sender.send(r).unwrap(), ());
+        let (runnable, handle) = async_task::spawn(future, |r| THREAD_POOL.schedule(r), ());
         runnable.schedule();
         Task(Some(handle))
     }
@@ -470,68 +469,67 @@ impl<T> Future for Task<T> {
 
 // ----- Blocking -----
 
-struct ThreadPool {
-    sender: channel::Sender<Runnable>,
-    receiver: channel::Receiver<Runnable>,
-}
-
-static THREAD_POOL: Lazy<ThreadPool> = Lazy::new(|| {
-    // Start a single worker thread waiting for the first task.
-    start_thread();
-
-    let (sender, receiver) = channel::unbounded();
-    ThreadPool { sender, receiver }
+static THREAD_POOL: Lazy<ThreadPool> = Lazy::new(|| ThreadPool {
+    state: Mutex::new(State {
+        idle: 0,
+        threads: 0,
+        queue: VecDeque::new(),
+    }),
+    cvar: Condvar::new(),
 });
 
-fn start_thread() {
-    use std::sync::atomic::*;
-    static SLEEPING: AtomicUsize = AtomicUsize::new(0);
+struct ThreadPool {
+    state: Mutex<State>,
+    cvar: Condvar,
+}
 
-    SLEEPING.fetch_add(1, Ordering::SeqCst);
-    let timeout = Duration::from_secs(1);
+struct State {
+    idle: usize,
+    threads: usize,
+    queue: VecDeque<Runnable>,
+}
 
-    thread::spawn(move || {
+impl ThreadPool {
+    fn run(&'static self) {
+        let mut state = self.state.lock();
         loop {
-            let mut runnable = match THREAD_POOL.receiver.recv_timeout(timeout) {
-                Ok(runnable) => runnable,
-                Err(_) => {
-                    // Check whether this is the last sleeping thread.
-                    if SLEEPING.fetch_sub(1, Ordering::SeqCst) == 1 {
-                        // If so, then restart the thread to make sure there is always at least
-                        // one sleeping thread.
-                        if SLEEPING.compare_and_swap(0, 1, Ordering::SeqCst) == 0 {
-                            continue;
-                        }
-                    }
+            state.idle -= 1;
 
-                    // Stop the thread.
-                    return;
-                }
-            };
-
-            // If there are no sleeping threads, then start one to make sure there is always at
-            // least one sleeping thread.
-            if SLEEPING.fetch_sub(1, Ordering::SeqCst) == 1 {
-                start_thread();
-            }
-
-            loop {
+            while let Some(runnable) = state.queue.pop_front() {
+                self.notify(state);
                 let _ = catch_unwind(|| runnable.run());
-
-                // Try taking another runnable if there are any available.
-                runnable = match THREAD_POOL.receiver.try_recv() {
-                    Ok(runnable) => runnable,
-                    Err(_) => break,
-                };
+                state = self.state.lock();
             }
 
-            if SLEEPING.load(Ordering::SeqCst) > 5 {
-                return;
-            }
+            state.idle += 1;
+            let timeout = Duration::from_millis(500);
 
-            SLEEPING.fetch_add(1, Ordering::SeqCst);
+            if self.cvar.wait_for(&mut state, timeout).timed_out() {
+                state.idle -= 1;
+                state.threads -= 1;
+                self.notify(state);
+                break;
+            }
         }
-    });
+    }
+
+    fn schedule(&'static self, runnable: Runnable) {
+        let mut state = self.state.lock();
+        state.queue.push_back(runnable);
+        self.notify(state);
+    }
+
+    fn notify(&'static self, mut state: MutexGuard<'static, State>) {
+        if state.queue.len() > state.idle * 5 && state.threads < 500 {
+            state.idle += 1;
+            state.threads += 1;
+            self.cvar.notify_all();
+            drop(state);
+            thread::spawn(move || self.run());
+        } else if !state.queue.is_empty() {
+            self.cvar.notify_one();
+        }
+    }
 }
 
 /// Blocks on a single future.
