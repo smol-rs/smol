@@ -520,14 +520,15 @@ impl ThreadPool {
     }
 
     fn notify(&'static self, mut state: MutexGuard<'static, State>) {
-        if state.queue.len() > state.idle * 5 && state.threads < 500 {
+        if !state.queue.is_empty() {
+            self.cvar.notify_one();
+        }
+
+        while state.queue.len() > state.idle * 5 && state.threads < 500 {
             state.idle += 1;
             state.threads += 1;
             self.cvar.notify_all();
-            drop(state);
             thread::spawn(move || self.run());
-        } else if !state.queue.is_empty() {
-            self.cvar.notify_one();
         }
     }
 }
