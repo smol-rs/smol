@@ -372,7 +372,9 @@ pub fn run<T>(future: impl Future<Output = T>) -> T {
                         })
                     };
 
-                    REACTOR.poll().unwrap();
+                    if !ready.load(Ordering::SeqCst) {
+                        REACTOR.poll().unwrap();
+                    }
                 }
             }
         }
