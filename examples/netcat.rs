@@ -2,7 +2,6 @@ use std::env;
 use std::net::TcpStream;
 
 use futures::io;
-use futures::io::BufReader;
 use smol::Async;
 
 fn main() -> io::Result<()> {
@@ -11,7 +10,7 @@ fn main() -> io::Result<()> {
     let port = args.next().expect("missing port argument");
 
     smol::run(async {
-        let mut input = BufReader::new(smol::reader(std::io::stdin()));
+        let mut input = smol::reader(std::io::stdin());
         let mut stream = Async::<TcpStream>::connect(format!("{}:{}", addr, port)).await?;
 
         io::copy(&mut input, &mut stream).await?;
