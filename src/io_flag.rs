@@ -31,7 +31,6 @@ impl IoFlag {
         let sock1 = Socket::new(Domain::ipv4(), Type::stream(), None)?;
         sock1.set_nonblocking(true)?;
         let _ = sock1.connect(&addr);
-        let _ = sock1.set_nodelay(true)?;
         sock1.set_send_buffer_size(1)?;
 
         // Second socket: accept a client from the listener.
