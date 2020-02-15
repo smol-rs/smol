@@ -59,7 +59,7 @@ pub async fn websocket(
         smol::Async::<std::net::TcpStream>::connect(format!("{}:{}", host, port)).await?;
 
     let tls_stream = async_tls::TlsConnector::default()
-        .connect(host.to_ascii_lowercase(), tcp_stream)?
+        .connect(host.to_ascii_lowercase(), tcp_stream)
         .await?;
 
     let ws_request =
