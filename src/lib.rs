@@ -1258,10 +1258,12 @@ mod sys {
             self.0.register(&raw, flags(), index as u64)
         }
         pub fn reregister(&self, raw: Raw, index: usize) -> io::Result<()> {
-            self.0.reregister(&raw, flags(), index as u64)
+            // Ignore errors because a concurrent poll can reregister the handle at any point.
+            let _ = self.0.reregister(&raw, flags(), index as u64);
+            Ok(())
         }
         pub fn deregister(&self, raw: Raw) -> io::Result<()> {
-            // Ignore errors since an event can deregister the handle at any point (oneshot mode).
+            // Ignore errors because an event can deregister the handle at any point.
             let _ = self.0.deregister(&raw);
             Ok(())
         }
