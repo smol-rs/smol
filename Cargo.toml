@@ -36,4 +36,3 @@ tokio = { version = "0.2", default-features = false }
 async-tungstenite = "0.4.0"
 url = "2.1.1"
 async-tls = "0.6.0"
-openssl = "0.10.28"
