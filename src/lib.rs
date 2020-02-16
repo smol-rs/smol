@@ -56,6 +56,37 @@ use socket2::{Domain, Protocol, Socket, Type};
 mod io_flag;
 use io_flag::IoFlag;
 
+fn random(n: u32) -> u32 {
+    use std::num::Wrapping;
+
+    thread_local! {
+        static RNG: Cell<Wrapping<u32>> = {
+            // Take the address of a local value as seed.
+            let mut x = 0i32;
+            let r = &mut x;
+            let addr = r as *mut i32 as usize;
+            Cell::new(Wrapping(addr as u32))
+        }
+    }
+
+    RNG.with(|rng| {
+        // This is the 32-bit variant of Xorshift.
+        //
+        // Source: https://en.wikipedia.org/wiki/Xorshift
+        let mut x = rng.get();
+        x ^= x << 13;
+        x ^= x >> 17;
+        x ^= x << 5;
+        rng.set(x);
+
+        // This is a fast alternative to `x % n`.
+        //
+        // Author: Daniel Lemire
+        // Source: https://lemire.me/blog/2016/06/27/a-fast-alternative-to-the-modulo-reduction/
+        ((u64::from(x.0)).wrapping_mul(u64::from(n)) >> 32) as u32
+    })
+}
+
 // ----- Executor -----
 
 static EXECUTOR: Lazy<Executor> = Lazy::new(|| Executor::create().expect("cannot create executor"));
@@ -72,12 +103,10 @@ struct Processor {
     slot: Cell<Option<Runnable>>,
 }
 
-use async_std::sync::{channel, Receiver, Sender};
 struct Executor {
     injector: Injector<Runnable>,
     stealers: ShardedLock<Vec<(ThreadId, Stealer<Runnable>)>>,
     interrupt: Async<IoFlag>,
-    hot: (Sender<()>, Receiver<()>),
 }
 
 impl Executor {
@@ -86,7 +115,6 @@ impl Executor {
             injector: Injector::new(),
             stealers: ShardedLock::new(Vec::new()),
             interrupt: IoFlag::create().and_then(Async::nonblocking)?,
-            hot: channel(50), // TODO: num_cpus
         })
     }
 
@@ -129,10 +157,6 @@ impl Executor {
         if let Some(r) = self.find_quick() {
             return Some(r);
         }
-        self.poll_quick(false).unwrap();
-        if let Some(r) = self.find_quick() {
-            return Some(r);
-        }
 
         PROCESSOR.with(|proc| {
             let proc = proc.borrow();
@@ -141,34 +165,53 @@ impl Executor {
 
             loop {
                 let mut retry = false;
-                for (_, s) in stealers.iter() {
-                    loop {
-                        match s.steal_batch_and_pop(&proc.worker) {
-                            Steal::Success(r) => return Some(r),
-                            Steal::Empty => break,
-                            Steal::Retry => retry = true,
-                        }
+                let start = random(stealers.len() as u32) as usize;
+
+                for (_, s) in stealers
+                    .iter()
+                    .chain(stealers.iter())
+                    .skip(start)
+                    .take(stealers.len())
+                {
+                    match s.steal_batch_and_pop(&proc.worker) {
+                        Steal::Success(r) => return Some(r),
+                        Steal::Empty => {}
+                        Steal::Retry => retry = true,
                     }
                 }
                 if !retry {
                     break;
                 }
             }
+
+            self.poll_quick().unwrap();
+            if let Some(r) = self.find_quick() {
+                return Some(r);
+            }
+
             None
         })
     }
 
     fn run_until(&self, io_flag: &IoFlag) -> io::Result<()> {
         let mut runs = 0;
+        let mut fails = 0;
 
         while !io_flag.get() {
-            if runs > 50 {
+            if runs >= 61 {
                 runs = 0;
                 // TODO: steal from global for some fairness
-                self.poll_quick(true)?;
+                self.poll_quick()?;
             } else if let Some(runnable) = self.find_runnable() {
+                fails = 0;
                 runs += 1;
                 let _ = catch_unwind(|| runnable.run());
+            } else if fails < 3 {
+                fails += 1;
+                thread::yield_now();
+            } else if fails < 5 {
+                fails += 1;
+                thread::sleep(Duration::from_micros(10));
             } else {
                 break;
             }
@@ -186,14 +229,7 @@ impl Executor {
             });
             pin_utils::pin_mut!(flag_ready);
 
-            let poller_ready = async {
-                if let Some(poller) = REACTOR.try_lock() {
-                    poller
-                } else {
-                    self.hot.1.recv().await;
-                    REACTOR.lock().await
-                }
-            };
+            let poller_ready = REACTOR.lock();
             pin_utils::pin_mut!(poller_ready);
 
             // TODO: use piper::select! here
@@ -219,15 +255,10 @@ impl Executor {
     }
 
     // TODO: return number of events?
-    fn poll_quick(&self, check: bool) -> io::Result<()> {
+    fn poll_quick(&self) -> io::Result<()> {
         fire_timers();
         if let Some(mut poller) = REACTOR.try_lock() {
             poller.poll(Some(Duration::from_secs(0)))?;
-
-            if check {
-                use futures_util::future::FutureExt;
-                self.hot.0.send(()).now_or_never();
-            }
         }
         Ok(())
     }
@@ -688,18 +719,19 @@ impl Poller<'_> {
 
                 // In order to minimize worst-case latency, wake writers before readers.
                 // See https://twitter.com/kingprotty/status/1222152589405384705?s=19
-                if ev.is_read {
-                    for w in source.readers.lock().drain(..) {
-                        wakers.push_back(w);
-                    }
-                }
                 if ev.is_write {
                     for w in source.writers.lock().drain(..) {
                         wakers.push_front(w);
                     }
                 }
+                if ev.is_read {
+                    for w in source.readers.lock().drain(..) {
+                        wakers.push_back(w);
+                    }
+                }
             }
         }
+        drop(sources);
 
         // Wake up ready I/O.
         for waker in wakers {
