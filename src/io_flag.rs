@@ -12,8 +12,6 @@ pub struct IoFlag {
     pub socket_wakeup: Socket, // TODO: private
 }
 
-// TODO: fn set_nonblocking(bool)
-
 impl IoFlag {
     pub fn create() -> io::Result<IoFlag> {
         // https://stackoverflow.com/questions/24933411/how-to-emulate-socket-socketpair-on-windows
@@ -52,10 +50,13 @@ impl IoFlag {
                 loop {
                     match (&self.socket_notify).write(&[1]) {
                         Err(err) if err.kind() == io::ErrorKind::Interrupted => {}
-                        _ => {
-                            let _ = (&self.socket_notify).flush();
-                            break;
-                        }
+                        _ => break,
+                    }
+                }
+                loop {
+                    match (&self.socket_notify).flush() {
+                        Err(err) if err.kind() == io::ErrorKind::Interrupted => {}
+                        _ => break,
                     }
                 }
             }

@@ -55,248 +55,9 @@ use socket2::{Domain, Protocol, Socket, Type};
 mod io_flag;
 use io_flag::IoFlag;
 
-// ----- Reactor -----
-
-struct Reactor {
-    io_flag: IoFlag,
-    timers: Mutex<BTreeMap<(Instant, usize), Waker>>,
-}
-
-static REACTOR: Lazy<Reactor> = Lazy::new(|| Reactor::create().expect("cannot create reactor"));
-static POLLER: Lazy<Poller> = Lazy::new(|| Poller::create().expect("cannot create poller"));
-
-impl Reactor {
-    fn create() -> io::Result<Reactor> {
-        let io_flag = IoFlag::create()?;
-        POLLER.register(sys::Raw::new(&io_flag.socket_wakeup))?;
-
-        Ok(Reactor {
-            io_flag,
-            timers: Mutex::new(BTreeMap::new()),
-        })
-    }
-
-    // TODO: return number of events?
-    fn poll(&self) -> io::Result<()> {
-        let interrupted = self.io_flag.clear();
-        let next_timer = self.fire_timers();
-
-        let timeout = if interrupted {
-            Some(Duration::from_secs(0))
-        } else {
-            next_timer.map(|when| Instant::now().saturating_duration_since(when))
-        };
-        POLLER.wait_io(timeout)?;
-        Ok(())
-    }
-
-    // TODO: return number of events?
-    fn poll_quick(&self) -> io::Result<()> {
-        self.fire_timers();
-        POLLER.wait_io(Some(Duration::from_secs(0)))?;
-        Ok(())
-    }
-
-    fn fire_timers(&self) -> Option<Instant> {
-        let now = Instant::now();
-        let (ready, next_timer) = {
-            let mut timers = self.timers.lock();
-            let pending = timers.split_off(&(now, 0));
-            let ready = mem::replace(&mut *timers, pending);
-            let next_timer = timers.keys().next().map(|(when, _)| *when);
-            (ready, next_timer)
-        };
-
-        // Wake up ready timers.
-        for (_, waker) in ready {
-            waker.wake();
-        }
-
-        next_timer
-    }
-
-    /// Interrupts a thread blocked in poller.
-    fn interrupt(&self) {
-        self.io_flag.set();
-    }
-}
-
-// ----- Poller -----
-
-struct Source {
-    raw: sys::Raw,
-    index: usize,
-    readers: Mutex<Vec<Waker>>,
-    writers: Mutex<Vec<Waker>>,
-}
-
-struct Poller {
-    inner: sys::Poller,
-    // TODO: what if this was an async mutex?
-    // - if it isn't, there could be problems with multiple executors
-    // - note that a poll() does not necessarily block
-    // - what if fn poll() was an async fn that starts blocking only when the lock is acquired?
-    // - what if poller.lock().await.poll(timeout);
-    // - also poller.try_lock();
-    events: Mutex<sys::Events>,
-    sources: Mutex<Slab<Arc<Source>>>,
-}
-
-impl Poller {
-    fn create() -> io::Result<Poller> {
-        Ok(Poller {
-            inner: sys::Poller::create()?,
-            events: Mutex::new(sys::Events::new()),
-            sources: Mutex::new(Slab::new()),
-        })
-    }
-
-    fn register(&self, raw: sys::Raw) -> io::Result<Arc<Source>> {
-        let mut sources = self.sources.lock();
-        let vacant = sources.vacant_entry();
-        let index = vacant.key();
-        self.inner.register(raw, index)?;
-
-        let source = Arc::new(Source {
-            raw,
-            index,
-            readers: Mutex::new(Vec::new()),
-            writers: Mutex::new(Vec::new()),
-        });
-        vacant.insert(source.clone());
-
-        Ok(source)
-    }
-
-    fn deregister(&self, source: &Source) -> io::Result<()> {
-        let mut sources = self.sources.lock();
-        sources.remove(source.index);
-        self.inner.deregister(source.raw)
-    }
-
-    fn wait_io(&self, timeout: Option<Duration>) -> io::Result<()> {
-        let mut events = if timeout == Some(Duration::from_secs(0)) {
-            match self.events.try_lock() {
-                None => return Ok(()),
-                Some(e) => e,
-            }
-        } else {
-            self.events.lock()
-        };
-
-        if self.inner.poll(&mut events, timeout)? == 0 {
-            return Ok(());
-        }
-
-        let mut wakers = VecDeque::new();
-        let sources = self.sources.lock();
-
-        for ev in events.iter() {
-            if let Some(source) = sources.get(ev.index) {
-                self.inner.reregister(source.raw, source.index)?;
-
-                // In order to minimize worst-case latency, wake writers before readers.
-                // See https://twitter.com/kingprotty/status/1222152589405384705?s=19
-                if ev.is_read {
-                    for w in source.readers.lock().drain(..) {
-                        wakers.push_back(w);
-                    }
-                }
-                if ev.is_write {
-                    for w in source.writers.lock().drain(..) {
-                        wakers.push_front(w);
-                    }
-                }
-            }
-        }
-
-        // Wake up ready I/O.
-        for waker in wakers {
-            waker.wake();
-        }
-
-        Ok(())
-    }
-}
-
-// ----- Timer -----
-
-/// Fires at a certain point in time.
-pub struct Timer {
-    when: Instant,
-    inserted: bool,
-}
-
-impl Timer {
-    /// Fires after the specified duration of time.
-    pub fn after(dur: Duration) -> Timer {
-        Timer {
-            when: Instant::now() + dur,
-            inserted: false,
-        }
-    }
-
-    /// Fires at the specified instant in time.
-    pub fn at(dur: Duration) -> Timer {
-        Timer {
-            when: Instant::now() + dur,
-            inserted: false,
-        }
-    }
-}
-
-impl Drop for Timer {
-    fn drop(&mut self) {
-        let id = self as *mut Timer as usize;
-        REACTOR.timers.lock().remove(&(self.when, id));
-        self.inserted = false;
-    }
-}
-
-impl Future for Timer {
-    type Output = Instant;
-
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let id = &mut *self as *mut Timer as usize;
-        let mut timers = REACTOR.timers.lock();
-
-        if Instant::now() >= self.when {
-            timers.remove(&(self.when, id));
-            return Poll::Ready(self.when);
-        }
-
-        if !self.inserted {
-            let mut is_earliest = false;
-            if let Some((first, _)) = timers.keys().next() {
-                if self.when < *first {
-                    is_earliest = true;
-                }
-            }
-
-            let waker = cx.waker().clone();
-            timers.insert((self.when, id), waker);
-            self.inserted = true;
-
-            if is_earliest {
-                drop(timers);
-                REACTOR.interrupt();
-            }
-        }
-
-        Poll::Pending
-    }
-}
-
 // ----- Executor -----
 
-static EXECUTOR: Lazy<Executor> = Lazy::new(|| {
-    let (sender, receiver) = channel::unbounded::<Runnable>();
-    Executor {
-        receiver,
-        queue: sender,
-        mutex: futures_util::lock::Mutex::new(()),
-    }
-});
+static EXECUTOR: Lazy<Executor> = Lazy::new(|| Executor::create().expect("cannot create executor"));
 
 /// A runnable future, ready for execution.
 type Runnable = async_task::Task<()>;
@@ -304,15 +65,96 @@ type Runnable = async_task::Task<()>;
 struct Executor {
     receiver: channel::Receiver<Runnable>,
     queue: channel::Sender<Runnable>,
-    // TODO: this should be global mutex on the reactor
-    //   - shared among all executors!
-    mutex: futures_util::lock::Mutex<()>,
+    interrupt: Async<IoFlag>,
 }
 
 impl Executor {
-    fn schedule(&'static self, runnable: Runnable) {
+    fn create() -> io::Result<Executor> {
+        let (sender, receiver) = channel::unbounded::<Runnable>();
+        Ok(Executor {
+            receiver,
+            queue: sender,
+            interrupt: IoFlag::create().and_then(Async::nonblocking)?,
+        })
+    }
+
+    fn schedule(&self, runnable: Runnable) {
         self.queue.send(runnable).unwrap();
-        REACTOR.interrupt();
+        self.interrupt();
+    }
+
+    fn find_runnable(&self) -> Option<Runnable> {
+        self.receiver.try_recv().ok()
+    }
+
+    fn run_until(&self, io_flag: &IoFlag) -> io::Result<()> {
+        let mut runs = 0;
+        let mut fails = 0;
+
+        while !io_flag.get() {
+            if runs > 50 {
+                runs = 0;
+                self.poll_quick()?;
+            } else if let Some(runnable) = self.find_runnable() {
+                runs += 1;
+                fails = 0;
+                let _ = catch_unwind(|| runnable.run());
+            } else if fails == 0 {
+                fails += 1;
+                self.poll_quick()?;
+            } else {
+                break;
+            }
+        }
+        Ok(())
+    }
+
+    fn execute(&self, io_flag: &Async<IoFlag>) -> io::Result<()> {
+        loop {
+            self.run_until(io_flag.get_ref())?;
+
+            let flag_ready = io_flag.read_with(|f| match f.get() {
+                true => Ok(()),
+                false => Err(io::Error::new(io::ErrorKind::WouldBlock, "")),
+            });
+            pin_utils::pin_mut!(flag_ready);
+
+            let poller_ready = REACTOR.lock();
+            pin_utils::pin_mut!(poller_ready);
+
+            // TODO: use piper::select! here
+            let mut poller = match block_on(future::select(flag_ready, poller_ready)) {
+                future::Either::Left(_) => break,
+                future::Either::Right(_) if io_flag.get_ref().get() => break,
+                future::Either::Right((poller, _)) => poller,
+            };
+
+            let interrupted = self.interrupt.get_ref().clear();
+            let next_timer = fire_timers();
+
+            let timeout = if interrupted {
+                Some(Duration::from_secs(0))
+            } else {
+                next_timer.map(|when| Instant::now().saturating_duration_since(when))
+            };
+            poller
+                .poll(timeout)
+                .expect("failure while waiting for I/O events");
+        }
+        Ok(())
+    }
+
+    // TODO: return number of events?
+    fn poll_quick(&self) -> io::Result<()> {
+        fire_timers();
+        if let Some(mut poller) = REACTOR.try_lock() {
+            poller.poll(Some(Duration::from_secs(0)))?;
+        }
+        Ok(())
+    }
+
+    fn interrupt(&self) {
+        self.interrupt.get_ref().set();
     }
 }
 
@@ -331,44 +173,11 @@ pub fn run<T>(future: impl Future<Output = T>) -> T {
     let waker = async_task::waker_fn(move || f.get_ref().set());
 
     loop {
-        io_flag.get_ref().clear();
-
         match future.as_mut().poll(&mut Context::from_waker(&waker)) {
             Poll::Ready(val) => return val,
-            Poll::Pending => {}
-        }
-
-        loop {
-            let mut runs = 0;
-            let mut fails = 0;
-
-            while !io_flag.get_ref().get() {
-                if runs > 50 {
-                    runs = 0;
-                    REACTOR.poll_quick().unwrap();
-                } else if let Ok(runnable) = EXECUTOR.receiver.try_recv() {
-                    runs += 1;
-                    fails = 0;
-                    let _ = catch_unwind(|| runnable.run());
-                } else if fails == 0 {
-                    fails += 1;
-                    REACTOR.poll_quick().unwrap();
-                } else {
-                    break;
-                }
-            }
-
-            let flag_ready = io_flag.read_with(|f| match f.get() {
-                true => Ok(()),
-                false => Err(io::Error::new(io::ErrorKind::WouldBlock, "")),
-            });
-            pin_utils::pin_mut!(flag_ready);
-
-            // TODO: use piper::select! here
-            match block_on(future::select(flag_ready, EXECUTOR.mutex.lock())) {
-                future::Either::Left(_) => break,
-                future::Either::Right(_) if io_flag.get_ref().get() => break,
-                future::Either::Right(_lock) => REACTOR.poll().unwrap(),
+            Poll::Pending => {
+                EXECUTOR.execute(&io_flag).unwrap();
+                io_flag.get_ref().clear();
             }
         }
     }
@@ -529,7 +338,6 @@ pub fn block_on<T>(future: impl Future<Output = T>) -> T {
 
         pin_utils::pin_mut!(future);
         let cx = &mut Context::from_waker(&waker);
-
         loop {
             match future.as_mut().poll(cx) {
                 Poll::Ready(output) => return output,
@@ -599,7 +407,200 @@ impl<T: AsyncWrite + Unpin> Write for BlockOn<T> {
     }
 }
 
+// ----- Timer -----
+
+static TIMERS: Lazy<Mutex<BTreeMap<(Instant, usize), Waker>>> =
+    Lazy::new(|| Mutex::new(BTreeMap::new()));
+
+fn fire_timers() -> Option<Instant> {
+    let now = Instant::now();
+    let (ready, next_timer) = {
+        let mut timers = TIMERS.lock();
+        let pending = timers.split_off(&(now, 0));
+        let ready = mem::replace(&mut *timers, pending);
+        let next_timer = timers.keys().next().map(|(when, _)| *when);
+        (ready, next_timer)
+    };
+
+    // Wake up ready timers.
+    for (_, waker) in ready {
+        waker.wake();
+    }
+
+    next_timer
+}
+
+/// Fires at a certain point in time.
+pub struct Timer {
+    when: Instant,
+    inserted: bool,
+}
+
+impl Timer {
+    /// Fires after the specified duration of time.
+    pub fn after(dur: Duration) -> Timer {
+        Timer {
+            when: Instant::now() + dur,
+            inserted: false,
+        }
+    }
+
+    /// Fires at the specified instant in time.
+    pub fn at(dur: Duration) -> Timer {
+        Timer {
+            when: Instant::now() + dur,
+            inserted: false,
+        }
+    }
+}
+
+impl Drop for Timer {
+    fn drop(&mut self) {
+        let id = self as *mut Timer as usize;
+        TIMERS.lock().remove(&(self.when, id));
+        self.inserted = false;
+    }
+}
+
+impl Future for Timer {
+    type Output = Instant;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let id = &mut *self as *mut Timer as usize;
+        let mut timers = TIMERS.lock();
+
+        if Instant::now() >= self.when {
+            timers.remove(&(self.when, id));
+            return Poll::Ready(self.when);
+        }
+
+        if !self.inserted {
+            let mut is_earliest = false;
+            if let Some((first, _)) = timers.keys().next() {
+                if self.when < *first {
+                    is_earliest = true;
+                }
+            }
+
+            let waker = cx.waker().clone();
+            timers.insert((self.when, id), waker);
+            self.inserted = true;
+
+            if is_earliest {
+                drop(timers);
+                EXECUTOR.interrupt();
+            }
+        }
+
+        Poll::Pending
+    }
+}
+
 // ----- Async I/O -----
+
+static REACTOR: Lazy<Reactor> = Lazy::new(|| Reactor::create().expect("cannot create reactor"));
+
+struct Source {
+    raw: sys::Raw,
+    index: usize,
+    readers: Mutex<Vec<Waker>>,
+    writers: Mutex<Vec<Waker>>,
+}
+
+struct Reactor {
+    sys: sys::Reactor,
+    sources: Mutex<Slab<Arc<Source>>>,
+    events: futures_util::lock::Mutex<sys::Events>,
+}
+
+impl Reactor {
+    fn create() -> io::Result<Reactor> {
+        Ok(Reactor {
+            sys: sys::Reactor::create()?,
+            sources: Mutex::new(Slab::new()),
+            events: futures_util::lock::Mutex::new(sys::Events::new()),
+        })
+    }
+
+    fn register(&self, raw: sys::Raw) -> io::Result<Arc<Source>> {
+        let mut sources = self.sources.lock();
+        let vacant = sources.vacant_entry();
+        let index = vacant.key();
+        self.sys.register(raw, index)?;
+
+        let source = Arc::new(Source {
+            raw,
+            index,
+            readers: Mutex::new(Vec::new()),
+            writers: Mutex::new(Vec::new()),
+        });
+        vacant.insert(source.clone());
+
+        Ok(source)
+    }
+
+    fn deregister(&self, source: &Source) -> io::Result<()> {
+        let mut sources = self.sources.lock();
+        sources.remove(source.index);
+        self.sys.deregister(source.raw)
+    }
+
+    fn try_lock(&self) -> Option<Poller<'_>> {
+        self.events.try_lock().map(|events| Poller {
+            reactor: self,
+            events,
+        })
+    }
+
+    async fn lock(&self) -> Poller<'_> {
+        Poller {
+            reactor: self,
+            events: self.events.lock().await,
+        }
+    }
+}
+
+struct Poller<'a> {
+    reactor: &'a Reactor,
+    events: futures_util::lock::MutexGuard<'a, sys::Events>,
+}
+
+impl Poller<'_> {
+    fn poll(&mut self, timeout: Option<Duration>) -> io::Result<()> {
+        if self.reactor.sys.poll(&mut self.events, timeout)? == 0 {
+            return Ok(());
+        }
+
+        let mut wakers = VecDeque::new();
+        let sources = self.reactor.sources.lock();
+
+        for ev in self.events.iter() {
+            if let Some(source) = sources.get(ev.index) {
+                self.reactor.sys.reregister(source.raw, source.index)?;
+
+                // In order to minimize worst-case latency, wake writers before readers.
+                // See https://twitter.com/kingprotty/status/1222152589405384705?s=19
+                if ev.is_read {
+                    for w in source.readers.lock().drain(..) {
+                        wakers.push_back(w);
+                    }
+                }
+                if ev.is_write {
+                    for w in source.writers.lock().drain(..) {
+                        wakers.push_front(w);
+                    }
+                }
+            }
+        }
+
+        // Wake up ready I/O.
+        for waker in wakers {
+            waker.wake();
+        }
+
+        Ok(())
+    }
+}
 
 /// Async I/O.
 pub struct Async<T> {
@@ -612,7 +613,7 @@ impl<T: std::os::unix::io::AsRawFd> Async<T> {
     /// Converts a non-blocking I/O handle into an async I/O handle.
     pub fn nonblocking(inner: T) -> io::Result<Async<T>> {
         Ok(Async {
-            source: POLLER.register(sys::Raw::new(&inner))?,
+            source: REACTOR.register(sys::Raw::new(&inner))?,
             inner: Box::new(inner),
         })
     }
@@ -623,7 +624,7 @@ impl<T: std::os::windows::io::AsRawSocket> Async<T> {
     /// Converts a non-blocking I/O handle into an async I/O handle.
     pub fn nonblocking(inner: T) -> io::Result<Async<T>> {
         Ok(Async {
-            source: POLLER.register(sys::Raw::new(&inner))?,
+            source: REACTOR.register(sys::Raw::new(&inner))?,
             inner: Box::new(inner),
         })
     }
@@ -714,7 +715,7 @@ impl<T> Async<T> {
 
 impl<T> Drop for Async<T> {
     fn drop(&mut self) {
-        POLLER.deregister(&self.source).unwrap();
+        REACTOR.deregister(&self.source).unwrap();
     }
 }
 
@@ -791,8 +792,6 @@ where
         Poll::Ready(Ok(()))
     }
 }
-
-// ----- Networking -----
 
 impl Async<TcpListener> {
     /// Creates a listener bound to the specified address.
@@ -1020,8 +1019,11 @@ mod sys {
     use std::os::unix::io::{AsRawFd, RawFd};
     use std::time::Duration;
 
-    use nix::sys::epoll::{
-        epoll_create1, epoll_ctl, epoll_wait, EpollCreateFlags, EpollEvent, EpollFlags, EpollOp,
+    use nix::{
+        errno::Errno,
+        sys::epoll::{
+            epoll_create1, epoll_ctl, epoll_wait, EpollCreateFlags, EpollEvent, EpollFlags, EpollOp,
+        },
     };
 
     #[derive(Clone, Copy)]
@@ -1032,10 +1034,10 @@ mod sys {
         }
     }
 
-    pub struct Poller(RawFd);
-    impl Poller {
-        pub fn create() -> io::Result<Poller> {
-            Ok(Poller(
+    pub struct Reactor(RawFd);
+    impl Reactor {
+        pub fn create() -> io::Result<Reactor> {
+            Ok(Reactor(
                 epoll_create1(EpollCreateFlags::EPOLL_CLOEXEC).map_err(io_err)?,
             ))
         }
@@ -1053,8 +1055,11 @@ mod sys {
             let timeout_ms = timeout
                 .and_then(|t| t.as_millis().try_into().ok())
                 .unwrap_or(-1);
-            // TODO: ignore EINTR
-            events.len = epoll_wait(self.0, &mut events.list, timeout_ms).map_err(io_err)?;
+            events.len = match epoll_wait(self.0, &mut events.list, timeout_ms) {
+                Ok(len) => len,
+                Err(nix::Error::Sys(Errno::EINTR)) => 0,
+                Err(err) => return Err(io_err(err)),
+            };
             Ok(events.len)
         }
     }
@@ -1121,12 +1126,12 @@ mod sys {
         }
     }
 
-    pub struct Poller(RawFd);
-    impl Poller {
-        pub fn create() -> io::Result<Poller> {
+    pub struct Reactor(RawFd);
+    impl Reactor {
+        pub fn create() -> io::Result<Reactor> {
             let fd = kqueue().map_err(io_err)?;
             fcntl(fd, FcntlArg::F_SETFD(FdFlag::FD_CLOEXEC)).map_err(io_err)?;
-            Ok(Poller(fd))
+            Ok(Reactor(fd))
         }
         pub fn register(&self, raw: Raw, index: usize) -> io::Result<()> {
             let ident = raw.0 as _;
@@ -1139,8 +1144,7 @@ mod sys {
             ];
             let mut eventlist = changelist.clone();
             match kevent_ts(self.0, &changelist, &mut eventlist, None) {
-                Ok(_) => {}
-                Err(nix::Error::Sys(Errno::EINTR)) => {}
+                Ok(_) | Err(nix::Error::Sys(Errno::EINTR)) => {}
                 Err(err) => return Err(io_err(err)),
             }
             for ev in &eventlist {
@@ -1167,8 +1171,7 @@ mod sys {
             ];
             let mut eventlist = changelist.clone();
             match kevent_ts(self.0, &changelist, &mut eventlist, None) {
-                Ok(_) => {}
-                Err(nix::Error::Sys(Errno::EINTR)) => {}
+                Ok(_) | Err(nix::Error::Sys(Errno::EINTR)) => {}
                 Err(err) => return Err(io_err(err)),
             }
             for ev in &eventlist {
@@ -1249,10 +1252,10 @@ mod sys {
         }
     }
 
-    pub struct Poller(Epoll);
-    impl Poller {
-        pub fn create() -> io::Result<Poller> {
-            Ok(Poller(Epoll::new()?))
+    pub struct Reactor(Epoll);
+    impl Reactor {
+        pub fn create() -> io::Result<Reactor> {
+            Ok(Reactor(Epoll::new()?))
         }
         pub fn register(&self, raw: Raw, index: usize) -> io::Result<()> {
             self.0.register(&raw, flags(), index as u64)
@@ -1269,8 +1272,12 @@ mod sys {
         }
         pub fn poll(&self, events: &mut Events, timeout: Option<Duration>) -> io::Result<usize> {
             events.0.clear();
-            // TODO: ignore EINTR
-            self.0.poll(&mut events.0, timeout)
+            let n = match self.0.poll(&mut events.0, timeout) {
+                Ok(n) => n,
+                Err(err) if err.kind() == io::ErrorKind::Interrupted => 0,
+                Err(err) => return Err(err),
+            };
+            Ok(n)
         }
     }
     fn flags() -> EventFlag {
