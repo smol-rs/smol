@@ -15,7 +15,7 @@
 )))]
 compile_error!("smol does not support this target OS");
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, VecDeque};
 use std::fmt::Debug;
 use std::future::Future;
@@ -64,7 +64,12 @@ static EXECUTOR: Lazy<Executor> = Lazy::new(|| Executor::create().expect("cannot
 type Runnable = async_task::Task<()>;
 
 thread_local! {
-    static WORKER: RefCell<Option<Worker<Runnable>>> = RefCell::new(None);
+    static PROCESSOR: RefCell<Option<Processor>> = RefCell::new(None);
+}
+
+struct Processor {
+    worker: Worker<Runnable>,
+    slot: Cell<Option<Runnable>>,
 }
 
 use async_std::sync::{channel, Receiver, Sender};
@@ -81,27 +86,37 @@ impl Executor {
             injector: Injector::new(),
             stealers: ShardedLock::new(Vec::new()),
             interrupt: IoFlag::create().and_then(Async::nonblocking)?,
-            hot: channel(1),
+            hot: channel(50), // TODO: num_cpus
         })
     }
 
     fn schedule(&self, runnable: Runnable) {
-        WORKER.with(|worker| match worker.borrow().as_ref() {
-            Some(w) => w.push(runnable),
-            None => self.injector.push(runnable),
+        PROCESSOR.with(|proc| match proc.borrow().as_ref() {
+            None => {
+                self.injector.push(runnable);
+                self.interrupt();
+            }
+            Some(proc) => {
+                if let Some(r) = proc.slot.replace(Some(runnable)) {
+                    proc.worker.push(r);
+                    self.interrupt();
+                }
+            }
         });
-        self.interrupt();
     }
 
     fn find_quick(&self) -> Option<Runnable> {
-        WORKER.with(|worker| {
-            let worker = worker.borrow();
-            let worker = worker.as_ref().unwrap();
-            if let Some(r) = worker.pop() {
+        PROCESSOR.with(|proc| {
+            let proc = proc.borrow();
+            let proc = proc.as_ref().unwrap();
+            if let Some(r) = proc.slot.take() {
+                return Some(r);
+            }
+            if let Some(r) = proc.worker.pop() {
                 return Some(r);
             }
             loop {
-                match self.injector.steal_batch_and_pop(&worker) {
+                match self.injector.steal_batch_and_pop(&proc.worker) {
                     Steal::Success(r) => return Some(r),
                     Steal::Empty => return None,
                     Steal::Retry => {}
@@ -119,17 +134,24 @@ impl Executor {
             return Some(r);
         }
 
-        WORKER.with(|worker| {
-            let worker = worker.borrow();
-            let worker = worker.as_ref().unwrap();
+        PROCESSOR.with(|proc| {
+            let proc = proc.borrow();
+            let proc = proc.as_ref().unwrap();
             let stealers = self.stealers.read().unwrap();
-            for (_, s) in stealers.iter() {
-                loop {
-                    match s.steal_batch_and_pop(&worker) {
-                        Steal::Success(r) => return Some(r),
-                        Steal::Empty => break,
-                        Steal::Retry => {}
+
+            loop {
+                let mut retry = false;
+                for (_, s) in stealers.iter() {
+                    loop {
+                        match s.steal_batch_and_pop(&proc.worker) {
+                            Steal::Success(r) => return Some(r),
+                            Steal::Empty => break,
+                            Steal::Retry => retry = true,
+                        }
                     }
+                }
+                if !retry {
+                    break;
                 }
             }
             None
@@ -142,6 +164,7 @@ impl Executor {
         while !io_flag.get() {
             if runs > 50 {
                 runs = 0;
+                // TODO: steal from global for some fairness
                 self.poll_quick(true)?;
             } else if let Some(runnable) = self.find_runnable() {
                 runs += 1;
@@ -228,24 +251,27 @@ pub fn run<T>(future: impl Future<Output = T>) -> T {
     let f = io_flag.clone();
     let waker = async_task::waker_fn(move || f.get_ref().set());
 
-    WORKER.with(|worker| {
-        let mut worker = worker.borrow_mut();
-        if worker.is_some() {
+    PROCESSOR.with(|proc| {
+        let mut proc = proc.borrow_mut();
+        if proc.is_some() {
             // TODO: already registered, panic because recursive run()
         }
 
         let w = Worker::new_fifo();
         let s = w.stealer();
-        *worker = Some(w);
+        *proc = Some(Processor {
+            worker: w,
+            slot: Cell::new(None),
+        });
 
         let id = thread::current().id();
         EXECUTOR.stealers.write().unwrap().push((id, s));
     });
 
     scopeguard::defer! {
-        WORKER.with(|worker| {
-            let worker = worker.borrow_mut().take().unwrap();
-            while let Some(r) = worker.pop() {
+        PROCESSOR.with(|proc| {
+            let proc = proc.borrow_mut().take().unwrap();
+            while let Some(r) = proc.worker.pop() {
                 EXECUTOR.injector.push(r);
             }
 

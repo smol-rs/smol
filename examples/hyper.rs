@@ -15,7 +15,7 @@ pub fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         std::thread::spawn(|| smol::run(futures::future::pending::<()>()));
     }
 
-    smol::run(async {
+    smol::block_on(async {
         let addr = "127.0.0.1:3000";
         let listener = Async::<TcpListener>::bind(addr)?;
 
