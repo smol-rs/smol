@@ -10,6 +10,11 @@ async fn hello(_: Request<Body>) -> Result<Response<Body>, Infallible> {
 }
 
 pub fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    // Create a thread pool.
+    for _ in 0..num_cpus::get().max(1) {
+        std::thread::spawn(|| smol::run(futures::future::pending::<()>()));
+    }
+
     smol::run(async {
         let addr = "127.0.0.1:3000";
         let listener = Async::<TcpListener>::bind(addr)?;
