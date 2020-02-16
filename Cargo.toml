@@ -20,6 +20,7 @@ pin-utils = "0.1.0-alpha.4"
 scopeguard = "1.0.0"
 slab = "0.4.2"
 socket2 = "0.3.11"
+async-std = { version = "1", features = ["unstable"] }
 
 [target.'cfg(unix)'.dependencies]
 nix = "0.16.1"
