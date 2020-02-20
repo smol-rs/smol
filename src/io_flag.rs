@@ -2,7 +2,7 @@
 
 use std::io::{self, Read, Write};
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{self, AtomicBool, Ordering};
 
 use socket2::{Domain, Socket, Type};
 
@@ -45,6 +45,8 @@ impl IoFlag {
     }
 
     pub fn set(&self) {
+        atomic::fence(Ordering::SeqCst);
+
         if !self.flag.load(Ordering::SeqCst) {
             if !self.flag.swap(true, Ordering::SeqCst) {
                 loop {
@@ -78,6 +80,7 @@ impl IoFlag {
                 }
             }
         }
+        atomic::fence(Ordering::SeqCst);
         value
     }
 }

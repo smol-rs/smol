@@ -11,7 +11,7 @@ async fn hello(_: Request<Body>) -> Result<Response<Body>, Infallible> {
 
 pub fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Create a thread pool.
-    for _ in 0..num_cpus::get().max(1) {
+    for _ in 0..num_cpus::get_physical().max(1) {
         std::thread::spawn(|| smol::run(futures::future::pending::<()>()));
     }
 

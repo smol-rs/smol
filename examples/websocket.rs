@@ -5,7 +5,7 @@ use smol::{Task, Timer};
 
 fn main() {
     // Creating blocking pool
-    for _ in 0..num_cpus::get().max(1) { std::thread::Builder::new().name("processor".into()).spawn(|| smol::run(futures::future::pending::<()>())).unwrap(); }
+    for _ in 0..num_cpus::get_physical().max(1) { std::thread::Builder::new().name("processor".into()).spawn(|| smol::run(futures::future::pending::<()>())).unwrap(); }
     // Main io
     smol::run(async {
         match websocket("mercury.deribit.com", "wss", "ws/api/v2", 443).await {
