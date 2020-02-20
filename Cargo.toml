@@ -33,7 +33,3 @@ hyper = { version = "0.13", default-features = false }
 num_cpus = "1.12.0"
 pin-utils = "0.1.0-alpha.4"
 tokio = { version = "0.2", default-features = false }
-
-async-tungstenite = {git="https://github.com/sdroege/async-tungstenite"}
-async-tls = {git="https://github.com/async-rs/async-tls"}
-url = "*"
