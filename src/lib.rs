@@ -581,7 +581,7 @@ impl Timer {
 impl Drop for Timer {
     fn drop(&mut self) {
         if self.inserted {
-            TIMERS.lock().remove(&(self.when, self.id()));
+            TIMERS.lock().map.remove(&(self.when, self.id()));
         }
     }
 }
@@ -593,20 +593,20 @@ impl Future for Timer {
         let mut timers = TIMERS.lock();
 
         if Instant::now() >= self.when {
-            timers.remove(&(self.when, self.id()));
+            timers.map.remove(&(self.when, self.id()));
             return Poll::Ready(self.when);
         }
 
         if !self.inserted {
             let mut is_earliest = false;
-            if let Some((first, _)) = timers.keys().next() {
+            if let Some((first, _)) = timers.map.keys().next() {
                 if self.when < *first {
                     is_earliest = true;
                 }
             }
 
             let waker = cx.waker().clone();
-            timers.insert((self.when, self.id()), waker);
+            timers.map.insert((self.when, self.id()), waker);
             self.inserted = true;
 
             if is_earliest {
@@ -728,7 +728,7 @@ impl Poller<'_> {
 
 /// Async I/O.
 pub struct Async<T> {
-    inner: Box<T>,
+    inner: Option<Box<T>>,
     source: Arc<Source>,
 }
 
@@ -738,7 +738,7 @@ impl<T: std::os::unix::io::AsRawFd> Async<T> {
     pub fn nonblocking(inner: T) -> io::Result<Async<T>> {
         Ok(Async {
             source: REACTOR.register(sys::Raw::new(&inner))?,
-            inner: Box::new(inner),
+            inner: Some(Box::new(inner)),
         })
     }
 }
@@ -757,23 +757,25 @@ impl<T: std::os::windows::io::AsRawSocket> Async<T> {
 impl<T> Async<T> {
     /// Gets a reference to the inner I/O handle.
     pub fn get_ref(&self) -> &T {
-        &self.inner
+        self.inner.as_ref().unwrap()
     }
 
     /// Gets a mutable reference to the inner I/O handle.
     pub fn get_mut(&mut self) -> &mut T {
-        &mut self.inner
+        self.inner.as_mut().unwrap()
     }
 
     /// Extracts the inner non-blocking I/O handle.
-    pub fn into_inner(&mut self) -> &mut T {
-        todo!()
+    pub fn into_inner(mut self) -> io::Result<T> {
+        let inner = *self.inner.take().unwrap();
+        REACTOR.deregister(&self.source)?;
+        Ok(inner)
     }
 
     /// Converts a non-blocking read into an async operation.
     pub async fn read_with<R>(&self, f: impl FnMut(&T) -> io::Result<R>) -> io::Result<R> {
         let mut f = f;
-        let mut inner = &self.inner;
+        let mut inner = self.inner.as_ref().unwrap();
         let wakers = &self.source.readers;
         future::poll_fn(|cx| Self::poll_io(cx, |s| f(s), &mut inner, wakers)).await
     }
@@ -784,7 +786,7 @@ impl<T> Async<T> {
         f: impl FnMut(&mut T) -> io::Result<R>,
     ) -> io::Result<R> {
         let mut f = f;
-        let mut inner = &mut self.inner;
+        let mut inner = self.inner.as_mut().unwrap();
         let wakers = &self.source.readers;
         future::poll_fn(|cx| Self::poll_io(cx, |s| f(s), &mut inner, wakers)).await
     }
@@ -792,7 +794,7 @@ impl<T> Async<T> {
     /// Converts a non-blocking write into an async operation.
     pub async fn write_with<R>(&self, f: impl FnMut(&T) -> io::Result<R>) -> io::Result<R> {
         let mut f = f;
-        let mut inner = &self.inner;
+        let mut inner = self.inner.as_ref().unwrap();
         let wakers = &self.source.writers;
         future::poll_fn(|cx| Self::poll_io(cx, |s| f(s), &mut inner, wakers)).await
     }
@@ -803,7 +805,7 @@ impl<T> Async<T> {
         f: impl FnMut(&mut T) -> io::Result<R>,
     ) -> io::Result<R> {
         let mut f = f;
-        let mut inner = &mut self.inner;
+        let mut inner = self.inner.as_mut().unwrap();
         let wakers = &self.source.writers;
         future::poll_fn(|cx| Self::poll_io(cx, |s| f(s), &mut inner, wakers)).await
     }
@@ -839,7 +841,10 @@ impl<T> Async<T> {
 
 impl<T> Drop for Async<T> {
     fn drop(&mut self) {
-        REACTOR.deregister(&self.source).unwrap();
+        if self.inner.take().is_some() {
+            // Destructors should not panic.
+            let _ = REACTOR.deregister(&self.source);
+        }
     }
 }
 
