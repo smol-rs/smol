@@ -1,5 +1,5 @@
 #![forbid(unsafe_code)]
-// TODO: #![warn(missing_docs, missing_debug_implementations, rust_2018_idioms)]
+#![warn(missing_docs, missing_debug_implementations, rust_2018_idioms)]
 
 #[cfg(not(any(
     target_os = "linux",     // epoll
@@ -40,11 +40,11 @@ use crossbeam_deque::{Injector, Steal, Stealer, Worker};
 use crossbeam_queue::SegQueue;
 use crossbeam_utils::sync::{Parker, ShardedLock};
 use futures_core::stream::Stream;
-use futures_io::{AsyncBufRead, AsyncRead, AsyncWrite};
+use futures_io::{AsyncRead, AsyncWrite};
 use futures_util::future;
-use futures_util::io::{AsyncReadExt, AsyncWriteExt};
 use futures_util::lock;
-use futures_util::stream::{self, StreamExt};
+use futures_util::stream;
+use io_flag::IoFlag;
 use once_cell::sync::Lazy;
 use once_cell::unsync::OnceCell;
 use parking_lot::{Condvar, Mutex, MutexGuard};
@@ -54,9 +54,6 @@ use socket2::{Domain, Protocol, Socket, Type};
 // TODO: fix unwraps
 // TODO: catch panics in wake() and Waker::drop()
 // TODO: readme for inspiration: https://github.com/piscisaureus/wepoll
-
-mod io_flag;
-use io_flag::IoFlag;
 
 // ----- Executor -----
 
@@ -523,50 +520,36 @@ where
     T: Iterator + Send + 'static,
     T::Item: Send,
 {
-    // NOTE: stop task if the returned handle is dropped
-    todo!();
-    stream::empty()
+    let (s, r) = piper::chan(1);
+    Task::blocking(async move {
+        for item in t {
+            s.send(item).await;
+        }
+    })
+    .forget();
+    r
 }
 
+const DEFAULT_BUF_SIZE: usize = 8 * 1024;
+
 /// Spawns a blocking reader onto a thread.
-pub fn reader(t: impl Read + Send + 'static) -> impl AsyncBufRead + Send + Unpin + 'static {
-    // NOTE: stop task if the returned handle is dropped
-    todo!();
-    futures_util::io::empty()
+pub fn reader(t: impl Read + Send + 'static) -> impl AsyncRead + Send + Unpin + 'static {
+    let (r, mut w) = piper::pipe(DEFAULT_BUF_SIZE);
+    Task::blocking(async move {
+        futures_util::io::copy(futures_util::io::AllowStdIo::new(t), &mut w).await;
+    })
+    .forget();
+    r
 }
 
 /// Spawns a blocking writer onto a thread.
 pub fn writer(t: impl Write + Send + 'static) -> impl AsyncWrite + Send + Unpin + 'static {
-    // NOTE: stop task if the returned handle is dropped
-    todo!();
-    futures_util::io::sink()
-}
-
-/// Blocks on a stream or async I/O.
-pub struct BlockOn<T>(pub T);
-
-impl<T: Stream + Unpin> Iterator for BlockOn<T> {
-    type Item = T::Item;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        block_on(Pin::new(&mut self.0).next())
-    }
-}
-
-impl<T: AsyncRead + Unpin> Read for BlockOn<T> {
-    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        block_on(Pin::new(&mut self.0).read(buf))
-    }
-}
-
-impl<T: AsyncWrite + Unpin> Write for BlockOn<T> {
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        block_on(Pin::new(&mut self.0).write(buf))
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        block_on(Pin::new(&mut self.0).flush())
-    }
+    let (r, w) = piper::pipe(DEFAULT_BUF_SIZE);
+    Task::blocking(async move {
+        futures_util::io::copy(r, &mut futures_util::io::AllowStdIo::new(t)).await;
+    })
+    .forget();
+    w
 }
 
 // ----- Timer -----

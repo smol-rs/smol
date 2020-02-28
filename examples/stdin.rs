@@ -1,34 +1,34 @@
-// use std::io::prelude::*;
-// use std::process::{Command, Stdio};
+use std::process::{Command, Stdio};
 
 use futures::io;
-// use futures::prelude::*;
+use futures::prelude::*;
+use smol::Task;
 
-// fn stdin() -> impl AsyncBufRead + Unpin + 'static {
-//     let mut child = Command::new("cat")
-//         .stdin(Stdio::inherit())
-//         .stdout(Stdio::piped())
-//         .spawn()
-//         .expect("Failed to execute command");
-//     let mut out = child.stdout.take().unwrap();
-//
-//     let (reader, mut writer) = todo!("create a Reader/Writer");
-//     Task::blocking(async move {
-//         todo!("copy from out to the Writer");
-//         // std::io::copy(&mut out, &mut writer);
-//     })
-//     .detach();
-//
-//     todo!("return a wrapped Reader that calls child.kill() on drop");
-//     futures::empty()
-// }
+fn stdin() -> impl AsyncRead + Unpin + 'static {
+    let mut child = Command::new("cat")
+        .stdin(Stdio::inherit())
+        .stdout(Stdio::piped())
+        .spawn()
+        .expect("Failed to execute command");
+    let mut out = child.stdout.take().unwrap();
+
+    let (reader, mut writer) = piper::pipe(2); // TODO
+    Task::blocking(async move {
+        io::copy(io::AllowStdIo::new(out), &mut writer).await;
+    })
+    .forget();
+
+    // TODO todo!("return a wrapped Reader that calls child.kill() on drop");
+    reader
+}
 
 fn main() -> io::Result<()> {
     smol::run(async {
-        // let stdin = stdin();
-        //
-        // let mut line = String::new();
-        // stdin.read_line(&mut line).await?;
+        let mut stdin = io::BufReader::new(stdin());
+
+        let mut line = String::new();
+        stdin.read_line(&mut line).await?;
+        dbg!(line);
 
         Ok(())
     })
