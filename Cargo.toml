@@ -14,12 +14,12 @@ crossbeam-utils = "0.7.0"
 futures-core = "0.3.3"
 futures-io = "0.3.3"
 futures-util = { version = "0.3.3", default-features = false, features = ["std", "io"] }
-io-flag = { path = "../io-flag" }
+io-flag = { path = "io-flag" }
 libc = "0.2.66"
 once_cell = "1.3.1"
 parking_lot = "0.10.0"
 pin-utils = "0.1.0-alpha.4"
-piper = { path = "../piper" }
+piper = { path = "piper" }
 scopeguard = "1.0.0"
 slab = "0.4.2"
 socket2 = "0.3.11"
