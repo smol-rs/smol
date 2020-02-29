@@ -42,6 +42,7 @@ use crossbeam_utils::sync::{Parker, ShardedLock};
 use futures_core::stream::Stream;
 use futures_io::{AsyncRead, AsyncWrite};
 use futures_util::future;
+use futures_util::io::AllowStdIo;
 use futures_util::lock;
 use futures_util::stream;
 use io_flag::IoFlag;
@@ -530,25 +531,21 @@ where
     r
 }
 
-const DEFAULT_BUF_SIZE: usize = 8 * 1024;
+const PIPE_CAP: usize = 256 * 1024;
 
 /// Spawns a blocking reader onto a thread.
 pub fn reader(t: impl Read + Send + 'static) -> impl AsyncRead + Send + Unpin + 'static {
-    let (r, mut w) = piper::pipe(DEFAULT_BUF_SIZE);
-    Task::blocking(async move {
-        futures_util::io::copy(futures_util::io::AllowStdIo::new(t), &mut w).await;
-    })
-    .forget();
+    let t = AllowStdIo::new(t);
+    let (r, mut w) = piper::pipe(PIPE_CAP);
+    Task::blocking(async move { drop(futures_util::io::copy(t, &mut w).await) }).forget();
     r
 }
 
 /// Spawns a blocking writer onto a thread.
 pub fn writer(t: impl Write + Send + 'static) -> impl AsyncWrite + Send + Unpin + 'static {
-    let (r, w) = piper::pipe(DEFAULT_BUF_SIZE);
-    Task::blocking(async move {
-        futures_util::io::copy(r, &mut futures_util::io::AllowStdIo::new(t)).await;
-    })
-    .forget();
+    let mut t = AllowStdIo::new(t);
+    let (r, w) = piper::pipe(PIPE_CAP);
+    Task::blocking(async move { drop(futures_util::io::copy(r, &mut t).await) }).forget();
     w
 }
 
