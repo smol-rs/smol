@@ -777,7 +777,7 @@ impl<T: std::os::windows::io::AsRawSocket> Async<T> {
     pub fn nonblocking(inner: T) -> io::Result<Async<T>> {
         Ok(Async {
             source: REACTOR.register(sys::Raw::new(&inner))?,
-            inner: Box::new(inner),
+            inner: Some(Box::new(inner)),
         })
     }
 }
