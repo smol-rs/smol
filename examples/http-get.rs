@@ -1,11 +1,3 @@
-//! TCP echo server.
-//!
-//! To send messages, do:
-//!
-//! ```sh
-//! $ nc localhost 8080
-//! ```
-
 use std::net::TcpStream;
 
 use futures::io;
