@@ -4,7 +4,6 @@
 #[cfg(not(any(
     target_os = "linux",     // epoll
     target_os = "android",   // epoll
-    target_os = "solaris",   // epoll
     target_os = "macos",     // kqueue
     target_os = "ios",       // kqueue
     target_os = "freebsd",   // kqueue
@@ -1052,7 +1051,7 @@ impl Async<UdpSocket> {
     }
 
     /// Sends data to the socket's peer.
-    pub async fn send<A: ToSocketAddrs>(&self, buf: &[u8]) -> io::Result<usize> {
+    pub async fn send(&self, buf: &[u8]) -> io::Result<usize> {
         self.write_with(|inner| inner.send(buf)).await
     }
 
@@ -1167,9 +1166,9 @@ impl Async<UnixDatagram> {
     }
 }
 
-// ----- Linux / Android / Solaris (epoll) -----
+// ----- Linux / Android (epoll) -----
 
-#[cfg(any(target_os = "linux", target_os = "android", target_os = "solaris"))]
+#[cfg(any(target_os = "linux", target_os = "android"))]
 mod sys {
     use std::convert::TryInto;
     use std::io;

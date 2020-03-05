@@ -6,7 +6,7 @@
 * Complete - Fully featured and ready for production.
 * Documented - Simple code, easy to understand and modify.
 * Lightweight - Small dependencies, relies on epoll/kqueue/WSAPoll.
-* Portable - Linux, Android, macOS, iOS, Windows, FreeBSD, OpenBSD, NetBSD, DragonFly BSD, Solaris.
+* Portable - Linux, Android, macOS, iOS, Windows, FreeBSD, OpenBSD, NetBSD, DragonFly BSD.
 
 ## Features
 
