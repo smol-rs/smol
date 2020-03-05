@@ -282,13 +282,12 @@ impl Executor {
                 }
 
                 let stealable = self.stealable.get_ref().clear();
-
                 let next_timer = TIMERS.lock().fire();
 
                 let timeout = if stealable {
                     Some(Duration::from_secs(0))
                 } else {
-                    next_timer.map(|when| Instant::now().saturating_duration_since(when))
+                    next_timer.map(|when| when.saturating_duration_since(Instant::now()))
                 };
                 poller.poll(timeout)?;
             }
