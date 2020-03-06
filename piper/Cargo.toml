@@ -11,4 +11,3 @@ crossbeam-utils = "0.7.0"
 futures-core = "0.3.4"
 futures-util = { version = "0.3.4", default-features = false }
 futures-io = "0.3.4"
-eventvar = { path = "../eventvar" }

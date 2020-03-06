@@ -1,14 +1,17 @@
+#![warn(missing_docs, missing_debug_implementations, rust_2018_idioms)]
+
+// TODO: rename Eventvar/Watch to Watch/WatchGuard (similar to Mutex/MutexGuard)
+// TODO: Flag/FlagGuard, fn watch(&self) -> FlagGuard<'_>
+
 mod chan;
+mod eventvar;
 mod mutex;
 mod pipe;
 
 pub use chan::{chan, Receiver, Sender};
+pub use eventvar::Eventvar;
 pub use mutex::{Mutex, MutexGuard};
 pub use pipe::{pipe, Reader, Writer};
-
-// TODO: in a disconnected channel, senders are always pending, even if not full
-
-// TODO: fn split<T>(s: Arc<T>) -> (Reader, Writer) where &T: AsyncRead + AsyncWrite
 
 macro_rules! select {
     ($p:pat = $e:expr => $body:expr, $($rest:tt)*) => {

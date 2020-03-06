@@ -1,9 +1,12 @@
+#![warn(missing_docs, missing_debug_implementations, rust_2018_idioms)]
+
 use std::io::{self, Read, Write};
 use std::net::SocketAddr;
 use std::sync::atomic::{self, AtomicBool, Ordering};
 
 use socket2::{Domain, Socket, Type};
 
+#[derive(Debug)]
 pub struct IoFlag {
     flag: AtomicBool,
     socket_notify: Socket,

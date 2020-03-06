@@ -3,7 +3,7 @@ use std::fmt;
 use std::ops::{Deref, DerefMut};
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use eventvar::Eventvar;
+use crate::eventvar::Eventvar;
 
 /// A mutual exclusion primitive for protecting shared data.
 ///

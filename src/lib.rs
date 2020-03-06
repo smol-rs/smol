@@ -53,7 +53,6 @@ use socket2::{Domain, Protocol, Socket, Type};
 
 // TODO: fix unwraps
 // TODO: catch panics in wake() and Waker::drop()
-// TODO: readme for inspiration: https://github.com/piscisaureus/wepoll
 
 // ----- Executor -----
 
@@ -70,7 +69,7 @@ struct Processor {
     slot: Cell<Option<Runnable>>,
     worker: Worker<Runnable>,
 
-    local: RefCell<VecDeque<Runnable>>,
+    owned: RefCell<VecDeque<Runnable>>,
     remote: Arc<SegQueue<Runnable>>,
     id: ThreadId,
 
@@ -84,7 +83,7 @@ impl Processor {
             slot: Cell::new(None),
             worker: Worker::new_fifo(),
 
-            local: RefCell::new(VecDeque::new()),
+            owned: RefCell::new(VecDeque::new()),
             remote: Arc::new(SegQueue::new()),
             id: thread::current().id(),
 
@@ -93,9 +92,34 @@ impl Processor {
         })
     }
 
-    /// Pops a task from the local queue.
-    fn pop(&self) -> Option<Runnable> {
+    fn has_work(&self) -> bool {
+        if !self.owned.borrow().is_empty() {
+            true
+        } else {
+            self.housekeep();
+            !self.owned.borrow().is_empty()
+        }
+    }
+
+    /// Pops an owned task.
+    fn pop_owned(&self) -> Option<Runnable> {
+        if let Some(r) = self.owned.borrow_mut().pop_front() {
+            return Some(r);
+        }
+
+        self.housekeep();
+        self.owned.borrow_mut().pop_front()
+    }
+
+    /// Pops a shared task.
+    fn pop_shared(&self) -> Option<Runnable> {
         self.slot.take().or_else(|| self.worker.pop())
+    }
+
+    fn housekeep(&self) {
+        while let Ok(r) = self.remote.pop() {
+            self.owned.borrow_mut().push_back(r);
+        }
     }
 
     fn schedule(&self, runnable: Runnable) {
@@ -143,13 +167,6 @@ impl Processor {
             }
         }
     }
-
-    fn drain_remote(&self) {
-        let mut local = self.local.borrow_mut();
-        while let Ok(r) = self.remote.pop() {
-            local.push_back(r);
-        }
-    }
 }
 
 struct Executor {
@@ -177,17 +194,9 @@ impl Executor {
         });
     }
 
-    fn find_runnable(&self, proc: &Processor) -> io::Result<Option<Runnable>> {
-        if let Some(r) = proc.local.borrow_mut().pop_front() {
-            return Ok(Some(r));
-        }
-        proc.drain_remote();
-        if let Some(r) = proc.local.borrow_mut().pop_front() {
-            return Ok(Some(r));
-        }
-
+    fn find_shared(&self, proc: &Processor) -> io::Result<Option<Runnable>> {
         // First look for a task in the local queue.
-        if let Some(r) = proc.pop() {
+        if let Some(r) = proc.pop_shared() {
             return Ok(Some(r));
         }
 
@@ -206,6 +215,17 @@ impl Executor {
         Ok(proc.steal_from_others(self.stealers.read().unwrap().values()))
     }
 
+    fn has_work(&self, proc: &Processor) -> io::Result<bool> {
+        if proc.has_work() {
+            Ok(true)
+        } else if let Some(r) = self.find_shared(proc)? {
+            proc.schedule(r);
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+
     fn exhaust(&self, proc: &Processor) -> io::Result<()> {
         loop {
             for _ in 0..100 {
@@ -213,15 +233,29 @@ impl Executor {
                     return Ok(());
                 }
 
-                match self.find_runnable(proc)? {
+                match proc.pop_owned() {
                     None => return Ok(()),
                     Some(runnable) => runnable.run(),
                 }
             }
 
+            for _ in 0..100 {
+                if proc.waker.get_ref().get() {
+                    return Ok(());
+                }
+
+                match self.find_shared(proc)? {
+                    None => return Ok(()),
+                    Some(runnable) => runnable.run(),
+                }
+            }
+
+            proc.housekeep();
+
             if self.injector.steal_batch(&proc.worker).is_success() {
                 self.interrupt();
             }
+
             self.poll_quick()?;
         }
     }
@@ -270,14 +304,17 @@ impl Executor {
                 pin_utils::pin_mut!(poller_ready);
 
                 // TODO: use piper::select! here
+                // select! {
+                //     waker_ready => {}
+                //     poller = REACTOR.lock() => {}
+                // }
                 let mut poller = match block_on(future::select(waker_ready, poller_ready)) {
                     future::Either::Left(_) => break,
                     future::Either::Right(_) if proc.waker.get_ref().get() => break,
                     future::Either::Right((poller, _)) => poller,
                 };
 
-                if let Some(r) = self.find_runnable(proc)? {
-                    self.schedule(r);
+                if self.has_work(proc)? {
                     continue;
                 }
 
@@ -360,7 +397,7 @@ impl<T: 'static> Task<T> {
             let schedule = move |runnable| {
                 PROCESSOR.with(|proc| match proc.get() {
                     Some(proc) if proc.id == id => {
-                        proc.local.borrow_mut().push_back(runnable);
+                        proc.owned.borrow_mut().push_back(runnable);
                     }
                     Some(_) | None => {
                         remote.push(runnable);
@@ -417,8 +454,8 @@ impl<T> Future for Task<T> {
 
 static THREAD_POOL: Lazy<ThreadPool> = Lazy::new(|| ThreadPool {
     state: Mutex::new(State {
-        idle: 0,
-        threads: 0,
+        idle_count: 0,
+        thread_count: 0,
         queue: VecDeque::new(),
     }),
     cvar: Condvar::new(),
@@ -430,8 +467,8 @@ struct ThreadPool {
 }
 
 struct State {
-    idle: usize,
-    threads: usize,
+    idle_count: usize,
+    thread_count: usize,
     queue: VecDeque<Runnable>,
 }
 
@@ -439,7 +476,7 @@ impl ThreadPool {
     fn run(&'static self) {
         let mut state = self.state.lock();
         loop {
-            state.idle -= 1;
+            state.idle_count -= 1;
 
             while let Some(runnable) = state.queue.pop_front() {
                 self.spawn_more(state);
@@ -447,12 +484,12 @@ impl ThreadPool {
                 state = self.state.lock();
             }
 
-            state.idle += 1;
+            state.idle_count += 1;
             let timeout = Duration::from_millis(500);
 
             if self.cvar.wait_for(&mut state, timeout).timed_out() {
-                state.idle -= 1;
-                state.threads -= 1;
+                state.idle_count -= 1;
+                state.thread_count -= 1;
                 self.spawn_more(state);
                 break;
             }
@@ -469,9 +506,9 @@ impl ThreadPool {
     fn spawn_more(&'static self, mut state: MutexGuard<'static, State>) {
         // If runnable tasks greatly outnumber idle threads and there aren't too many threads
         // already, then be aggressive: wake all idle threads and spawn one more thread.
-        while state.queue.len() > state.idle * 5 && state.threads < 500 {
-            state.idle += 1;
-            state.threads += 1;
+        while state.queue.len() > state.idle_count * 5 && state.thread_count < 500 {
+            state.idle_count += 1;
+            state.thread_count += 1;
             self.cvar.notify_all();
             thread::spawn(move || self.run());
         }

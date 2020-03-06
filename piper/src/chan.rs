@@ -15,7 +15,7 @@ use crossbeam_utils::Backoff;
 use futures_core::stream::Stream;
 use futures_util::future;
 
-use eventvar::{Eventvar, Watch};
+use crate::eventvar::{Eventvar, Watch};
 
 /// Creates a bounded multi-producer multi-consumer channel.
 ///
@@ -127,26 +127,8 @@ impl<T> Sender<T> {
     /// #
     /// # })
     /// ```
-    pub async fn send(&self, mut msg: T) {
-        let mut watch = None;
-
-        loop {
-            match self.channel.try_send(msg) {
-                Ok(()) => break,
-                Err(TrySendError::Disconnected(_)) => return future::pending().await,
-                Err(TrySendError::Full(m)) => msg = m,
-            }
-
-            match watch.take() {
-                None => watch = Some(self.channel.send_ops.watch()),
-                Some(w) => w.await,
-            }
-        }
-
-        if watch.take().is_some() {
-            // Wake another blocked send operation.
-            self.channel.send_ops.notify_one();
-        }
+    pub async fn send(&self, msg: T) {
+        self.channel.send(msg).await
     }
 
     /// Returns the channel capacity.
@@ -160,7 +142,11 @@ impl<T> Sender<T> {
     /// assert_eq!(s.capacity(), 5);
     /// ```
     pub fn capacity(&self) -> usize {
-        self.channel.cap
+        if self.channel.handoff.is_some() {
+            0
+        } else {
+            self.channel.cap
+        }
     }
 
     /// Returns `true` if the channel is empty.
@@ -330,27 +316,7 @@ impl<T> Receiver<T> {
     /// # })
     /// ```
     pub async fn recv(&self) -> Option<T> {
-        let mut watch = None;
-
-        let msg = loop {
-            match self.channel.try_recv() {
-                Ok(msg) => break Some(msg),
-                Err(TryRecvError::Disconnected) => break None,
-                Err(TryRecvError::Empty) => {}
-            }
-
-            match watch.take() {
-                None => watch = Some(self.channel.recv_ops.watch()),
-                Some(w) => w.await,
-            }
-        };
-
-        if watch.take().is_some() {
-            // Wake another blocked receive operation.
-            self.channel.recv_ops.notify_one();
-        }
-
-        msg
+        self.channel.recv().await
     }
 
     /// Returns the channel capacity.
@@ -364,7 +330,11 @@ impl<T> Receiver<T> {
     /// assert_eq!(r.capacity(), 5);
     /// ```
     pub fn capacity(&self) -> usize {
-        self.channel.cap
+        if self.channel.handoff.is_some() {
+            0
+        } else {
+            self.channel.cap
+        }
     }
 
     /// Returns `true` if the channel is empty.
@@ -541,6 +511,9 @@ struct Channel<T> {
     /// Send operations waiting while the channel is full.
     send_ops: Eventvar,
 
+    /// TODO
+    handoff: Option<Eventvar>,
+
     /// Receive operations waiting while the channel is empty and not disconnected.
     recv_ops: Eventvar,
 
@@ -559,12 +532,18 @@ struct Channel<T> {
 
 unsafe impl<T: Send> Send for Channel<T> {}
 unsafe impl<T: Send> Sync for Channel<T> {}
+
 impl<T> Unpin for Channel<T> {}
 
 impl<T> Channel<T> {
     /// Creates a bounded channel of capacity `cap`.
     fn with_capacity(cap: usize) -> Self {
-        assert!(cap > 0, "capacity must be positive");
+        let handoff = if cap == 0 {
+            Some(Eventvar::new())
+        } else {
+            None
+        };
+        let cap = cap.max(1);
 
         // Compute constants `mark_bit` and `one_lap`.
         let mark_bit = (cap + 1).next_power_of_two();
@@ -600,6 +579,7 @@ impl<T> Channel<T> {
             head: AtomicUsize::new(head),
             tail: AtomicUsize::new(tail),
             send_ops: Eventvar::new(),
+            handoff,
             recv_ops: Eventvar::new(),
             next_ops: Eventvar::new(),
             sender_count: AtomicUsize::new(1),
@@ -609,7 +589,7 @@ impl<T> Channel<T> {
     }
 
     /// Attempts to send a message.
-    fn try_send(&self, msg: T) -> Result<(), TrySendError<T>> {
+    fn try_send(&self, msg: T) -> Result<usize, TrySendError<T>> {
         let backoff = Backoff::new();
         let mut tail = self.tail.load(Ordering::Relaxed);
 
@@ -661,7 +641,7 @@ impl<T> Channel<T> {
                         // Wake all blocked streams.
                         self.next_ops.notify_all();
 
-                        return Ok(());
+                        return Ok(stamp);
                     }
                     Err(t) => {
                         tail = t;
@@ -690,6 +670,39 @@ impl<T> Channel<T> {
                 // Snooze because we need to wait for the stamp to get updated.
                 backoff.snooze();
                 tail = self.tail.load(Ordering::Relaxed);
+            }
+        }
+    }
+
+    async fn send(&self, mut msg: T) {
+        let mut watch = None;
+
+        let stamp = loop {
+            match self.try_send(msg) {
+                Ok(stamp) => break stamp,
+                Err(TrySendError::Disconnected(_)) => return future::pending().await,
+                Err(TrySendError::Full(m)) => msg = m,
+            }
+
+            match watch.take() {
+                None => watch = Some(self.send_ops.watch()),
+                Some(w) => {
+                    w.await;
+                    if self.cap > 1 {
+                        self.send_ops.notify_one();
+                    }
+                }
+            }
+        };
+
+        if let Some(h) = &self.handoff {
+            let mut watch = None;
+
+            while unsafe { &*self.buffer }.stamp.load(Ordering::SeqCst) != stamp {
+                match watch.take() {
+                    None => watch = Some(h.watch()),
+                    Some(w) => w.await,
+                }
             }
         }
     }
@@ -736,6 +749,11 @@ impl<T> Channel<T> {
                         // Wake a blocked send operation.
                         self.send_ops.notify_one();
 
+                        // Notify a send operation waiting for handoff.
+                        if let Some(h) = &self.handoff {
+                            h.notify_all();
+                        }
+
                         return Ok(msg);
                     }
                     Err(h) => {
@@ -764,6 +782,28 @@ impl<T> Channel<T> {
                 // Snooze because we need to wait for the stamp to get updated.
                 backoff.snooze();
                 head = self.head.load(Ordering::Relaxed);
+            }
+        }
+    }
+
+    async fn recv(&self) -> Option<T> {
+        let mut watch = None;
+
+        loop {
+            match self.try_recv() {
+                Ok(msg) => return Some(msg),
+                Err(TryRecvError::Disconnected) => return None,
+                Err(TryRecvError::Empty) => {}
+            }
+
+            match watch.take() {
+                None => watch = Some(self.recv_ops.watch()),
+                Some(w) => {
+                    w.await;
+                    if self.cap > 1 {
+                        self.recv_ops.notify_one();
+                    }
+                }
             }
         }
     }
