@@ -46,7 +46,6 @@ use futures_util::lock;
 use futures_util::stream;
 use io_flag::IoFlag;
 use once_cell::sync::Lazy;
-use once_cell::unsync::OnceCell;
 use parking_lot::{Condvar, Mutex, MutexGuard};
 use slab::Slab;
 use socket2::{Domain, Protocol, Socket, Type};
@@ -56,304 +55,262 @@ use socket2::{Domain, Protocol, Socket, Type};
 
 // ----- Executor -----
 
-static EXECUTOR: Lazy<Executor> = Lazy::new(|| Executor::create().expect("cannot create executor"));
+static EXECUTOR: Lazy<Executor> = Lazy::new(|| Executor::new());
 
 /// A runnable future, ready for execution.
 type Runnable = async_task::Task<()>;
 
 thread_local! {
-    static PROCESSOR: OnceCell<Processor> = OnceCell::new();
+    static LOCAL: Lazy<Local> = Lazy::new(|| Local::new());
+    static PROCESSOR: Lazy<Processor> = Lazy::new(|| Processor::new());
+}
+
+/// A queue of thread-local tasks.
+struct Local {
+    id: ThreadId,
+    queue: RefCell<VecDeque<Runnable>>,
+    remote: Arc<SegQueue<Runnable>>,
+}
+
+impl Local {
+    fn new() -> Local {
+        Local {
+            id: thread::current().id(),
+            queue: RefCell::new(VecDeque::new()),
+            remote: Arc::new(SegQueue::new()),
+        }
+    }
+
+    fn spawn<T: 'static>(&self, future: impl Future<Output = T> + 'static) -> Task<T> {
+        let id = self.id;
+        let remote = self.remote.clone();
+
+        let schedule = move |runnable| {
+            LOCAL.with(|local| {
+                if local.id == id {
+                    // If scheduling from the original thread, push into the main queue.
+                    local.queue.borrow_mut().push_back(runnable);
+                } else {
+                    // If scheduling from a remote thread, push into the remote queue.
+                    remote.push(runnable);
+                    // The original thread may be currently polling so let's interrupt it.
+                    REACTOR.interrupt();
+                }
+            });
+        };
+
+        let (runnable, handle) = async_task::spawn_local(future, schedule, ());
+        runnable.schedule();
+        Task(Some(handle))
+    }
+
+    /// Performs some work and returns `true` if there is more work to do.
+    fn tick(&self) -> bool {
+        for _ in 0..100 {
+            match self.pop() {
+                None => return false,
+                Some(runnable) => runnable.run(),
+            }
+        }
+        self.drain_remote();
+        true
+    }
+
+    /// Pops the next runnable to run.
+    fn pop(&self) -> Option<Runnable> {
+        if let Some(r) = self.queue.borrow_mut().pop_front() {
+            return Some(r);
+        }
+        self.drain_remote();
+        self.queue.borrow_mut().pop_front()
+    }
+
+    /// Moves all tasks from the remote queue into the main queue.
+    fn drain_remote(&self) {
+        let mut queue = self.queue.borrow_mut();
+        while let Ok(r) = self.remote.pop() {
+            queue.push_back(r);
+        }
+    }
 }
 
 struct Processor {
+    is_running: Cell<bool>,
     slot: Cell<Option<Runnable>>,
     worker: Worker<Runnable>,
-
-    owned: RefCell<VecDeque<Runnable>>,
-    remote: Arc<SegQueue<Runnable>>,
-    id: ThreadId,
-
-    waker: Arc<Async<IoFlag>>,
-    stealable: Arc<Async<IoFlag>>,
 }
 
 impl Processor {
-    fn create(stealable: &Arc<Async<IoFlag>>) -> io::Result<Processor> {
-        Ok(Processor {
+    fn new() -> Processor {
+        Processor {
+            is_running: Cell::new(false),
             slot: Cell::new(None),
             worker: Worker::new_fifo(),
-
-            owned: RefCell::new(VecDeque::new()),
-            remote: Arc::new(SegQueue::new()),
-            id: thread::current().id(),
-
-            waker: Arc::new(Async::nonblocking(IoFlag::create()?)?),
-            stealable: stealable.clone(),
-        })
-    }
-
-    fn has_work(&self) -> bool {
-        if !self.owned.borrow().is_empty() {
-            true
-        } else {
-            self.housekeep();
-            !self.owned.borrow().is_empty()
         }
     }
 
-    /// Pops an owned task.
-    fn pop_owned(&self) -> Option<Runnable> {
-        if let Some(r) = self.owned.borrow_mut().pop_front() {
+    /// Performs some work and returns `true` if there is more work to do.
+    fn tick(&self) -> bool {
+        let more_local = LOCAL.with(|local| local.tick());
+
+        for _ in 0..100 {
+            match self.pop() {
+                None => return more_local,
+                Some(runnable) => {
+                    REACTOR.interrupt();
+                    runnable.run();
+                }
+            }
+        }
+
+        while EXECUTOR.injector.steal_batch(&self.worker).is_retry() {}
+        true
+    }
+
+    fn pop(&self) -> Option<Runnable> {
+        if let Some(r) = self.slot.take().or_else(|| self.worker.pop()) {
             return Some(r);
         }
 
-        self.housekeep();
-        self.owned.borrow_mut().pop_front()
-    }
-
-    /// Pops a shared task.
-    fn pop_shared(&self) -> Option<Runnable> {
-        self.slot.take().or_else(|| self.worker.pop())
-    }
-
-    fn housekeep(&self) {
-        while let Ok(r) = self.remote.pop() {
-            self.owned.borrow_mut().push_back(r);
-        }
-    }
-
-    fn schedule(&self, runnable: Runnable) {
-        match self.slot.replace(Some(runnable)) {
-            None => {}
-            Some(runnable) => {
-                self.worker.push(runnable);
-                self.stealable.get_ref().set();
-            }
-        }
-    }
-
-    /// Steals a task from the global queue.
-    fn steal_from_global(&self, injector: &Injector<Runnable>) -> Option<Runnable> {
+        // Then look into the global queue.
         loop {
-            match injector.steal_batch_and_pop(&self.worker) {
-                Steal::Success(r) => {
-                    self.stealable.get_ref().set();
-                    return Some(r);
-                }
-                Steal::Empty => return None,
+            match EXECUTOR.injector.steal_batch_and_pop(&self.worker) {
+                Steal::Success(r) => return Some(r),
+                Steal::Empty => break,
                 Steal::Retry => {}
             }
         }
-    }
 
-    /// Steals a task from other processors.
-    fn steal_from_others<'a>(
-        &self,
-        stealers: impl Iterator<Item = &'a Stealer<Runnable>> + Clone,
-    ) -> Option<Runnable> {
+        REACTOR.quick_poll().expect("failure while polling I/O");
+
+        if let Some(r) = self.slot.take().or_else(|| self.worker.pop()) {
+            return Some(r);
+        }
+
+        let stealers = EXECUTOR.stealers.read().unwrap();
         loop {
             // Try stealing a batch of tasks from each queue.
             match stealers
-                .clone()
+                .values()
                 .map(|s| s.steal_batch_and_pop(&self.worker))
                 .collect()
             {
-                Steal::Success(r) => {
-                    self.stealable.get_ref().set();
-                    return Some(r);
-                }
-                Steal::Empty => return None,
+                Steal::Success(r) => return Some(r),
+                Steal::Empty => break,
                 Steal::Retry => {}
             }
         }
+        None
     }
 }
 
 struct Executor {
     injector: Injector<Runnable>,
     stealers: ShardedLock<HashMap<ThreadId, Stealer<Runnable>>>,
-    stealable: Arc<Async<IoFlag>>,
 }
 
 impl Executor {
-    fn create() -> io::Result<Executor> {
-        Ok(Executor {
+    fn new() -> Executor {
+        Executor {
             injector: Injector::new(),
             stealers: ShardedLock::new(HashMap::new()),
-            stealable: Arc::new(Async::nonblocking(IoFlag::create()?)?),
-        })
-    }
-
-    fn schedule(&self, runnable: Runnable) {
-        PROCESSOR.with(|proc| match proc.get() {
-            None => {
-                self.injector.push(runnable);
-                self.interrupt();
-            }
-            Some(proc) => proc.schedule(runnable),
-        });
-    }
-
-    fn find_shared(&self, proc: &Processor) -> io::Result<Option<Runnable>> {
-        // First look for a task in the local queue.
-        if let Some(r) = proc.pop_shared() {
-            return Ok(Some(r));
-        }
-
-        // Then look into the global queue.
-        if let Some(r) = proc.steal_from_global(&self.injector) {
-            return Ok(Some(r));
-        }
-
-        // Check for timers and I/O events and try the global queue again.
-        self.poll_quick()?;
-        if let Some(r) = proc.steal_from_global(&self.injector) {
-            return Ok(Some(r));
-        }
-
-        // If all else fails, steal from other processors.
-        Ok(proc.steal_from_others(self.stealers.read().unwrap().values()))
-    }
-
-    fn has_work(&self, proc: &Processor) -> io::Result<bool> {
-        if proc.has_work() {
-            Ok(true)
-        } else if let Some(r) = self.find_shared(proc)? {
-            proc.schedule(r);
-            Ok(true)
-        } else {
-            Ok(false)
         }
     }
 
-    fn exhaust(&self, proc: &Processor) -> io::Result<()> {
-        loop {
-            for _ in 0..100 {
-                if proc.waker.get_ref().get() {
-                    return Ok(());
+    fn spawn<T: Send + 'static>(
+        &self,
+        future: impl Future<Output = T> + Send + 'static,
+    ) -> Task<T> {
+        let schedule = |runnable| {
+            PROCESSOR.with(|proc| {
+                if proc.is_running.get() {
+                    match proc.slot.replace(Some(runnable)) {
+                        None => {}
+                        Some(runnable) => proc.worker.push(runnable),
+                    }
+                } else {
+                    EXECUTOR.injector.push(runnable);
                 }
+            });
+            REACTOR.interrupt();
+        };
 
-                match proc.pop_owned() {
-                    None => return Ok(()),
-                    Some(runnable) => runnable.run(),
+        let (runnable, handle) = async_task::spawn(future, schedule, ());
+        runnable.schedule();
+        Task(Some(handle))
+    }
+
+    fn run<T>(&self, future: impl Future<Output = T>) -> T {
+        PROCESSOR.with(|proc| {
+            // Register a new worker.
+            let id = thread::current().id();
+            match self.stealers.write().unwrap().entry(id) {
+                Entry::Occupied(_) => panic!("recursive `run()`"),
+                Entry::Vacant(e) => {
+                    e.insert(proc.worker.stealer());
                 }
             }
+            proc.is_running.set(true);
 
-            for _ in 0..100 {
-                if proc.waker.get_ref().get() {
-                    return Ok(());
+            // Unregister the worker at the end of this scope.
+            scopeguard::defer! {{
+                self.stealers.write().unwrap().remove(&id);
+                while let Some(r) = proc.worker.pop() {
+                    self.injector.push(r);
                 }
+                proc.is_running.set(false);
+            }}
 
-                match self.find_shared(proc)? {
-                    None => return Ok(()),
-                    Some(runnable) => runnable.run(),
-                }
-            }
+            let waker = Arc::new(
+                IoFlag::create()
+                    .and_then(Async::nonblocking)
+                    .expect("cannot create waker flag"),
+            );
 
-            proc.housekeep();
+            let flag = waker.clone();
+            let w = async_task::waker_fn(move || flag.get_ref().set());
+            let cx = &mut Context::from_waker(&w);
 
-            if self.injector.steal_batch(&proc.worker).is_success() {
-                self.interrupt();
-            }
-
-            self.poll_quick()?;
-        }
-    }
-
-    fn run<F: Future>(&self, proc: &Processor, future: F) -> io::Result<F::Output> {
-        // Register a new processor.
-        let id = thread::current().id();
-        match self.stealers.write().unwrap().entry(id) {
-            Entry::Occupied(_) => panic!("recursive `run()`"),
-            Entry::Vacant(e) => {
-                e.insert(proc.worker.stealer());
-            }
-        }
-
-        // Unregister the processor at the end of this scope.
-        scopeguard::defer! {{
-            self.stealers.write().unwrap().remove(&id);
-            while let Some(r) = proc.worker.pop() {
-                self.injector.push(r);
-            }
-        }}
-
-        let waker = async_task::waker_fn({
-            let flag = proc.waker.clone();
-            move || flag.get_ref().set()
-        });
-        pin_utils::pin_mut!(future);
-
-        loop {
-            proc.waker.get_ref().clear();
-            match future.as_mut().poll(&mut Context::from_waker(&waker)) {
-                Poll::Ready(val) => return Ok(val),
-                Poll::Pending => {}
-            }
+            pin_utils::pin_mut!(future);
 
             loop {
-                self.exhaust(proc)?;
+                waker.get_ref().clear();
+                match future.as_mut().poll(cx) {
+                    Poll::Ready(val) => return val,
+                    Poll::Pending => {}
+                }
 
-                let waker_ready = proc.waker.read_with(|f| match f.get() {
-                    true => Ok(()),
-                    false => Err(io::Error::new(io::ErrorKind::WouldBlock, "")),
-                });
+                while proc.tick() && !waker.get_ref().get() {
+                    REACTOR.quick_poll().expect("failure whikle polling I/O");
+                }
+
+                let waker_ready = waker.ready();
                 pin_utils::pin_mut!(waker_ready);
 
                 let poller_ready = REACTOR.lock();
                 pin_utils::pin_mut!(poller_ready);
 
-                // TODO: use piper::select! here
-                // select! {
-                //     waker_ready => {}
-                //     poller = REACTOR.lock() => {}
-                // }
-                let mut poller = match block_on(future::select(waker_ready, poller_ready)) {
-                    future::Either::Left(_) => break,
-                    future::Either::Right(_) if proc.waker.get_ref().get() => break,
-                    future::Either::Right((poller, _)) => poller,
-                };
-
-                if self.has_work(proc)? {
-                    continue;
+                if let future::Either::Right((mut poller, _)) =
+                    block_on(future::select(waker_ready, poller_ready))
+                {
+                    if !waker.get_ref().get() {
+                        poller.poll().expect("failure while polling I/O");
+                    }
                 }
 
-                let stealable = self.stealable.get_ref().clear();
-                let next_timer = TIMERS.lock().fire();
-
-                let timeout = if stealable {
-                    Some(Duration::from_secs(0))
-                } else {
-                    next_timer.map(|when| when.saturating_duration_since(Instant::now()))
-                };
-                poller.poll(timeout)?;
+                // TODO: use piper::select! here
+                // block_on(piper::select! {
+                //     waker.ready() => {}
+                //     poller = REACTOR.lock() => poller.poll().expect("failure while polling I/O"),
+                // });
             }
-        }
-    }
-
-    fn poll_quick(&self) -> io::Result<()> {
-        if let Some(mut timers) = TIMERS.try_lock() {
-            timers.fire();
-        }
-        if let Some(mut poller) = REACTOR.try_lock() {
-            poller.poll(Some(Duration::from_secs(0)))?;
-        }
-        Ok(())
-    }
-
-    fn interrupt(&self) {
-        self.stealable.get_ref().set();
+        })
     }
 }
 
 /// Executes all futures until the main one completes.
 pub fn run<T>(future: impl Future<Output = T>) -> T {
-    PROCESSOR
-        .with(|proc| {
-            let proc = proc.get_or_try_init(|| Processor::create(&EXECUTOR.stealable))?;
-            EXECUTOR.run(proc, future)
-        })
-        .expect("unexpected I/O error in `run()`")
+    EXECUTOR.run(future)
 }
 
 /// A spawned future.
@@ -365,16 +322,12 @@ impl<T: Send + 'static> Task<T> {
     ///
     /// This future is allowed to be stolen by another executor.
     pub fn spawn(future: impl Future<Output = T> + Send + 'static) -> Task<T> {
-        let (runnable, handle) = async_task::spawn(future, |r| EXECUTOR.schedule(r), ());
-        runnable.schedule();
-        Task(Some(handle))
+        EXECUTOR.spawn(future)
     }
 
     /// Spawns a future onto a thread where blocking is allowed.
     pub fn blocking(future: impl Future<Output = T> + Send + 'static) -> Task<T> {
-        let (runnable, handle) = async_task::spawn(future, |r| THREAD_POOL.schedule(r), ());
-        runnable.schedule();
-        Task(Some(handle))
+        THREAD_POOL.spawn(future)
     }
 }
 
@@ -386,30 +339,7 @@ impl<T: 'static> Task<T> {
     where
         T: 'static,
     {
-        PROCESSOR.with(|proc| {
-            let proc = proc
-                .get_or_try_init(|| Processor::create(&EXECUTOR.stealable))
-                .expect("unexpected I/O error in `local()`");
-
-            let id = proc.id;
-            let remote = proc.remote.clone();
-
-            let schedule = move |runnable| {
-                PROCESSOR.with(|proc| match proc.get() {
-                    Some(proc) if proc.id == id => {
-                        proc.owned.borrow_mut().push_back(runnable);
-                    }
-                    Some(_) | None => {
-                        remote.push(runnable);
-                        EXECUTOR.interrupt();
-                    }
-                });
-            };
-
-            let (runnable, handle) = async_task::spawn_local(future, schedule, ());
-            runnable.schedule();
-            Task(Some(handle))
-        })
+        LOCAL.with(|local| local.spawn(future))
     }
 }
 
@@ -450,7 +380,7 @@ impl<T> Future for Task<T> {
     }
 }
 
-// ----- Blocking -----
+// ----- Blocking thread pool -----
 
 static THREAD_POOL: Lazy<ThreadPool> = Lazy::new(|| ThreadPool {
     state: Mutex::new(State {
@@ -473,6 +403,15 @@ struct State {
 }
 
 impl ThreadPool {
+    fn spawn<T: Send + 'static>(
+        &'static self,
+        future: impl Future<Output = T> + Send + 'static,
+    ) -> Task<T> {
+        let (runnable, handle) = async_task::spawn(future, move |r| self.schedule(r), ());
+        runnable.schedule();
+        Task(Some(handle))
+    }
+
     fn run(&'static self) {
         let mut state = self.state.lock();
         loop {
@@ -584,31 +523,155 @@ pub fn writer(t: impl Write + Send + 'static) -> impl AsyncWrite + Send + Unpin 
     w
 }
 
-// ----- Timer -----
+// ----- Async I/O and timers -----
 
-static TIMERS: Lazy<Mutex<Timers>> = Lazy::new(|| Mutex::new(Timers::new()));
+static REACTOR: Lazy<Reactor> = Lazy::new(|| Reactor::create().expect("cannot create reactor"));
 
-struct Timers {
-    map: BTreeMap<(Instant, usize), Waker>,
+static INTERRUPT: Lazy<Async<IoFlag>> = Lazy::new(|| {
+    IoFlag::create()
+        .and_then(Async::nonblocking)
+        .expect("cannot create interrupt flag")
+});
+
+struct Source {
+    raw: sys::Raw,
+    index: usize,
+    readers: Mutex<Vec<Waker>>,
+    writers: Mutex<Vec<Waker>>,
 }
 
-impl Timers {
-    fn new() -> Timers {
-        Timers {
-            map: BTreeMap::new(),
+struct Reactor {
+    sys: sys::Reactor,
+    sources: Mutex<Slab<Arc<Source>>>,
+    events: lock::Mutex<sys::Events>,
+    timers: Mutex<BTreeMap<(Instant, usize), Waker>>,
+}
+
+impl Reactor {
+    fn create() -> io::Result<Reactor> {
+        Ok(Reactor {
+            sys: sys::Reactor::create()?,
+            sources: Mutex::new(Slab::new()),
+            events: lock::Mutex::new(sys::Events::new()),
+            timers: Mutex::new(BTreeMap::new()),
+        })
+    }
+
+    fn register(&self, raw: sys::Raw) -> io::Result<Arc<Source>> {
+        let mut sources = self.sources.lock();
+        let vacant = sources.vacant_entry();
+        let index = vacant.key();
+        self.sys.register(raw, index)?;
+
+        let source = Arc::new(Source {
+            raw,
+            index,
+            readers: Mutex::new(Vec::new()),
+            writers: Mutex::new(Vec::new()),
+        });
+        vacant.insert(source.clone());
+
+        Ok(source)
+    }
+
+    fn deregister(&self, source: &Source) -> io::Result<()> {
+        let mut sources = self.sources.lock();
+        sources.remove(source.index);
+        self.sys.deregister(source.raw)
+    }
+
+    fn quick_poll(&self) -> io::Result<()> {
+        if let Some(events) = self.events.try_lock() {
+            let mut poller = Poller {
+                reactor: self,
+                events,
+            };
+            poller.quick_poll()?;
+        }
+        Ok(())
+    }
+
+    async fn lock(&self) -> Poller<'_> {
+        Poller {
+            reactor: self,
+            events: self.events.lock().await,
         }
     }
 
-    fn fire(&mut self) -> Option<Instant> {
-        let now = Instant::now();
-        let pending = self.map.split_off(&(now, 0));
-        let ready = mem::replace(&mut self.map, pending);
+    fn interrupt(&self) {
+        INTERRUPT.get_ref().set();
+    }
+}
 
-        for (_, waker) in ready {
+struct Poller<'a> {
+    reactor: &'a Reactor,
+    events: lock::MutexGuard<'a, sys::Events>,
+}
+
+impl Poller<'_> {
+    fn poll(&mut self) -> io::Result<()> {
+        self.poll_internal(true)
+    }
+
+    fn quick_poll(&mut self) -> io::Result<()> {
+        self.poll_internal(false)
+    }
+
+    fn poll_internal(&mut self, block: bool) -> io::Result<()> {
+        let next_timer = {
+            let now = Instant::now();
+            let mut timers = self.reactor.timers.lock();
+
+            let pending = timers.split_off(&(now, 0));
+            let ready = mem::replace(&mut *timers, pending);
+
+            for (_, waker) in ready {
+                waker.wake();
+            }
+
+            timers.keys().next().map(|(when, _)| *when)
+        };
+
+        let interrupted = INTERRUPT.get_ref().clear();
+        let timeout = if block && !interrupted {
+            next_timer.map(|when| when.saturating_duration_since(Instant::now()))
+        } else {
+            Some(Duration::from_secs(0))
+        };
+
+        if self.reactor.sys.poll(&mut self.events, timeout)? == 0 {
+            return Ok(());
+        }
+
+        let mut wakers = VecDeque::new();
+        let sources = self.reactor.sources.lock();
+
+        for ev in self.events.iter() {
+            if let Some(source) = sources.get(ev.index) {
+                self.reactor.sys.reregister(source.raw, source.index)?;
+
+                // In order to minimize worst-case latency, wake writers before readers.
+                // See https://twitter.com/kingprotty/status/1222152589405384705?s=19
+                if ev.is_write {
+                    for w in source.writers.lock().drain(..) {
+                        wakers.push_front(w);
+                    }
+                }
+                if ev.is_read {
+                    for w in source.readers.lock().drain(..) {
+                        wakers.push_back(w);
+                    }
+                }
+            }
+        }
+        drop(sources);
+
+        // Wake up ready I/O.
+        for waker in wakers {
             waker.wake();
         }
 
-        self.map.keys().next().map(|(when, _)| *when)
+        Ok(())
     }
 }
 
@@ -644,7 +707,7 @@ impl Timer {
 impl Drop for Timer {
     fn drop(&mut self) {
         if self.inserted {
-            TIMERS.lock().map.remove(&self.key());
+            REACTOR.timers.lock().remove(&self.key());
         }
     }
 }
@@ -653,139 +716,32 @@ impl Future for Timer {
     type Output = Instant;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let mut timers = TIMERS.lock();
+        let mut timers = REACTOR.timers.lock();
 
         if Instant::now() >= self.when {
-            timers.map.remove(&self.key());
+            timers.remove(&self.key());
             return Poll::Ready(self.when);
         }
 
         if !self.inserted {
             let mut is_earliest = false;
-            if let Some((first, _)) = timers.map.keys().next() {
+            if let Some((first, _)) = timers.keys().next() {
                 if self.when < *first {
                     is_earliest = true;
                 }
             }
 
             let waker = cx.waker().clone();
-            timers.map.insert(self.key(), waker);
+            timers.insert(self.key(), waker);
             self.inserted = true;
 
             if is_earliest {
                 drop(timers);
-                EXECUTOR.interrupt();
+                REACTOR.interrupt();
             }
         }
 
         Poll::Pending
-    }
-}
-
-// ----- Async I/O -----
-
-static REACTOR: Lazy<Reactor> = Lazy::new(|| Reactor::create().expect("cannot create reactor"));
-
-struct Source {
-    raw: sys::Raw,
-    index: usize,
-    readers: Mutex<Vec<Waker>>,
-    writers: Mutex<Vec<Waker>>,
-}
-
-struct Reactor {
-    sys: sys::Reactor,
-    sources: Mutex<Slab<Arc<Source>>>,
-    events: lock::Mutex<sys::Events>,
-}
-
-impl Reactor {
-    fn create() -> io::Result<Reactor> {
-        Ok(Reactor {
-            sys: sys::Reactor::create()?,
-            sources: Mutex::new(Slab::new()),
-            events: lock::Mutex::new(sys::Events::new()),
-        })
-    }
-
-    fn register(&self, raw: sys::Raw) -> io::Result<Arc<Source>> {
-        let mut sources = self.sources.lock();
-        let vacant = sources.vacant_entry();
-        let index = vacant.key();
-        self.sys.register(raw, index)?;
-
-        let source = Arc::new(Source {
-            raw,
-            index,
-            readers: Mutex::new(Vec::new()),
-            writers: Mutex::new(Vec::new()),
-        });
-        vacant.insert(source.clone());
-
-        Ok(source)
-    }
-
-    fn deregister(&self, source: &Source) -> io::Result<()> {
-        let mut sources = self.sources.lock();
-        sources.remove(source.index);
-        self.sys.deregister(source.raw)
-    }
-
-    fn try_lock(&self) -> Option<Poller<'_>> {
-        self.events.try_lock().map(|events| Poller {
-            reactor: self,
-            events,
-        })
-    }
-
-    async fn lock(&self) -> Poller<'_> {
-        Poller {
-            reactor: self,
-            events: self.events.lock().await,
-        }
-    }
-}
-
-struct Poller<'a> {
-    reactor: &'a Reactor,
-    events: lock::MutexGuard<'a, sys::Events>,
-}
-
-impl Poller<'_> {
-    fn poll(&mut self, timeout: Option<Duration>) -> io::Result<()> {
-        if self.reactor.sys.poll(&mut self.events, timeout)? == 0 {
-            return Ok(());
-        }
-
-        let mut wakers = VecDeque::new();
-        let sources = self.reactor.sources.lock();
-
-        for ev in self.events.iter() {
-            if let Some(source) = sources.get(ev.index) {
-                self.reactor.sys.reregister(source.raw, source.index)?;
-
-                // In order to minimize worst-case latency, wake writers before readers.
-                // See https://twitter.com/kingprotty/status/1222152589405384705?s=19
-                if ev.is_write {
-                    for w in source.writers.lock().drain(..) {
-                        wakers.push_front(w);
-                    }
-                }
-                if ev.is_read {
-                    for w in source.readers.lock().drain(..) {
-                        wakers.push_back(w);
-                    }
-                }
-            }
-        }
-        drop(sources);
-
-        // Wake up ready I/O.
-        for waker in wakers {
-            waker.wake();
-        }
-
-        Ok(())
     }
 }
 
@@ -1199,6 +1155,17 @@ impl Async<UnixDatagram> {
     /// Receives data from the socket's peer.
     pub async fn recv(&self, buf: &mut [u8]) -> io::Result<usize> {
         self.read_with(|inner| inner.recv(buf)).await
+    }
+}
+
+impl Async<IoFlag> {
+    async fn ready(&self) {
+        self.read_with(|inner| match inner.get() {
+            true => Ok(()),
+            false => Err(io::Error::new(io::ErrorKind::WouldBlock, "")),
+        })
+        .await
+        .unwrap()
     }
 }
 
