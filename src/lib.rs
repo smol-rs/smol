@@ -132,6 +132,11 @@ impl Local {
             queue.push_back(r);
         }
     }
+
+    fn find_work(&self) -> bool {
+        self.drain_remote();
+        !self.queue.borrow_mut().is_empty()
+    }
 }
 
 struct Processor {
@@ -156,15 +161,24 @@ impl Processor {
         for _ in 0..100 {
             match self.pop() {
                 None => return more_local,
-                Some(runnable) => {
-                    REACTOR.interrupt();
-                    runnable.run();
-                }
+                Some(runnable) => runnable.run(),
             }
         }
 
-        while EXECUTOR.injector.steal_batch(&self.worker).is_retry() {}
+        if EXECUTOR.injector.steal_batch(&self.worker).is_success() {
+            REACTOR.interrupt();
+        }
         true
+    }
+
+    fn push(&self, runnable: Runnable) {
+        match self.slot.replace(Some(runnable)) {
+            None => {}
+            Some(runnable) => {
+                self.worker.push(runnable);
+                REACTOR.interrupt();
+            }
+        }
     }
 
     fn pop(&self) -> Option<Runnable> {
@@ -181,7 +195,7 @@ impl Processor {
             }
         }
 
-        REACTOR.quick_poll().expect("failure while polling I/O");
+        REACTOR.poll_quick().expect("failure while polling I/O");
 
         if let Some(r) = self.slot.take().or_else(|| self.worker.pop()) {
             return Some(r);
@@ -201,6 +215,14 @@ impl Processor {
             }
         }
         None
+    }
+
+    fn find_work(&self) -> bool {
+        if LOCAL.with(|local| local.find_work()) {
+            true
+        } else {
+            self.pop().map(|r| self.push(r)).is_some()
+        }
     }
 }
 
@@ -224,15 +246,12 @@ impl Executor {
         let schedule = |runnable| {
             PROCESSOR.with(|proc| {
                 if proc.is_running.get() {
-                    match proc.slot.replace(Some(runnable)) {
-                        None => {}
-                        Some(runnable) => proc.worker.push(runnable),
-                    }
+                    proc.push(runnable);
                 } else {
                     EXECUTOR.injector.push(runnable);
+                    REACTOR.interrupt();
                 }
             });
-            REACTOR.interrupt();
         };
 
         let (runnable, handle) = async_task::spawn(future, schedule, ());
@@ -280,28 +299,33 @@ impl Executor {
                     Poll::Pending => {}
                 }
 
-                while proc.tick() && !waker.get_ref().get() {
-                    REACTOR.quick_poll().expect("failure whikle polling I/O");
-                }
+                while !waker.get_ref().get() {
+                    if proc.tick() {
+                        REACTOR.poll_quick().expect("failure while polling I/O");
+                        continue;
+                    }
 
-                let waker_ready = waker.ready();
-                pin_utils::pin_mut!(waker_ready);
+                    let waker_ready = waker.ready();
+                    pin_utils::pin_mut!(waker_ready);
 
-                let poller_ready = REACTOR.lock();
-                pin_utils::pin_mut!(poller_ready);
+                    let poller_ready = REACTOR.lock();
+                    pin_utils::pin_mut!(poller_ready);
 
-                if let future::Either::Right((mut poller, _)) =
-                    block_on(future::select(waker_ready, poller_ready))
-                {
-                    if !waker.get_ref().get() {
-                        poller.poll().expect("failure while polling I/O");
+                    if let future::Either::Right((mut poller, _)) =
+                        block_on(future::select(waker_ready, poller_ready))
+                    {
+                        if !waker.get_ref().get() && !proc.find_work() {
+                            poller.poll().expect("failure while polling I/O");
+                        }
                     }
                 }
 
                 // TODO: use piper::select! here
                 // block_on(piper::select! {
                 //     waker.ready() => {}
-                //     poller = REACTOR.lock() => poller.poll().expect("failure while polling I/O"),
+                //     poller = REACTOR.lock() => if !waker.get_ref().get() {
+                //         poller.poll().expect("failure while polling I/O"),
+                //     }
                 // });
             }
         })
@@ -580,13 +604,13 @@ impl Reactor {
         self.sys.deregister(source.raw)
     }
 
-    fn quick_poll(&self) -> io::Result<()> {
+    fn poll_quick(&self) -> io::Result<()> {
         if let Some(events) = self.events.try_lock() {
             let mut poller = Poller {
                 reactor: self,
                 events,
             };
-            poller.quick_poll()?;
+            poller.poll_quick()?;
         }
         Ok(())
     }
@@ -613,7 +637,7 @@ impl Poller<'_> {
         self.poll_internal(true)
     }
 
-    fn quick_poll(&mut self) -> io::Result<()> {
+    fn poll_quick(&mut self) -> io::Result<()> {
         self.poll_internal(false)
     }
 
@@ -632,8 +656,7 @@ impl Poller<'_> {
             timers.keys().next().map(|(when, _)| *when)
         };
 
-        let interrupted = INTERRUPT.get_ref().clear();
-        let timeout = if block && !interrupted {
+        let timeout = if block && !INTERRUPT.get_ref().clear() {
             next_timer.map(|when| when.saturating_duration_since(Instant::now()))
         } else {
             Some(Duration::from_secs(0))
