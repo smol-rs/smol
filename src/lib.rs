@@ -42,7 +42,6 @@ use futures_core::stream::Stream;
 use futures_io::{AsyncRead, AsyncWrite};
 use futures_util::future;
 use futures_util::io::AllowStdIo;
-use futures_util::lock;
 use futures_util::stream;
 use io_flag::IoFlag;
 use once_cell::sync::Lazy;
@@ -567,7 +566,7 @@ struct Source {
 struct Reactor {
     sys: sys::Reactor,
     sources: Mutex<Slab<Arc<Source>>>,
-    events: lock::Mutex<sys::Events>,
+    events: piper::Mutex<sys::Events>,
     timers: Mutex<BTreeMap<(Instant, usize), Waker>>,
 }
 
@@ -576,7 +575,7 @@ impl Reactor {
         Ok(Reactor {
             sys: sys::Reactor::create()?,
             sources: Mutex::new(Slab::new()),
-            events: lock::Mutex::new(sys::Events::new()),
+            events: piper::Mutex::new(sys::Events::new()),
             timers: Mutex::new(BTreeMap::new()),
         })
     }
@@ -629,7 +628,7 @@ impl Reactor {
 
 struct Poller<'a> {
     reactor: &'a Reactor,
-    events: lock::MutexGuard<'a, sys::Events>,
+    events: piper::MutexGuard<'a, sys::Events>,
 }
 
 impl Poller<'_> {
