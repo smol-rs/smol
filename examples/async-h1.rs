@@ -6,6 +6,7 @@ use io_arc::IoArc;
 use smol::{Async, Task};
 
 async fn serve(addr: String, stream: Async<TcpStream>) -> http_types::Result<()> {
+    let stream = IoArc::new(stream);
     async_h1::accept(&addr, stream.clone(), |_req| async move {
         let mut res = Response::new(StatusCode::Ok);
         res.insert_header("Content-Type", "text/plain")?;
@@ -28,7 +29,6 @@ fn main() -> io::Result<()> {
 
         loop {
             let (stream, _) = listener.accept().await?;
-            let stream = IoArc::new(stream);
             Task::spawn(serve(addr.clone(), stream)).unwrap().forget();
         }
     })

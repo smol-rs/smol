@@ -513,12 +513,12 @@ macro_rules! blocking {
 }
 
 /// Spawns a blocking iterator onto a thread.
-pub fn iter<T>(t: T) -> impl Stream<Item = T::Item> + Send + Unpin + 'static
+pub fn iter<T>(cap: usize, t: T) -> impl Stream<Item = T::Item> + Send + Unpin + 'static
 where
     T: Iterator + Send + 'static,
     T::Item: Send,
 {
-    let (s, r) = piper::chan(1);
+    let (s, r) = piper::chan(cap);
     Task::blocking(async move {
         for item in t {
             s.send(item).await;
@@ -528,20 +528,24 @@ where
     r
 }
 
-const PIPE_CAP: usize = 256 * 1024;
-
 /// Spawns a blocking reader onto a thread.
-pub fn reader(t: impl Read + Send + 'static) -> impl AsyncRead + Send + Unpin + 'static {
+pub fn reader(
+    cap: usize,
+    t: impl Read + Send + 'static,
+) -> impl AsyncRead + Send + Unpin + 'static {
     let t = AllowStdIo::new(t);
-    let (r, mut w) = piper::pipe(PIPE_CAP);
+    let (r, mut w) = piper::pipe(cap);
     Task::blocking(async move { drop(futures_util::io::copy(t, &mut w).await) }).forget();
     r
 }
 
 /// Spawns a blocking writer onto a thread.
-pub fn writer(t: impl Write + Send + 'static) -> impl AsyncWrite + Send + Unpin + 'static {
+pub fn writer(
+    cap: usize,
+    t: impl Write + Send + 'static,
+) -> impl AsyncWrite + Send + Unpin + 'static {
     let mut t = AllowStdIo::new(t);
-    let (r, w) = piper::pipe(PIPE_CAP);
+    let (r, w) = piper::pipe(cap);
     Task::blocking(async move { drop(futures_util::io::copy(r, &mut t).await) }).forget();
     w
 }
@@ -1180,14 +1184,14 @@ impl Async<UnixDatagram> {
     }
 }
 
-pub struct IoFlag {
+struct IoFlag {
     flag: AtomicBool,
     socket_notify: Socket,
     socket_wakeup: Socket,
 }
 
 impl IoFlag {
-    pub fn create() -> io::Result<IoFlag> {
+    fn create() -> io::Result<IoFlag> {
         // https://stackoverflow.com/questions/24933411/how-to-emulate-socket-socketpair-on-windows
         // https://github.com/mhils/backports.socketpair/blob/master/backports/socketpair/__init__.py
         // https://github.com/python-trio/trio/blob/master/trio/_core/_wakeup_socketpair.py
@@ -1218,7 +1222,7 @@ impl IoFlag {
         })
     }
 
-    pub fn set(&self) {
+    fn set(&self) {
         atomic::fence(Ordering::SeqCst);
 
         if !self.flag.load(Ordering::SeqCst) {
@@ -1239,11 +1243,11 @@ impl IoFlag {
         }
     }
 
-    pub fn get(&self) -> bool {
+    fn get(&self) -> bool {
         self.flag.load(Ordering::SeqCst)
     }
 
-    pub fn clear(&self) -> bool {
+    fn clear(&self) -> bool {
         let value = self.flag.swap(false, Ordering::SeqCst);
         if value {
             loop {
