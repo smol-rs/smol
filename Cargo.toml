@@ -30,8 +30,11 @@ nix = "0.16.1"
 wepoll-binding = "1.1.0"
 
 [dev-dependencies]
+async-h1 = "1.0.1"
 futures = { version = "0.3.3", default-features = false, features = ["std"] }
+http-types = "1.0.1"
 hyper = { version = "0.13", default-features = false }
+io-arc = "1.0.0"
 num_cpus = "1.12.0"
 pin-utils = "0.1.0-alpha.4"
 tokio = { version = "0.2", default-features = false, features = ["rt-threaded", "time", "macros"] }

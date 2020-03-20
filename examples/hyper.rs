@@ -6,7 +6,7 @@ use hyper::{Body, Request, Response, Server};
 use smol::Async;
 
 async fn hello(_: Request<Body>) -> Result<Response<Body>, Infallible> {
-    Ok(Response::new(Body::from("Hello World!")))
+    Ok(Response::new(Body::from("Hello from hyper!")))
 }
 
 pub fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
