@@ -3,7 +3,7 @@ use std::fmt;
 use std::ops::{Deref, DerefMut};
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use crate::eventvar::Eventvar;
+use crate::signal::Signal;
 
 /// A mutual exclusion primitive for protecting shared data.
 ///
@@ -38,7 +38,7 @@ use crate::eventvar::Eventvar;
 /// ```
 pub struct Mutex<T> {
     locked: AtomicBool,
-    lock_ops: Eventvar,
+    lock_ops: Signal,
     value: UnsafeCell<T>,
 }
 
@@ -58,7 +58,7 @@ impl<T> Mutex<T> {
     pub fn new(t: T) -> Mutex<T> {
         Mutex {
             locked: AtomicBool::new(false),
-            lock_ops: Eventvar::new(),
+            lock_ops: Signal::new(),
             value: UnsafeCell::new(t),
         }
     }
@@ -95,11 +95,11 @@ impl<T> Mutex<T> {
             }
 
             // Start watching for notifications and try locking again.
-            let w = self.lock_ops.watch();
+            let l = self.lock_ops.listen();
             if let Some(guard) = self.try_lock() {
                 return guard;
             }
-            w.wait();
+            l.await;
         }
     }
 

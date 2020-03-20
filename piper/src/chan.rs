@@ -15,7 +15,7 @@ use crossbeam_utils::Backoff;
 use futures_core::stream::Stream;
 use futures_util::future;
 
-use crate::eventvar::{Eventvar, Watch};
+use crate::signal::{Signal, SignalListener};
 
 /// Creates a bounded multi-producer multi-consumer channel.
 ///
@@ -63,7 +63,7 @@ pub fn chan<T>(cap: usize) -> (Sender<T>, Receiver<T>) {
     };
     let r = Receiver {
         channel,
-        next_watch: None,
+        next_listener: None,
     };
     (s, r)
 }
@@ -281,7 +281,7 @@ pub struct Receiver<T> {
     channel: Arc<Channel<T>>,
 
     /// The key for this receiver in the `channel.next_ops` set. TODO
-    next_watch: Option<Watch>,
+    next_listener: Option<SignalListener>,
 }
 
 impl<T> Receiver<T> {
@@ -422,7 +422,7 @@ impl<T> Clone for Receiver<T> {
 
         Receiver {
             channel: self.channel.clone(),
-            next_watch: None,
+            next_listener: None,
         }
     }
 }
@@ -438,7 +438,7 @@ impl<T> Stream for Receiver<T> {
                 Err(TryRecvError::Empty) => {}
             }
 
-            self.next_watch = Some(self.channel.next_ops.watch());
+            self.next_listener = Some(self.channel.next_ops.listen());
 
             match self.channel.try_recv() {
                 Ok(msg) => break Poll::Ready(Some(msg)),
@@ -446,13 +446,13 @@ impl<T> Stream for Receiver<T> {
                 Err(TryRecvError::Empty) => {}
             }
 
-            match Pin::new(self.next_watch.as_mut().unwrap()).poll(cx) {
+            match Pin::new(self.next_listener.as_mut().unwrap()).poll(cx) {
                 Poll::Ready(()) => {}
                 Poll::Pending => return Poll::Pending,
             }
         };
 
-        if self.next_watch.take().is_some() {
+        if self.next_listener.take().is_some() {
             self.channel.next_ops.notify_all();
         }
 
@@ -509,16 +509,16 @@ struct Channel<T> {
     mark_bit: usize,
 
     /// Send operations waiting while the channel is full.
-    send_ops: Eventvar,
+    send_ops: Signal,
 
     /// TODO
-    handoff: Option<Eventvar>,
+    handoff: Option<Signal>,
 
     /// Receive operations waiting while the channel is empty and not disconnected.
-    recv_ops: Eventvar,
+    recv_ops: Signal,
 
     /// Stream operations while the channel is empty and not disconnected.
-    next_ops: Eventvar,
+    next_ops: Signal,
 
     /// The number of currently active `Sender`s.
     sender_count: AtomicUsize,
@@ -539,7 +539,7 @@ impl<T> Channel<T> {
     /// Creates a bounded channel of capacity `cap`.
     fn with_capacity(cap: usize) -> Self {
         let handoff = if cap == 0 {
-            Some(Eventvar::new())
+            Some(Signal::new())
         } else {
             None
         };
@@ -578,10 +578,10 @@ impl<T> Channel<T> {
             mark_bit,
             head: AtomicUsize::new(head),
             tail: AtomicUsize::new(tail),
-            send_ops: Eventvar::new(),
+            send_ops: Signal::new(),
             handoff,
-            recv_ops: Eventvar::new(),
-            next_ops: Eventvar::new(),
+            recv_ops: Signal::new(),
+            next_ops: Signal::new(),
             sender_count: AtomicUsize::new(1),
             receiver_count: AtomicUsize::new(1),
             _marker: PhantomData,
@@ -675,7 +675,7 @@ impl<T> Channel<T> {
     }
 
     async fn send(&self, mut msg: T) {
-        let mut watch = None;
+        let mut listener = None;
 
         let stamp = loop {
             match self.try_send(msg) {
@@ -684,8 +684,8 @@ impl<T> Channel<T> {
                 Err(TrySendError::Full(m)) => msg = m,
             }
 
-            match watch.take() {
-                None => watch = Some(self.send_ops.watch()),
+            match listener.take() {
+                None => listener = Some(self.send_ops.listen()),
                 Some(w) => {
                     w.await;
                     if self.cap > 1 {
@@ -696,11 +696,11 @@ impl<T> Channel<T> {
         };
 
         if let Some(h) = &self.handoff {
-            let mut watch = None;
+            let mut listener = None;
 
             while unsafe { &*self.buffer }.stamp.load(Ordering::SeqCst) != stamp {
-                match watch.take() {
-                    None => watch = Some(h.watch()),
+                match listener.take() {
+                    None => listener = Some(h.listen()),
                     Some(w) => w.await,
                 }
             }
@@ -787,7 +787,7 @@ impl<T> Channel<T> {
     }
 
     async fn recv(&self) -> Option<T> {
-        let mut watch = None;
+        let mut listener = None;
 
         loop {
             match self.try_recv() {
@@ -796,8 +796,8 @@ impl<T> Channel<T> {
                 Err(TryRecvError::Empty) => {}
             }
 
-            match watch.take() {
-                None => watch = Some(self.recv_ops.watch()),
+            match listener.take() {
+                None => listener = Some(self.recv_ops.listen()),
                 Some(w) => {
                     w.await;
                     if self.cap > 1 {

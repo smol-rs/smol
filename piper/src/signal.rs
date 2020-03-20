@@ -37,30 +37,30 @@ impl Inner {
 }
 
 /// A linked list holding entries.
-pub struct Eventvar {
+pub struct Signal {
     inner: AtomicPtr<Inner>,
 }
 
-unsafe impl Send for Eventvar {}
-unsafe impl Sync for Eventvar {}
+unsafe impl Send for Signal {}
+unsafe impl Sync for Signal {}
 
-impl Eventvar {
-    /// Creates a new `Eventvar`.
+impl Signal {
+    /// Creates a new `Signal`.
     #[inline]
-    pub fn new() -> Eventvar {
-        Eventvar {
+    pub fn new() -> Signal {
+        Signal {
             inner: AtomicPtr::default(),
         }
     }
 
-    /// Returns a guard watching new events.
+    /// Returns a guard watching new Signal.
     #[cold]
-    pub fn watch(&self) -> Watch {
+    pub fn listen(&self) -> SignalListener {
         let inner = self.inner();
         let entry = inner.lock().insert();
         full_fence();
 
-        Watch {
+        SignalListener {
             inner: unsafe { Arc::clone(&ManuallyDrop::new(Arc::from_raw(inner))) },
             entry: Some(entry),
         }
@@ -68,10 +68,10 @@ impl Eventvar {
 
     /// Notifies a single active watcher.
     ///
-    /// If there is an active [`Watch`] that has already been notified, another one will **not** be
-    /// notified.
+    /// If there is an active [`SignalListener`] that has already been notified, another one will
+    /// **not** be notified.
     ///
-    /// [`Watch`] struct.Watch.html
+    /// [`SignalListener`] struct.SignalListener.html
     #[inline]
     pub fn notify_one(&self) {
         let inner = self.inner();
@@ -124,7 +124,7 @@ impl Eventvar {
     }
 }
 
-impl Drop for Eventvar {
+impl Drop for Signal {
     #[inline]
     fn drop(&mut self) {
         let inner: *mut Inner = *self.inner.get_mut();
@@ -137,22 +137,22 @@ impl Drop for Eventvar {
     }
 }
 
-impl Default for Eventvar {
-    fn default() -> Eventvar {
-        Eventvar::new()
+impl Default for Signal {
+    fn default() -> Signal {
+        Signal::new()
     }
 }
 
-/// A guard watching an `Eventvar`.
-pub struct Watch {
+/// A guard watching an `Signal`.
+pub struct SignalListener {
     inner: Arc<Inner>,
     entry: Option<NonNull<Entry>>,
 }
 
-unsafe impl Send for Watch {}
-unsafe impl Sync for Watch {}
+unsafe impl Send for SignalListener {}
+unsafe impl Sync for SignalListener {}
 
-impl Watch {
+impl SignalListener {
     /// Blocks until a notification is received.
     pub fn wait(self) {
         self.wait_internal(None);
@@ -170,7 +170,7 @@ impl Watch {
     /// Returns `true` if a notification was received.
     fn wait_internal(mut self, mut timeout: Option<Duration>) -> bool {
         let entry = match self.entry.take() {
-            None => unreachable!("cannot wait twice on a `Watch`"),
+            None => unreachable!("cannot wait twice on a `SignalListener`"),
             Some(entry) => entry,
         };
 
@@ -217,14 +217,14 @@ impl Watch {
     }
 }
 
-impl Future for Watch {
+impl Future for SignalListener {
     type Output = ();
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let mut list = self.inner.lock();
 
         let entry = match self.entry {
-            None => unreachable!("cannot poll a completed `Watch` future"),
+            None => unreachable!("cannot poll a completed `SignalListener` future"),
             Some(entry) => entry,
         };
         let state = unsafe { &entry.as_ref().state };
@@ -239,14 +239,16 @@ impl Future for Watch {
             }
             State::Created => state.set(State::Polling(cx.waker().clone())),
             State::Polling(w) => state.set(State::Polling(w)),
-            State::Waiting(_) => unreachable!("cannot poll and wait on `Watch` at the same time"),
+            State::Waiting(_) => {
+                unreachable!("cannot poll and wait on `SignalListener` at the same time")
+            }
         }
 
         Poll::Pending
     }
 }
 
-impl Drop for Watch {
+impl Drop for SignalListener {
     fn drop(&mut self) {
         if let Some(entry) = self.entry.take() {
             let mut list = self.inner.lock();
