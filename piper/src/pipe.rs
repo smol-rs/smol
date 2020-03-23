@@ -7,8 +7,8 @@ use std::sync::atomic::{self, AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use futures_io::{AsyncRead, AsyncWrite};
-use futures_util::task::AtomicWaker;
+use futures::io::{AsyncRead, AsyncWrite};
+use futures::task::AtomicWaker;
 
 pub fn pipe(cap: usize) -> (Reader, Writer) {
     assert!(cap > 0, "capacity must be positive");
@@ -154,7 +154,7 @@ impl AsyncRead for &Reader {
         cx: &mut Context<'_>,
         buf: &mut [u8],
     ) -> Poll<io::Result<usize>> {
-        if buf.is_empty() || self.inner.closed.load(Ordering::Relaxed) {
+        if buf.is_empty() {
             return Poll::Ready(Ok(0));
         }
 
@@ -212,7 +212,6 @@ impl AsyncRead for &Reader {
             self.head.set(head);
         }
 
-        // dbg!(count);
         Poll::Ready(Ok(count))
     }
 }
@@ -284,7 +283,6 @@ impl AsyncWrite for &Writer {
             self.tail.set(tail);
         }
 
-        // dbg!(count);
         Poll::Ready(Ok(count))
     }
 

@@ -10,35 +10,23 @@ pub use mutex::{Mutex, MutexGuard};
 pub use pipe::{pipe, Reader, Writer};
 pub use signal::{Signal, SignalListener};
 
+#[doc(hidden)]
+pub use futures;
+
+#[macro_export]
 macro_rules! select {
-    ($p:pat = $e:expr => $body:expr, $($rest:tt)*) => {
-        println!("PATTERN");
-        select!($($rest)*)
+    ([$($tokens:tt)*] default => $($tail:tt)*) => {
+        $crate::select!([$($tokens)* default =>] $($tail)*)
     };
-
-    (default => $body:expr, $($rest:tt)*) => {
-        println!("DEFAULT");
-        select!($($rest)*)
+    ([$($tokens:tt)*] $p:pat = $f:expr => $($tail:tt)*) => {
+        $crate::select!(
+            [$($tokens)* $p = $crate::futures::future::FutureExt::fuse($f) =>] $($tail)*
+        )
     };
-
-    // Optional comma after the last expression.
-    ($p:pat = $e:expr => $body:expr) => {
-        select!($p = $e => { $body },);
+    ([$($tokens:tt)*] $f:expr => $($tail:tt)*) => {
+        $crate::select!([$($tokens)*] _ = $f => $($tail)*)
     };
-    (default => $body:expr) => {
-        select!(default => { $body },);
-    };
-    // Optional comma after block expressions.
-    ($p:pat = $e:expr => $body:block $($rest:tt)*) => {
-        select!($p = $e => $body, $($rest)*)
-    };
-    (default => $body:block $($rest:tt)*) => {
-        select!(default => $body, $($rest)*)
-    };
-    // Optional pattern.
-    ($e:expr => $($rest:tt)*) => {
-        select!(_ = $e => $($rest)*)
-    };
-    // End of the macro.
-    () => {};
+    ([$($tokens:tt)*] $t:tt $($tail:tt)*) => { $crate::select!([$($tokens)* $t] $($tail)*) };
+    ([$($tokens:tt)*]) => { $crate::futures::select! { $($tokens)* } };
+    ($($tokens:tt)*) => { $crate::select!([] $($tokens)*) };
 }

@@ -434,7 +434,7 @@ impl List {
     }
 }
 
-/// Equivalent to `atomic::fence(Ordering::SeqCst)`, but faster.
+/// Equivalent to `atomic::fence(Ordering::SeqCst)`, but sometimes faster.
 #[inline]
 fn full_fence() {
     if cfg!(any(target_arch = "x86", target_arch = "x86_64")) {

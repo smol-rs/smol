@@ -12,8 +12,8 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use crossbeam_utils::Backoff;
-use futures_core::stream::Stream;
-use futures_util::future;
+use futures::future;
+use futures::stream::Stream;
 
 use crate::signal::{Signal, SignalListener};
 
@@ -538,11 +538,7 @@ impl<T> Unpin for Channel<T> {}
 impl<T> Channel<T> {
     /// Creates a bounded channel of capacity `cap`.
     fn with_capacity(cap: usize) -> Self {
-        let handoff = if cap == 0 {
-            Some(Signal::new())
-        } else {
-            None
-        };
+        let handoff = if cap == 0 { Some(Signal::new()) } else { None };
         let cap = cap.max(1);
 
         // Compute constants `mark_bit` and `one_lap`.
