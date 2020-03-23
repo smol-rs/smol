@@ -1,3 +1,5 @@
+//! A very smol and fast async runtime.
+
 #![forbid(unsafe_code)]
 #![warn(missing_docs, missing_debug_implementations, rust_2018_idioms)]
 
@@ -18,7 +20,6 @@ use std::cell::{Cell, RefCell};
 use std::collections::hash_map::Entry;
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::fmt::Debug;
-use std::future::Future;
 use std::io::{self, Read, Write};
 use std::mem;
 use std::net::{SocketAddr, TcpListener, TcpStream, ToSocketAddrs, UdpSocket};
@@ -26,7 +27,6 @@ use std::panic::catch_unwind;
 use std::pin::Pin;
 use std::sync::atomic::{self, AtomicBool, Ordering};
 use std::sync::Arc;
-use std::task::{Context, Poll, Waker};
 use std::thread::{self, ThreadId};
 use std::time::{Duration, Instant};
 
@@ -39,18 +39,14 @@ use std::{
 use crossbeam_deque::{Injector, Steal, Stealer, Worker};
 use crossbeam_queue::SegQueue;
 use crossbeam_utils::sync::{Parker, ShardedLock};
-use futures_core::stream::Stream;
-use futures_io::{AsyncRead, AsyncWrite};
-use futures_util::future;
-use futures_util::io::AllowStdIo;
-use futures_util::stream;
+use futures::future::{self, Future};
+use futures::io::{AllowStdIo, AsyncRead, AsyncWrite};
+use futures::stream::{self, Stream};
+use futures::task::{Context, Poll, Waker};
 use once_cell::sync::Lazy;
 use parking_lot::{Condvar, Mutex, MutexGuard};
 use slab::Slab;
 use socket2::{Domain, Protocol, Socket, Type};
-
-// TODO: fix unwraps
-// TODO: catch panics in wake() and Waker::drop()
 
 // ----- Executor -----
 
@@ -131,15 +127,10 @@ impl Local {
             queue.push_back(r);
         }
     }
-
-    fn find_work(&self) -> bool {
-        self.drain_remote();
-        !self.queue.borrow_mut().is_empty()
-    }
 }
 
 struct Processor {
-    is_running: Cell<bool>,
+    is_registered: Cell<bool>,
     slot: Cell<Option<Runnable>>,
     worker: Worker<Runnable>,
 }
@@ -147,7 +138,7 @@ struct Processor {
 impl Processor {
     fn new() -> Processor {
         Processor {
-            is_running: Cell::new(false),
+            is_registered: Cell::new(false),
             slot: Cell::new(None),
             worker: Worker::new_fifo(),
         }
@@ -215,14 +206,6 @@ impl Processor {
         }
         None
     }
-
-    fn find_work(&self) -> bool {
-        if LOCAL.with(|local| local.find_work()) {
-            true
-        } else {
-            self.pop().map(|r| self.push(r)).is_some()
-        }
-    }
 }
 
 struct Executor {
@@ -244,7 +227,7 @@ impl Executor {
     ) -> Task<T> {
         let schedule = |runnable| {
             PROCESSOR.with(|proc| {
-                if proc.is_running.get() {
+                if proc.is_registered.get() {
                     proc.push(runnable);
                 } else {
                     EXECUTOR.injector.push(runnable);
@@ -258,86 +241,77 @@ impl Executor {
         Task(Some(handle))
     }
 
-    fn run<T>(&self, future: impl Future<Output = T>) -> T {
-        PROCESSOR.with(|proc| {
-            // Register a new worker.
-            let id = thread::current().id();
-            match self.stealers.write().unwrap().entry(id) {
-                Entry::Occupied(_) => panic!("recursive `run()`"),
-                Entry::Vacant(e) => {
-                    e.insert(proc.worker.stealer());
-                }
+    fn register(&self, proc: &Processor) {
+        let id = thread::current().id();
+        match self.stealers.write().unwrap().entry(id) {
+            Entry::Occupied(_) => panic!("recursive `run()`"),
+            Entry::Vacant(e) => {
+                e.insert(proc.worker.stealer());
             }
-            proc.is_running.set(true);
+        }
+        proc.is_registered.set(true);
+    }
 
-            // Unregister the worker at the end of this scope.
-            scopeguard::defer! {{
-                self.stealers.write().unwrap().remove(&id);
-                while let Some(r) = proc.worker.pop() {
-                    self.injector.push(r);
-                }
-                proc.is_running.set(false);
-            }}
-
-            let waker = Arc::new(
-                IoFlag::create()
-                    .and_then(Async::nonblocking)
-                    .expect("cannot create waker flag"),
-            );
-
-            let flag = waker.clone();
-            let w = async_task::waker_fn(move || flag.get_ref().set());
-            let cx = &mut Context::from_waker(&w);
-
-            pin_utils::pin_mut!(future);
-
-            loop {
-                waker.get_ref().clear();
-                match future.as_mut().poll(cx) {
-                    Poll::Ready(val) => return val,
-                    Poll::Pending => {}
-                }
-
-                while !waker.get_ref().get() {
-                    if proc.tick() {
-                        REACTOR.poll_quick().expect("failure while polling I/O");
-                        continue;
-                    }
-
-                    let waker_ready = waker.ready();
-                    pin_utils::pin_mut!(waker_ready);
-
-                    let poller_ready = REACTOR.lock();
-                    pin_utils::pin_mut!(poller_ready);
-
-                    if let future::Either::Right((mut poller, _)) =
-                        block_on(future::select(waker_ready, poller_ready))
-                    {
-                        if !waker.get_ref().get() && !proc.find_work() {
-                            poller.poll().expect("failure while polling I/O");
-                        }
-                    }
-                }
-
-                // TODO: use piper::select! here
-                // block_on(piper::select! {
-                //     waker.ready() => break,
-                //     poller = REACTOR.lock() => if !waker.get_ref().get() {
-                //         poller.poll().expect("failure while polling I/O"),
-                //     }
-                // });
-            }
-        })
+    fn unregister(&self, proc: &Processor) {
+        let id = thread::current().id();
+        self.stealers.write().unwrap().remove(&id);
+        while let Some(r) = proc.worker.pop() {
+            self.injector.push(r);
+        }
+        proc.is_registered.set(false);
     }
 }
 
 /// Executes all futures until the main one completes.
 pub fn run<T>(future: impl Future<Output = T>) -> T {
-    EXECUTOR.run(future)
+    PROCESSOR.with(|proc| {
+        // Register a new worker.
+        EXECUTOR.register(proc);
+        // Unregister the worker at the end of this scope.
+        scopeguard::defer! { EXECUTOR.unregister(proc) };
+
+        let waker = Arc::new(
+            IoFlag::create()
+                .and_then(Async::nonblocking)
+                .expect("cannot create waker flag"),
+        );
+
+        let flag = waker.clone();
+        let w = async_task::waker_fn(move || flag.get_ref().set());
+        let cx = &mut Context::from_waker(&w);
+
+        pin_utils::pin_mut!(future);
+
+        loop {
+            waker.get_ref().clear();
+            match future.as_mut().poll(cx) {
+                Poll::Ready(val) => return val,
+                Poll::Pending => {}
+            }
+
+            while !waker.get_ref().get() {
+                if proc.tick() {
+                    REACTOR.poll_quick().expect("failure while polling I/O");
+                } else {
+                    block_on(async {
+                        piper::select! {
+                            waker.ready() => {},
+                            mut poller = REACTOR.lock() => {
+                                if !waker.get_ref().get() {
+                                    poller.poll().expect("failure while polling I/O");
+                                }
+                            }
+                        }
+                    });
+                }
+            }
+        }
+    })
 }
 
 /// A spawned future.
 #[must_use = "tasks are canceled when dropped, use `.forget()` to run in the background"]
+#[derive(Debug)]
 pub struct Task<T>(Option<async_task::JoinHandle<T, ()>>);
 
 impl<T: Send + 'static> Task<T> {
@@ -513,14 +487,14 @@ macro_rules! blocking {
 }
 
 /// Spawns a blocking iterator onto a thread.
-pub fn iter<T>(cap: usize, t: T) -> impl Stream<Item = T::Item> + Send + Unpin + 'static
+pub fn iter<I>(cap: usize, iter: I) -> piper::Receiver<I::Item>
 where
-    T: Iterator + Send + 'static,
-    T::Item: Send,
+    I: Iterator + Send + 'static,
+    I::Item: Send,
 {
     let (s, r) = piper::chan(cap);
     Task::blocking(async move {
-        for item in t {
+        for item in iter {
             s.send(item).await;
         }
     })
@@ -529,24 +503,24 @@ where
 }
 
 /// Spawns a blocking reader onto a thread.
-pub fn reader(
-    cap: usize,
-    t: impl Read + Send + 'static,
-) -> impl AsyncRead + Send + Unpin + 'static {
-    let t = AllowStdIo::new(t);
+pub fn reader<R>(cap: usize, reader: R) -> piper::Reader
+where
+    R: Read + Send + 'static,
+{
+    let io = AllowStdIo::new(reader);
     let (r, mut w) = piper::pipe(cap);
-    Task::blocking(async move { drop(futures_util::io::copy(t, &mut w).await) }).forget();
+    Task::blocking(async move { drop(futures::io::copy(io, &mut w).await) }).forget();
     r
 }
 
 /// Spawns a blocking writer onto a thread.
-pub fn writer(
-    cap: usize,
-    t: impl Write + Send + 'static,
-) -> impl AsyncWrite + Send + Unpin + 'static {
-    let mut t = AllowStdIo::new(t);
+pub fn writer<W>(cap: usize, writer: W) -> piper::Writer
+where
+    W: Write + Send + 'static,
+{
+    let mut io = AllowStdIo::new(writer);
     let (r, w) = piper::pipe(cap);
-    Task::blocking(async move { drop(futures_util::io::copy(r, &mut t).await) }).forget();
+    Task::blocking(async move { drop(futures::io::copy(r, &mut io).await) }).forget();
     w
 }
 
@@ -560,6 +534,7 @@ static INTERRUPT: Lazy<Async<IoFlag>> = Lazy::new(|| {
         .expect("cannot create interrupt flag")
 });
 
+#[derive(Debug)]
 struct Source {
     raw: sys::Raw,
     index: usize,
@@ -692,7 +667,7 @@ impl Poller<'_> {
         }
         drop(sources);
 
-        // Wake up ready I/O.
+        // Wake up tasks waiting on I/O.
         for waker in wakers {
             waker.wake();
         }
@@ -702,6 +677,7 @@ impl Poller<'_> {
 }
 
 /// Fires at a certain point in time.
+#[derive(Debug)]
 pub struct Timer {
     when: Instant,
     inserted: bool,
@@ -724,14 +700,18 @@ impl Timer {
         }
     }
 
+    /// Returns an unique identifier for this timer.
+    ///
+    /// This method assumes the timer is pinned, even though it takes a mutable reference.
     fn key(&mut self) -> (Instant, usize) {
-        let id = self as *mut Timer as usize;
-        (self.when, id)
+        let address = self as *mut Timer as usize;
+        (self.when, address)
     }
 }
 
 impl Drop for Timer {
     fn drop(&mut self) {
+        // If this timer is in the timers map, remove it.
         if self.inserted {
             REACTOR.timers.lock().remove(&self.key());
         }
@@ -744,11 +724,13 @@ impl Future for Timer {
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let mut timers = REACTOR.timers.lock();
 
+        // Check if this timer has already fired.
         if Instant::now() >= self.when {
             timers.remove(&self.key());
             return Poll::Ready(self.when);
         }
 
+        // Check if this timer has been insererted into the timers map.
         if !self.inserted {
             let mut is_earliest = false;
             if let Some((first, _)) = timers.keys().next() {
@@ -757,10 +739,12 @@ impl Future for Timer {
                 }
             }
 
+            // Insert this timer into the timers map.
             let waker = cx.waker().clone();
             timers.insert(self.key(), waker);
             self.inserted = true;
 
+            // If this timer is now the earliest one, interrupt the reactor.
             if is_earliest {
                 drop(timers);
                 REACTOR.interrupt();
@@ -772,6 +756,7 @@ impl Future for Timer {
 }
 
 /// Async I/O.
+#[derive(Debug)]
 pub struct Async<T> {
     inner: Option<Box<T>>,
     source: Arc<Source>,
@@ -1184,6 +1169,7 @@ impl Async<UnixDatagram> {
     }
 }
 
+/// A boolean flag that triggers I/O events whenever changed.
 struct IoFlag {
     flag: AtomicBool,
     socket_notify: Socket,
@@ -1191,10 +1177,13 @@ struct IoFlag {
 }
 
 impl IoFlag {
+    /// Creates an I/O flag.
     fn create() -> io::Result<IoFlag> {
-        // https://stackoverflow.com/questions/24933411/how-to-emulate-socket-socketpair-on-windows
-        // https://github.com/mhils/backports.socketpair/blob/master/backports/socketpair/__init__.py
+        // The only portable way of manually triggering I/O events is to create a socket and
+        // send/receive dummy data on it. See the following links for more information.
+        //
         // https://github.com/python-trio/trio/blob/master/trio/_core/_wakeup_socketpair.py
+        // https://stackoverflow.com/questions/24933411/how-to-emulate-socket-socketpair-on-windows
         // https://gist.github.com/geertj/4325783
 
         // Create a temporary listener.
@@ -1222,11 +1211,16 @@ impl IoFlag {
         })
     }
 
+    /// Sets the flag to `true`.
     fn set(&self) {
+        // Publish all in-memory changes before setting the flag.
         atomic::fence(Ordering::SeqCst);
 
+        // If the flag is not set...
         if !self.flag.load(Ordering::SeqCst) {
+            // If this thread sets it...
             if !self.flag.swap(true, Ordering::SeqCst) {
+                // Trigger an I/O event by writing a byte into the sending socket.
                 loop {
                     match (&self.socket_notify).write(&[1]) {
                         Err(err) if err.kind() == io::ErrorKind::Interrupted => {}
@@ -1243,13 +1237,16 @@ impl IoFlag {
         }
     }
 
+    /// Gets the current value of the flag.
     fn get(&self) -> bool {
         self.flag.load(Ordering::SeqCst)
     }
 
+    /// Sets the flag to `false`.
     fn clear(&self) -> bool {
         let value = self.flag.swap(false, Ordering::SeqCst);
         if value {
+            // Read all available bytes from the receiving socket.
             loop {
                 match (&self.socket_wakeup).read(&mut [0; 64]) {
                     Ok(n) if n > 0 => {}
@@ -1258,6 +1255,8 @@ impl IoFlag {
                 }
             }
         }
+
+        // Publish all in-memory changes after clearing the flag.
         atomic::fence(Ordering::SeqCst);
         value
     }
@@ -1284,7 +1283,7 @@ impl Async<IoFlag> {
             false => Err(io::Error::new(io::ErrorKind::WouldBlock, "")),
         })
         .await
-        .unwrap()
+        .expect("failure while waiting on an I/O flag")
     }
 }
 
@@ -1297,14 +1296,12 @@ mod sys {
     use std::os::unix::io::{AsRawFd, RawFd};
     use std::time::Duration;
 
-    use nix::{
-        errno::Errno,
-        sys::epoll::{
-            epoll_create1, epoll_ctl, epoll_wait, EpollCreateFlags, EpollEvent, EpollFlags, EpollOp,
-        },
+    use nix::errno::Errno;
+    use nix::sys::epoll::{
+        epoll_create1, epoll_ctl, epoll_wait, EpollCreateFlags, EpollEvent, EpollFlags, EpollOp,
     };
 
-    #[derive(Clone, Copy)]
+    #[derive(Clone, Copy, Debug)]
     pub struct Raw(RawFd);
     impl Raw {
         pub fn new(s: &impl AsRawFd) -> Raw {
@@ -1390,13 +1387,11 @@ mod sys {
     use std::os::unix::io::{AsRawFd, RawFd};
     use std::time::Duration;
 
-    use nix::{
-        errno::Errno,
-        fcntl::{fcntl, FcntlArg, FdFlag},
-        sys::event::{kevent_ts, kqueue, EventFilter, EventFlag, FilterFlag, KEvent},
-    };
+    use nix::errno::Errno;
+    use nix::fcntl::{fcntl, FcntlArg, FdFlag};
+    use nix::sys::event::{kevent_ts, kqueue, EventFilter, EventFlag, FilterFlag, KEvent};
 
-    #[derive(Clone, Copy)]
+    #[derive(Clone, Copy, Debug)]
     pub struct Raw(RawFd);
     impl Raw {
         pub fn new(s: &impl AsRawFd) -> Raw {
@@ -1514,10 +1509,9 @@ mod sys {
     use std::os::windows::io::{AsRawSocket, RawSocket};
     use std::time::Duration;
 
-    use wepoll::{Epoll, EventFlag};
-    use wepoll_binding as wepoll;
+    use wepoll_binding::{Epoll, EventFlag};
 
-    #[derive(Clone, Copy)]
+    #[derive(Clone, Copy, Debug)]
     pub struct Raw(RawSocket);
     impl Raw {
         pub fn new(s: &impl AsRawSocket) -> Raw {
@@ -1562,10 +1556,10 @@ mod sys {
         EventFlag::ONESHOT | EventFlag::IN | EventFlag::OUT | EventFlag::RDHUP
     }
 
-    pub struct Events(wepoll::Events);
+    pub struct Events(wepoll_binding::Events);
     impl Events {
         pub fn new() -> Events {
-            Events(wepoll::Events::with_capacity(1000))
+            Events(wepoll_binding::Events::with_capacity(1000))
         }
         pub fn iter(&self) -> impl Iterator<Item = Event> + '_ {
             self.0.iter().map(|ev| Event {
