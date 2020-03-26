@@ -2,15 +2,15 @@
 
 use std::net::TcpStream;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, Context as _, Result};
 use async_tls::TlsConnector;
 use futures::prelude::*;
 use once_cell::sync::Lazy;
 use smol::Async;
 use url::Url;
 
-async fn get(addr: &str) -> Result<String> {
-    // Parse the URL and construct a request.
+async fn receive(addr: &str) -> Result<Vec<u8>> {
+    // Parse the URL.
     let url = Url::parse(addr)?;
     let host = url.host().context("cannot parse host")?;
     let port = url.port_or_known_default().context("cannot guess port")?;
@@ -19,14 +19,15 @@ async fn get(addr: &str) -> Result<String> {
         Some(q) => format!("?{}", q),
         None => String::new(),
     };
-    let addr = format!("{}:{}", host, port);
+
+    // Construct a request.
     let req = format!(
         "GET {}{} HTTP/1.1\r\nHost: {}\r\nAccept: */*\r\nConnection: close\r\n\r\n",
         path, query, host,
     );
 
     // Connect to the host.
-    let mut stream = Async::<TcpStream>::connect(addr).await?;
+    let mut stream = Async::<TcpStream>::connect(format!("{}:{}", host, port)).await?;
     let mut resp = Vec::new();
 
     // Send the request and wait for the response.
@@ -45,12 +46,17 @@ async fn get(addr: &str) -> Result<String> {
         }
         scheme => bail!("unsupported scheme: {}", scheme),
     }
-    Ok(String::from_utf8_lossy(&resp).into())
+
+    Ok(resp)
 }
 
 fn main() -> Result<()> {
     smol::run(async {
-        println!("{}", get("https://www.rust-lang.org").await?);
+        let addr = "https://www.rust-lang.org";
+        let resp = receive(addr).await?;
+
+        println!("{}", String::from_utf8_lossy(&resp));
+
         Ok(())
     })
 }

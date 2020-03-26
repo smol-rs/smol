@@ -29,6 +29,8 @@ macro_rules! select {
         $crate::select!([$($tokens)*] _ = $f => $($tail)*)
     };
     ([$($tokens:tt)*] $t:tt $($tail:tt)*) => { $crate::select!([$($tokens)* $t] $($tail)*) };
-    ([$($tokens:tt)*]) => { $crate::hidden::futures::select! { $($tokens)* } };
+    ([$($tokens:tt)*]) => {
+        $crate::hidden::futures::select! { $($tokens)* }
+    };
     ($($tokens:tt)*) => { $crate::select!([] $($tokens)*) };
 }

@@ -2,20 +2,21 @@
 
 use std::net::TcpStream;
 
-use anyhow::{bail, Context, Error, Result};
+use anyhow::{bail, Context as _, Error, Result};
 use async_tls::TlsConnector;
+use futures::prelude::*;
 use http_types::{Method, Request, Response};
 use once_cell::sync::Lazy;
 use smol::Async;
 use url::Url;
 
-async fn get(addr: &str) -> Result<Response> {
-    // Parse the URL and construct a request.
-    let url = Url::parse(addr)?;
-    let host = url.host().context("cannot parse host")?.to_string();
-    let port = url.port_or_known_default().context("cannot guess port")?;
+async fn receive(req: Request) -> Result<Response> {
+    let host = req.url().host().context("cannot parse host")?.to_string();
+    let port = req
+        .url()
+        .port_or_known_default()
+        .context("cannot guess port")?;
     let addr = format!("{}:{}", host, port);
-    let req = Request::new(Method::Get, url);
 
     // Connect to the host.
     let stream = Async::<TcpStream>::connect(addr).await?;
@@ -36,7 +37,15 @@ async fn get(addr: &str) -> Result<Response> {
 
 fn main() -> Result<()> {
     smol::run(async {
-        println!("{:#?}", get("https://www.rust-lang.org").await?);
+        let addr = "https://www.rust-lang.org";
+        let req = Request::new(Method::Get, Url::parse(addr)?);
+        let mut resp = receive(req).await?;
+        println!("{:#?}", resp);
+
+        let mut body = Vec::new();
+        resp.read_to_end(&mut body).await?;
+        println!("{}", String::from_utf8_lossy(&body));
+
         Ok(())
     })
 }

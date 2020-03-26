@@ -10,34 +10,33 @@ use async_tls::client::TlsStream;
 use async_tls::TlsConnector;
 use futures::prelude::*;
 use http::Uri;
-use hyper::{Body, Client, Response};
+use hyper::{Body, Client, Request, Response};
 use once_cell::sync::Lazy;
 use smol::{Async, Task};
 
-async fn get(addr: &str) -> Result<Response<Body>> {
-    let client = Client::builder()
+async fn receive(req: Request<Body>) -> Result<Response<Body>> {
+    Ok(Client::builder()
         .executor(SmolExecutor)
-        .build::<_, Body>(SmolConnector);
-
-    let resp = client.get(addr.parse()?).await?;
-    Ok(resp)
+        .build::<_, Body>(SmolConnector)
+        .request(req)
+        .await?)
 }
 
 fn main() -> Result<()> {
     smol::run(async {
-        let resp = get("https://www.rust-lang.org").await?;
-        // let resp = get("http://www.example.com").await?;
+        let req = Request::get("https://www.rust-lang.org").body(Body::empty())?;
+        let resp = receive(req).await?;
         println!("{:#?}", resp);
 
         let body = resp
             .into_body()
-            .try_fold(Vec::new(), |mut data, chunk| async move {
-                data.extend_from_slice(&chunk);
-                Ok(data)
+            .try_fold(Vec::new(), |mut body, chunk| async move {
+                body.extend_from_slice(&chunk);
+                Ok(body)
             })
             .await?;
-        let body = String::from_utf8_lossy(&body);
-        println!("{}", body);
+        println!("{}", String::from_utf8_lossy(&body));
+
         Ok(())
     })
 }
@@ -124,7 +123,7 @@ impl tokio::io::AsyncWrite for SmolStream {
         }
     }
 
-    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), io::Error>> {
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         match &mut *self {
             SmolStream::Http(s) => Pin::new(s).poll_flush(cx),
             SmolStream::Https(s) => Pin::new(s).poll_flush(cx),
@@ -134,7 +133,7 @@ impl tokio::io::AsyncWrite for SmolStream {
     fn poll_shutdown(mut self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<io::Result<()>> {
         match &mut *self {
             SmolStream::Http(s) => s.get_ref().shutdown(std::net::Shutdown::Write)?,
-            SmolStream::Https(s) => s.get_ref().get_ref().shutdown(std::net::Shutdown::Write)?,
+            SmolStream::Https(_) => {},
         }
         Poll::Ready(Ok(()))
     }
