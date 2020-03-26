@@ -22,6 +22,8 @@ fn stdin() -> impl AsyncRead + Unpin + 'static {
     reader
 }
 
+// TODO: just pipe stdin to stdout
+
 fn main() -> io::Result<()> {
     smol::run(async {
         let mut stdin = io::BufReader::new(stdin());

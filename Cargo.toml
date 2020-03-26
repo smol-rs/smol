@@ -28,11 +28,16 @@ nix = "0.17.0"
 wepoll-binding = "1.1.0"
 
 [dev-dependencies]
+anyhow = "1.0.27"
 async-h1 = "1.0.1"
+async-tls = "0.6.0"
+http = "0.2.1"
 http-types = "1.0.1"
-hyper = { version = "0.13.4", default-features = false }
+hyper = { version = "0.13.4", default-features = false, features = ["stream"] }
 io-arc = "1.0.0"
 num_cpus = "1.12.0"
 pin-utils = "0.1.0-alpha.4"
 signal-hook = "0.1.13"
 tokio = { version = "0.2.13", default-features = false, features = ["rt-threaded", "time", "macros"] }
+tokio-util = { version = "0.3.1", features = ["compat"] }
+url = "2.1.1"

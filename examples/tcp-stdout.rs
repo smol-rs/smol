@@ -8,6 +8,7 @@
 
 use std::net::{TcpListener, TcpStream};
 
+use futures::prelude::*;
 use futures::io;
 use smol::{Async, Task};
 
@@ -19,6 +20,8 @@ async fn echo(stream: Async<TcpStream>) -> io::Result<()> {
 fn main() -> io::Result<()> {
     smol::run(async {
         let listener = Async::<TcpListener>::bind("127.0.0.1:8080")?;
+        println!("Listening on http://{}", listener.get_ref().local_addr()?);
+
         loop {
             let (stream, _) = listener.accept().await?;
             Task::spawn(echo(stream)).unwrap().forget();
