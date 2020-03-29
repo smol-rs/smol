@@ -27,6 +27,7 @@ use std::panic::catch_unwind;
 use std::pin::Pin;
 use std::sync::atomic::{self, AtomicBool, Ordering};
 use std::sync::Arc;
+use std::task::{Context, Poll, Waker};
 use std::thread::{self, ThreadId};
 use std::time::{Duration, Instant};
 
@@ -39,10 +40,8 @@ use std::{
 use crossbeam_deque::{Injector, Steal, Stealer, Worker};
 use crossbeam_queue::SegQueue;
 use crossbeam_utils::sync::{Parker, ShardedLock};
-use futures::future::{self, Future};
-use futures::io::{AllowStdIo, AsyncRead, AsyncWrite};
-use futures::stream::{self, Stream};
-use futures::task::{Context, Poll, Waker};
+use futures::io::AllowStdIo;
+use futures::prelude::*;
 use once_cell::sync::Lazy;
 use parking_lot::{Condvar, Mutex, MutexGuard};
 use slab::Slab;
@@ -93,18 +92,18 @@ impl Task<()> {
 
 impl<T, E> Task<Result<T, E>>
 where
-    T: 'static,
-    E: Debug + 'static,
+    T: Send + 'static,
+    E: Debug + Send + 'static,
 {
     /// Spawns another task that unwraps the result on the same thread.
     pub fn unwrap(self) -> Task<T> {
-        Task::local(async { self.await.unwrap() })
+        Task::spawn(async { self.await.unwrap() })
     }
 
     /// Spawns another task that unwraps the result on the same thread.
     pub fn expect(self, msg: &str) -> Task<T> {
         let msg = msg.to_owned();
-        Task::local(async move { self.await.expect(&msg) })
+        Task::spawn(async move { self.await.expect(&msg) })
     }
 }
 
@@ -181,9 +180,9 @@ pub fn run<T>(future: impl Future<Output = T>) -> T {
                     REACTOR.poll_quick().expect("failure while polling I/O");
                 } else {
                     block_on(async {
-                        piper::select! {
-                            flag.ready() => {},
-                            mut poller = REACTOR.lock() => {
+                        futures::select! {
+                            _ = flag.ready().fuse() => {}
+                            mut poller = REACTOR.lock().fuse() => {
                                 if !flag.get_ref().get() {
                                     poller.poll().expect("failure while polling I/O");
                                 }
@@ -772,16 +771,18 @@ impl Future for Timer {
     type Output = Instant;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let mut timers = REACTOR.timers.lock();
-
         // Check if this timer has already fired.
         if Instant::now() >= self.when {
-            timers.remove(&self.key());
+            if self.inserted {
+                REACTOR.timers.lock().remove(&self.key());
+                self.inserted = false;
+            }
             return Poll::Ready(self.when);
         }
 
         // Check if this timer has been inserted into the timers map.
         if !self.inserted {
+            let mut timers = REACTOR.timers.lock();
             let mut is_earliest = false;
             if let Some((first, _)) = timers.keys().next() {
                 if self.when < *first {
@@ -1008,8 +1009,8 @@ where
 
 impl Async<TcpListener> {
     /// Creates a listener bound to the specified address.
-    pub fn bind<A: ToSocketAddrs>(addr: A) -> io::Result<Async<TcpListener>> {
-        let listener = TcpListener::bind(addr)?;
+    pub fn bind<A: ToString>(addr: A) -> io::Result<Async<TcpListener>> {
+        let listener = TcpListener::bind(addr.to_string().parse::<SocketAddr>().unwrap())?;
         listener.set_nonblocking(true)?;
         Ok(Async::nonblocking(listener)?)
     }
@@ -1032,36 +1033,15 @@ impl Async<TcpListener> {
 
 impl Async<TcpStream> {
     /// Connects to the specified address.
-    pub async fn connect<T: ToSocketAddrs + Send + 'static>(
-        addr: T,
-    ) -> io::Result<Async<TcpStream>> {
-        let addrs = Task::blocking(async move {
-            let iter = addr.to_socket_addrs()?;
-            io::Result::Ok(iter.collect::<Vec<_>>())
+    pub async fn connect<A: ToString>(addr: A) -> io::Result<Async<TcpStream>> {
+        let addr = addr.to_string();
+        let addr = Task::blocking(async move {
+            addr.to_socket_addrs()?.next().ok_or_else(|| {
+                io::Error::new(io::ErrorKind::InvalidInput, "could not resolve the address")
+            })
         })
         .await?;
 
-        let mut last_err = None;
-
-        // Try connecting to each address one by one.
-        for addr in addrs {
-            match Self::connect_to(addr).await {
-                Ok(stream) => return Ok(stream),
-                Err(err) => last_err = Some(err),
-            }
-        }
-
-        // Return the last error if at least one address was tried.
-        Err(last_err.unwrap_or_else(|| {
-            io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "could not resolve to any address",
-            )
-        }))
-    }
-
-    /// Attempts connecting to a single address.
-    async fn connect_to(addr: SocketAddr) -> io::Result<Async<TcpStream>> {
         // Create a socket.
         let domain = if addr.is_ipv6() {
             Domain::ipv6()
@@ -1096,15 +1076,16 @@ impl Async<TcpStream> {
 
 impl Async<UdpSocket> {
     /// Creates a socket bound to the specified address.
-    pub fn bind<A: ToSocketAddrs>(addr: A) -> io::Result<Async<UdpSocket>> {
-        let socket = UdpSocket::bind(addr)?;
+    pub fn bind<A: ToString>(addr: A) -> io::Result<Async<UdpSocket>> {
+        let socket = UdpSocket::bind(addr.to_string().parse::<SocketAddr>().unwrap())?;
         socket.set_nonblocking(true)?;
         Ok(Async::nonblocking(socket)?)
     }
 
     /// Sends data to the specified address.
-    pub async fn send_to<A: ToSocketAddrs>(&self, buf: &[u8], addr: A) -> io::Result<usize> {
-        self.write_with(|inner| inner.send_to(buf, &addr)).await
+    pub async fn send_to<A: Into<SocketAddr>>(&self, buf: &[u8], addr: A) -> io::Result<usize> {
+        let addr = addr.into();
+        self.write_with(|inner| inner.send_to(buf, addr)).await
     }
 
     /// Sends data to the socket's peer.
@@ -1208,7 +1189,7 @@ impl Async<UnixDatagram> {
     }
 
     /// Sends data to the socket's peer.
-    pub async fn send<A: ToSocketAddrs>(&self, buf: &[u8]) -> io::Result<usize> {
+    pub async fn send(&self, buf: &[u8]) -> io::Result<usize> {
         self.write_with(|inner| inner.send(buf)).await
     }
 
