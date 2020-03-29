@@ -6,15 +6,13 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use anyhow::{bail, Context as _, Error, Result};
-use async_tls::client::TlsStream;
-use async_tls::TlsConnector;
+use async_native_tls::TlsStream;
 use futures::prelude::*;
 use http::Uri;
 use hyper::{Body, Client, Request, Response};
-use once_cell::sync::Lazy;
 use smol::{Async, Task};
 
-async fn receive(req: Request<Body>) -> Result<Response<Body>> {
+async fn fetch(req: Request<Body>) -> Result<Response<Body>> {
     Ok(Client::builder()
         .executor(SmolExecutor)
         .build::<_, Body>(SmolConnector)
@@ -25,7 +23,7 @@ async fn receive(req: Request<Body>) -> Result<Response<Body>> {
 fn main() -> Result<()> {
     smol::run(async {
         let req = Request::get("https://www.rust-lang.org").body(Body::empty())?;
-        let resp = receive(req).await?;
+        let resp = fetch(req).await?;
         println!("{:#?}", resp);
 
         let body = resp
@@ -70,16 +68,14 @@ impl hyper::service::Service<Uri> for SmolConnector {
                 Some("http") => {
                     let addr = format!("{}:{}", uri.host().unwrap(), uri.port_u16().unwrap_or(80));
                     let stream = Async::<TcpStream>::connect(addr).await?;
-                    Ok(SmolStream::Http(stream))
+                    Ok(SmolStream::Plain(stream))
                 }
                 Some("https") => {
-                    // In case of https, establish secure TLS connection first.
-                    static TLS: Lazy<TlsConnector> = Lazy::new(|| TlsConnector::new());
-
+                    // In case of HTTPS, establish secure TLS connection first.
                     let addr = format!("{}:{}", uri.host().unwrap(), uri.port_u16().unwrap_or(443));
                     let stream = Async::<TcpStream>::connect(addr).await?;
-                    let stream = TLS.connect(host.to_string(), stream)?.await?;
-                    Ok(SmolStream::Https(stream))
+                    let stream = async_native_tls::connect(host, stream).await?;
+                    Ok(SmolStream::Tls(stream))
                 }
                 scheme => bail!("unsupported scheme: {:?}", scheme),
             }
@@ -88,8 +84,8 @@ impl hyper::service::Service<Uri> for SmolConnector {
 }
 
 enum SmolStream {
-    Http(Async<TcpStream>),
-    Https(TlsStream<Async<TcpStream>>),
+    Plain(Async<TcpStream>),
+    Tls(TlsStream<Async<TcpStream>>),
 }
 
 impl hyper::client::connect::Connection for SmolStream {
@@ -105,8 +101,8 @@ impl tokio::io::AsyncRead for SmolStream {
         buf: &mut [u8],
     ) -> Poll<io::Result<usize>> {
         match &mut *self {
-            SmolStream::Http(s) => Pin::new(s).poll_read(cx, buf),
-            SmolStream::Https(s) => Pin::new(s).poll_read(cx, buf),
+            SmolStream::Plain(s) => Pin::new(s).poll_read(cx, buf),
+            SmolStream::Tls(s) => Pin::new(s).poll_read(cx, buf),
         }
     }
 }
@@ -118,22 +114,22 @@ impl tokio::io::AsyncWrite for SmolStream {
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
         match &mut *self {
-            SmolStream::Http(s) => Pin::new(s).poll_write(cx, buf),
-            SmolStream::Https(s) => Pin::new(s).poll_write(cx, buf),
+            SmolStream::Plain(s) => Pin::new(s).poll_write(cx, buf),
+            SmolStream::Tls(s) => Pin::new(s).poll_write(cx, buf),
         }
     }
 
     fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         match &mut *self {
-            SmolStream::Http(s) => Pin::new(s).poll_flush(cx),
-            SmolStream::Https(s) => Pin::new(s).poll_flush(cx),
+            SmolStream::Plain(s) => Pin::new(s).poll_flush(cx),
+            SmolStream::Tls(s) => Pin::new(s).poll_flush(cx),
         }
     }
 
     fn poll_shutdown(mut self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<io::Result<()>> {
         match &mut *self {
-            SmolStream::Http(s) => s.get_ref().shutdown(std::net::Shutdown::Write)?,
-            SmolStream::Https(_) => {},
+            SmolStream::Plain(s) => s.get_ref().shutdown(std::net::Shutdown::Write)?,
+            SmolStream::Tls(_) => {}
         }
         Poll::Ready(Ok(()))
     }

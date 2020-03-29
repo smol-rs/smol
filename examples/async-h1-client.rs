@@ -3,14 +3,12 @@
 use std::net::TcpStream;
 
 use anyhow::{bail, Context as _, Error, Result};
-use async_tls::TlsConnector;
 use futures::prelude::*;
 use http_types::{Method, Request, Response};
-use once_cell::sync::Lazy;
 use smol::Async;
 use url::Url;
 
-async fn receive(req: Request) -> Result<Response> {
+async fn fetch(req: Request) -> Result<Response> {
     let host = req.url().host().context("cannot parse host")?.to_string();
     let port = req
         .url()
@@ -25,9 +23,8 @@ async fn receive(req: Request) -> Result<Response> {
     let resp = match req.url().scheme() {
         "http" => async_h1::connect(stream, req).await.map_err(Error::msg)?,
         "https" => {
-            // In case of https, establish secure TLS connection first.
-            static TLS: Lazy<TlsConnector> = Lazy::new(|| TlsConnector::new());
-            let stream = TLS.connect(host, stream)?.await?;
+            // In case of HTTPS, establish secure TLS connection first.
+            let stream = async_native_tls::connect(&host, stream).await?;
             async_h1::connect(stream, req).await.map_err(Error::msg)?
         }
         scheme => bail!("unsupported scheme: {}", scheme),
@@ -39,7 +36,7 @@ fn main() -> Result<()> {
     smol::run(async {
         let addr = "https://www.rust-lang.org";
         let req = Request::new(Method::Get, Url::parse(addr)?);
-        let mut resp = receive(req).await?;
+        let mut resp = fetch(req).await?;
         println!("{:#?}", resp);
 
         let mut body = Vec::new();

@@ -30,16 +30,14 @@ wepoll-binding = "1.1.0"
 [dev-dependencies]
 anyhow = "1.0.27"
 async-h1 = "1.0.1"
-async-tls = "0.6.0"
+async-native-tls = "0.3.3"
+async-tungstenite = { version = "0.4.2", features = ["async-native-tls"] }
 base64 = "0.12.0"
 http = "0.2.1"
 http-types = "1.0.1"
 hyper = { version = "0.13.4", default-features = false, features = ["stream"] }
-io-arc = "1.0.0"
 num_cpus = "1.12.0"
-pin-utils = "0.1.0-alpha.4"
-rustls = "0.16.0"
 signal-hook = "0.1.13"
 tokio = { version = "0.2.13", default-features = false, features = ["rt-threaded", "time", "macros"] }
-tokio-util = { version = "0.3.1", features = ["compat"] }
+tungstenite = "0.10.1"
 url = "2.1.1"
