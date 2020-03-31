@@ -8,4 +8,4 @@ license = "MIT OR Apache-2.0"
 
 [dependencies]
 crossbeam-utils = "0.7.0"
-futures = { version = "0.3.4", features = ["async-await"] }
+futures = { version = "0.3.4", default-features = false, features = ["std"] }

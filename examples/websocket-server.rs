@@ -45,14 +45,14 @@ fn main() -> Result<()> {
                     let (stream, _) = res?;
                     let stream = WsStream::Plain(async_tungstenite::accept_async(stream).await?);
                     let ws_host = ws_host.clone();
-                    Task::spawn(serve(stream, ws_host)).unwrap().forget();
+                    Task::spawn(serve(stream, ws_host)).unwrap().detach();
                 }
                 res = wss.accept().fuse() => {
                     let (stream, _) = res?;
                     let stream = tls.accept(stream).await?;
                     let stream = WsStream::Tls(async_tungstenite::accept_async(stream).await?);
                     let wss_host = wss_host.clone();
-                    Task::spawn(serve(stream, wss_host)).unwrap().forget();
+                    Task::spawn(serve(stream, wss_host)).unwrap().detach();
                 }
             }
         }

@@ -60,7 +60,7 @@ struct SmolExecutor;
 
 impl<F: Future + Send + 'static> hyper::rt::Executor<F> for SmolExecutor {
     fn execute(&self, fut: F) {
-        Task::spawn(async { drop(fut.await) }).forget();
+        Task::spawn(async { drop(fut.await) }).detach();
     }
 }
 
@@ -163,12 +163,14 @@ impl tokio::io::AsyncWrite for SmolStream {
         }
     }
 
-    fn poll_shutdown(mut self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<io::Result<()>> {
+    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         match &mut *self {
-            SmolStream::Plain(s) => s.get_ref().shutdown(std::net::Shutdown::Write)?,
-            SmolStream::Tls(_) => {}
-            SmolStream::Handshake(_) => {}
+            SmolStream::Plain(s) => {
+                s.get_ref().shutdown(std::net::Shutdown::Write)?;
+                Poll::Ready(Ok(()))
+            }
+            SmolStream::Tls(s) => Pin::new(s).poll_close(cx),
+            SmolStream::Handshake(_) => Poll::Ready(Ok(())),
         }
-        Poll::Ready(Ok(()))
     }
 }

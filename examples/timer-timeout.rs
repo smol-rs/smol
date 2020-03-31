@@ -14,7 +14,7 @@ async fn timeout<T>(dur: Duration, f: impl Future<Output = T>) -> Result<T> {
 
 fn main() -> Result<()> {
     smol::run(async {
-        let mut stdin = BufReader::new(smol::reader(16 * 1024, std::io::stdin()));
+        let mut stdin = BufReader::new(smol::reader(std::io::stdin()));
         let mut line = String::new();
 
         let dur = Duration::from_secs(5);

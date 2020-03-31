@@ -11,7 +11,7 @@ async-task = "1.3.1"
 crossbeam-deque = "0.7.3"
 crossbeam-queue = "0.2.1"
 crossbeam-utils = "0.7.2"
-futures = "0.3.4"
+futures = { version = "0.3.4", default-features = false, features = ["std"] }
 libc = "0.2.68"
 once_cell = "1.3.1"
 parking_lot = "0.10.0"
@@ -27,12 +27,19 @@ nix = "0.17.0"
 [target.'cfg(windows)'.dependencies]
 wepoll-binding = "1.1.0"
 
+[target.'cfg(windows)'.dev-dependencies]
+uds_windows = "0.1.4"
+
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+timerfd = "1.1.1"
+
 [dev-dependencies]
 anyhow = "1.0.27"
 async-h1 = "1.0.1"
 async-native-tls = "0.3.3"
 async-tungstenite = { version = "0.4.2", features = ["async-native-tls"] }
 base64 = "0.12.0"
+futures = "0.3.4"
 http = "0.2.1"
 http-types = "1.0.1"
 hyper = { version = "0.13.4", default-features = false, features = ["stream"] }

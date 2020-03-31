@@ -9,7 +9,8 @@ async fn sleep(dur: Duration) {
 fn main() {
     smol::run(async {
         let start = Instant::now();
+        println!("Sleeping...");
         sleep(Duration::from_secs(1)).await;
-        dbg!(start.elapsed());
+        println!("Woke up after {:?}", start.elapsed());
     })
 }

@@ -10,6 +10,7 @@ use std::task::{Context, Poll};
 use futures::io::{AsyncRead, AsyncWrite};
 use futures::task::AtomicWaker;
 
+/// Creates a bounded single-producer single-consumer pipe.
 pub fn pipe(cap: usize) -> (Reader, Writer) {
     assert!(cap > 0, "capacity must be positive");
 
@@ -44,12 +45,14 @@ pub fn pipe(cap: usize) -> (Reader, Writer) {
 
 // NOTE: Reader and Writer are !Clone + !Sync
 
+/// The reading side of a pipe.
 pub struct Reader {
     inner: Arc<Inner>,
     head: Cell<usize>,
     tail: Cell<usize>,
 }
 
+/// The writing side of a pipe.
 pub struct Writer {
     inner: Arc<Inner>,
     head: Cell<usize>,

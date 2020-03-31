@@ -54,7 +54,7 @@ fn main() -> Result<()> {
                         async_h1::accept(&http_addr, SharedIo::new(stream), serve).await
                     })
                     .unwrap()
-                    .forget();
+                    .detach();
                 }
                 res = https.accept().fuse() => {
                     let (stream, _) = res?;
@@ -64,7 +64,7 @@ fn main() -> Result<()> {
                         async_h1::accept(&https_addr, SharedIo::new(stream), serve).await
                     })
                     .unwrap()
-                    .forget();
+                    .detach();
                 }
             }
         }

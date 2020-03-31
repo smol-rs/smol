@@ -1,6 +1,5 @@
 //! A very smol and fast async runtime.
 
-#![forbid(unsafe_code)]
 #![warn(missing_docs, missing_debug_implementations, rust_2018_idioms)]
 
 #[cfg(not(any(
@@ -33,9 +32,15 @@ use std::time::{Duration, Instant};
 
 #[cfg(unix)]
 use std::{
-    os::unix::net::{SocketAddr as UnixSocketAddr, UnixDatagram, UnixListener, UnixStream},
+    os::unix::{
+        io::{AsRawFd, RawFd},
+        net::{SocketAddr as UnixSocketAddr, UnixDatagram, UnixListener, UnixStream},
+    },
     path::Path,
 };
+
+#[cfg(windows)]
+use std::os::windows::io::{AsRawSocket, FromRawSocket, RawSocket};
 
 use crossbeam_deque::{Injector, Steal, Stealer, Worker};
 use crossbeam_queue::SegQueue;
@@ -53,7 +58,7 @@ use socket2::{Domain, Protocol, Socket, Type};
 type Runnable = async_task::Task<()>;
 
 /// A spawned future.
-#[must_use = "tasks are canceled when dropped, use `.forget()` to run in the background"]
+#[must_use = "tasks are canceled when dropped, use `.detach()` to run in the background"]
 #[derive(Debug)]
 pub struct Task<T>(Option<async_task::JoinHandle<T, ()>>);
 
@@ -84,8 +89,8 @@ impl<T: 'static> Task<T> {
 }
 
 impl Task<()> {
-    /// Moves the task into the background.
-    pub fn forget(mut self) {
+    /// Detaches the task to keep running in the background.
+    pub fn detach(mut self) {
         self.0.take().unwrap();
     }
 }
@@ -158,7 +163,7 @@ pub fn run<T>(future: impl Future<Output = T>) -> T {
     EXECUTOR.processor(|proc| {
         let flag = Arc::new(
             IoFlag::create()
-                .and_then(Async::nonblocking)
+                .and_then(Async::new)
                 .expect("cannot create waker flag"),
         );
 
@@ -440,18 +445,23 @@ static THREAD_POOL: Lazy<ThreadPool> = Lazy::new(|| ThreadPool {
     cvar: Condvar::new(),
 });
 
+/// A thread pool for blocking tasks.
 struct ThreadPool {
     state: Mutex<State>,
     cvar: Condvar,
 }
 
 struct State {
+    /// Number of sleeping threads in the pool.
     idle_count: usize,
+    /// Total number of thread in the pool.
     thread_count: usize,
+    /// Runnable blocking tasks.
     queue: VecDeque<Runnable>,
 }
 
 impl ThreadPool {
+    /// Spawns a blocking task onto the thread pool.
     fn spawn<T: Send + 'static>(
         &'static self,
         future: impl Future<Output = T> + Send + 'static,
@@ -461,36 +471,44 @@ impl ThreadPool {
         Task(Some(handle))
     }
 
+    /// Runs the main loop on the current thread.
     fn run(&'static self) {
         let mut state = self.state.lock();
         loop {
             state.idle_count -= 1;
 
+            // Run tasks in the queue.
             while let Some(runnable) = state.queue.pop_front() {
                 self.spawn_more(state);
                 let _ = catch_unwind(|| runnable.run());
                 state = self.state.lock();
             }
 
+            // Put the thread to sleep until another task is scheduled.
             state.idle_count += 1;
             let timeout = Duration::from_millis(500);
 
             if self.cvar.wait_for(&mut state, timeout).timed_out() {
-                state.idle_count -= 1;
-                state.thread_count -= 1;
-                self.spawn_more(state);
-                break;
+                if state.queue.is_empty() {
+                    // If there are no tasks after a while, stop this thread.
+                    state.idle_count -= 1;
+                    state.thread_count -= 1;
+                    break;
+                }
             }
         }
     }
 
+    /// Schedules a runnable task for execution.
     fn schedule(&'static self, runnable: Runnable) {
         let mut state = self.state.lock();
         state.queue.push_back(runnable);
+        // Notify a sleeping thread and spawn more threads if needed.
         self.cvar.notify_one();
         self.spawn_more(state);
     }
 
+    /// Spawns more blocking threads if the pool is overloaded with work.
     fn spawn_more(&'static self, mut state: MutexGuard<'static, State>) {
         // If runnable tasks greatly outnumber idle threads and there aren't too many threads
         // already, then be aggressive: wake all idle threads and spawn one more thread.
@@ -511,42 +529,163 @@ macro_rules! blocking {
     };
 }
 
-/// Spawns a blocking iterator onto a thread.
-pub fn iter<I>(cap: usize, iter: I) -> piper::Receiver<I::Item>
-where
-    I: Iterator + Send + 'static,
-    I::Item: Send,
-{
-    let (s, r) = piper::chan(cap);
-    Task::blocking(async move {
-        for item in iter {
-            s.send(item).await;
+/// Creates an iterator that runs on a thread.
+pub fn iter<T: Send + 'static>(
+    iter: impl Iterator<Item = T> + Send + 'static,
+) -> impl Stream<Item = T> + Send + Unpin + 'static {
+    enum State<T, I> {
+        Idle(Option<I>),
+        Busy(piper::Receiver<T>, Task<I>),
+    }
+
+    impl<T, I> Unpin for State<T, I> {}
+
+    impl<T: Send + 'static, I: Iterator<Item = T> + Send + 'static> Stream for State<T, I> {
+        type Item = T;
+
+        fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<T>> {
+            match &mut *self {
+                State::Idle(iter) => {
+                    let mut iter = iter.take().unwrap();
+                    let (sender, receiver) = piper::chan(8 * 1024);
+                    let task = Task::blocking(async move {
+                        for item in &mut iter {
+                            sender.send(item).await;
+                        }
+                        iter
+                    });
+                    *self = State::Busy(receiver, task);
+                    self.poll_next(cx)
+                }
+                State::Busy(receiver, task) => {
+                    let opt = futures::ready!(Pin::new(receiver).poll_next(cx));
+                    if opt.is_none() {
+                        // At the end of stream, retrieve the iterator back.
+                        let iter = futures::ready!(Pin::new(task).poll(cx));
+                        *self = State::Idle(Some(iter));
+                    }
+                    Poll::Ready(opt)
+                }
+            }
         }
-    })
-    .forget();
-    r
+    }
+
+    State::Idle(Some(iter))
 }
 
-/// Spawns a blocking reader onto a thread.
-pub fn reader<R>(cap: usize, reader: R) -> piper::Reader
-where
-    R: Read + Send + 'static,
-{
-    let io = AllowStdIo::new(reader);
-    let (r, mut w) = piper::pipe(cap);
-    Task::blocking(async move { drop(futures::io::copy(io, &mut w).await) }).forget();
-    r
+/// Creates a reader that runs on a thread.
+pub fn reader(reader: impl Read + Send + 'static) -> impl AsyncRead + Send + Unpin + 'static {
+    enum State<T> {
+        Idle(Option<T>),
+        Busy(piper::Reader, Task<(io::Result<()>, T)>),
+    }
+
+    impl<T: AsyncRead + Send + Unpin + 'static> AsyncRead for State<T> {
+        fn poll_read(
+            mut self: Pin<&mut Self>,
+            cx: &mut Context<'_>,
+            buf: &mut [u8],
+        ) -> Poll<io::Result<usize>> {
+            match &mut *self {
+                State::Idle(io) => {
+                    let mut io = io.take().unwrap();
+                    let (reader, mut writer) = piper::pipe(8 * 1024 * 1024); // 8 MB
+                    let task = Task::blocking(async move {
+                        let res = futures::io::copy(&mut io, &mut writer).await;
+                        (res.map(drop), io)
+                    });
+                    *self = State::Busy(reader, task);
+                    self.poll_read(cx, buf)
+                }
+                State::Busy(reader, task) => {
+                    let n = futures::ready!(Pin::new(reader).poll_read(cx, buf))?;
+                    if n == 0 {
+                        // At the end of stream, retrieve the reader back.
+                        let (res, io) = futures::ready!(Pin::new(task).poll(cx));
+                        *self = State::Idle(Some(io));
+                        res?;
+                    }
+                    Poll::Ready(Ok(n))
+                }
+            }
+        }
+    }
+
+    let io = Box::pin(AllowStdIo::new(reader));
+    State::Idle(Some(io))
 }
 
-/// Spawns a blocking writer onto a thread.
-pub fn writer<W>(cap: usize, writer: W) -> piper::Writer
-where
-    W: Write + Send + 'static,
-{
-    let mut io = AllowStdIo::new(writer);
-    let (r, w) = piper::pipe(cap);
-    Task::blocking(async move { drop(futures::io::copy(r, &mut io).await) }).forget();
-    w
+/// Creates a writer that runs on a thread.
+pub fn writer(writer: impl Write + Send + 'static) -> impl AsyncWrite + Send + Unpin + 'static {
+    enum State<T> {
+        Idle(Option<T>),
+        Busy(Option<piper::Writer>, Task<(io::Result<()>, T)>),
+    }
+
+    impl<T: AsyncWrite + Send + Unpin + 'static> State<T> {
+        fn start(&mut self) {
+            if let State::Idle(io) = self {
+                if let Some(mut io) = io.take() {
+                    let (reader, writer) = piper::pipe(8 * 1024 * 1024); // 8 MB
+                    let task = Task::blocking(async move {
+                        match futures::io::copy(reader, &mut io).await {
+                            Ok(_) => (io.flush().await, io),
+                            Err(err) => (Err(err), io),
+                        }
+                    });
+                    *self = State::Busy(Some(writer), task);
+                }
+            }
+        }
+    }
+
+    impl<T: AsyncWrite + Send + Unpin + 'static> AsyncWrite for State<T> {
+        fn poll_write(
+            mut self: Pin<&mut Self>,
+            cx: &mut Context<'_>,
+            buf: &[u8],
+        ) -> Poll<io::Result<usize>> {
+            loop {
+                match &mut *self {
+                    State::Idle(None) => return Poll::Ready(Ok(0)),
+                    State::Idle(Some(_)) => self.start(),
+                    State::Busy(None, task) => {
+                        // The writing end of the pipe is closed, so await the task.
+                        let (res, io) = futures::ready!(Pin::new(task).poll(cx));
+                        *self = State::Idle(Some(io));
+                        res?;
+                    }
+                    State::Busy(Some(writer), _) => return Pin::new(writer).poll_write(cx, buf),
+                }
+            }
+        }
+
+        fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+            loop {
+                match &mut *self {
+                    State::Idle(None) => return Poll::Ready(Ok(())),
+                    State::Idle(Some(_)) => self.start(),
+                    State::Busy(writer, task) => {
+                        // Close the writing end of the pipe and await the task.
+                        writer.take();
+                        let (res, io) = futures::ready!(Pin::new(task).poll(cx));
+                        *self = State::Idle(Some(io));
+                        return Poll::Ready(res);
+                    }
+                }
+            }
+        }
+
+        fn poll_close(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+            // Flush and then drop the I/O handle.
+            futures::ready!(Pin::new(&mut *self).poll_flush(cx))?;
+            *self = State::Idle(None);
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    let io = AllowStdIo::new(writer);
+    State::Idle(Some(io))
 }
 
 // ----- Reactor -----
@@ -555,10 +694,11 @@ static REACTOR: Lazy<Reactor> = Lazy::new(|| Reactor::create().expect("cannot cr
 
 static INTERRUPT: Lazy<Async<IoFlag>> = Lazy::new(|| {
     IoFlag::create()
-        .and_then(Async::nonblocking)
+        .and_then(Async::new)
         .expect("cannot create interrupt flag")
 });
 
+/// A source of I/O events.
 #[derive(Debug)]
 struct Source {
     raw: sys::Raw,
@@ -567,6 +707,7 @@ struct Source {
     writers: Mutex<Vec<Waker>>,
 }
 
+/// The async I/O and timers driver.
 struct Reactor {
     sys: sys::Reactor,
     sources: Mutex<Slab<Arc<Source>>>,
@@ -589,18 +730,14 @@ impl Reactor {
     fn register(&self, raw: sys::Raw) -> io::Result<Arc<Source>> {
         let mut sources = self.sources.lock();
         let vacant = sources.vacant_entry();
-        let index = vacant.key();
-        self.sys.register(raw, index)?;
-
         let source = Arc::new(Source {
             raw,
-            index,
+            index: vacant.key(),
             readers: Mutex::new(Vec::new()),
             writers: Mutex::new(Vec::new()),
         });
-        vacant.insert(source.clone());
-
-        Ok(source)
+        self.sys.register(raw, source.index)?;
+        Ok(vacant.insert(source).clone())
     }
 
     /// Deregisters an I/O source from the reactor.
@@ -816,9 +953,14 @@ pub struct Async<T> {
 }
 
 #[cfg(unix)]
-impl<T: std::os::unix::io::AsRawFd> Async<T> {
+impl<T: AsRawFd> Async<T> {
     /// Converts a non-blocking I/O handle into an async I/O handle.
-    pub fn nonblocking(inner: T) -> io::Result<Async<T>> {
+    pub fn new(inner: T) -> io::Result<Async<T>> {
+        nix::fcntl::fcntl(
+            inner.as_raw_fd(),
+            nix::fcntl::FcntlArg::F_SETFL(nix::fcntl::OFlag::O_NONBLOCK),
+        )
+        .unwrap(); // TODO unwrap and windows
         Ok(Async {
             source: REACTOR.register(sys::Raw::new(&inner))?,
             inner: Some(Box::new(inner)),
@@ -827,9 +969,12 @@ impl<T: std::os::unix::io::AsRawFd> Async<T> {
 }
 
 #[cfg(windows)]
-impl<T: std::os::windows::io::AsRawSocket> Async<T> {
+impl<T: AsRawSocket> Async<T> {
     /// Converts a non-blocking I/O handle into an async I/O handle.
-    pub fn nonblocking(inner: T) -> io::Result<Async<T>> {
+    pub fn new(inner: T) -> io::Result<Async<T>> {
+        let socket = unsafe { Socket::from_raw_socket(inner.as_raw_socket()) };
+        mem::ManuallyDrop::new(socket).set_nonblocking(true)?;
+
         Ok(Async {
             source: REACTOR.register(sys::Raw::new(&inner))?,
             inner: Some(Box::new(inner)),
@@ -977,8 +1122,8 @@ impl<T: Write> AsyncWrite for Async<T> {
         fut.poll(cx)
     }
 
-    fn poll_close(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<io::Result<()>> {
-        Poll::Ready(Ok(()))
+    fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        self.poll_flush(cx)
     }
 }
 
@@ -1002,24 +1147,22 @@ where
         fut.poll(cx)
     }
 
-    fn poll_close(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<io::Result<()>> {
-        Poll::Ready(Ok(()))
+    fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        self.poll_flush(cx)
     }
 }
 
 impl Async<TcpListener> {
     /// Creates a listener bound to the specified address.
     pub fn bind<A: ToString>(addr: A) -> io::Result<Async<TcpListener>> {
-        let listener = TcpListener::bind(addr.to_string().parse::<SocketAddr>().unwrap())?;
-        listener.set_nonblocking(true)?;
-        Ok(Async::nonblocking(listener)?)
+        // TODO: unwrap
+        TcpListener::bind(addr.to_string().parse::<SocketAddr>().unwrap()).and_then(Async::new)
     }
 
     /// Accepts a new incoming connection.
     pub async fn accept(&self) -> io::Result<(Async<TcpStream>, SocketAddr)> {
         let (stream, addr) = self.read_with(|inner| inner.accept()).await?;
-        stream.set_nonblocking(true)?;
-        Ok((Async::nonblocking(stream)?, addr))
+        Ok((Async::new(stream)?, addr))
     }
 
     /// Returns a stream over incoming connections.
@@ -1053,7 +1196,7 @@ impl Async<TcpStream> {
         // Begin async connect and ignore the inevitable "not yet connected" error.
         socket.set_nonblocking(true)?;
         let _ = socket.connect(&addr.into());
-        let stream = Async::nonblocking(socket.into_tcp_stream())?;
+        let stream = Async::new(socket.into_tcp_stream())?;
 
         // Wait for connect to complete.
         let wait_connect = |mut stream: &TcpStream| match stream.write(&[]) {
@@ -1077,9 +1220,8 @@ impl Async<TcpStream> {
 impl Async<UdpSocket> {
     /// Creates a socket bound to the specified address.
     pub fn bind<A: ToString>(addr: A) -> io::Result<Async<UdpSocket>> {
-        let socket = UdpSocket::bind(addr.to_string().parse::<SocketAddr>().unwrap())?;
-        socket.set_nonblocking(true)?;
-        Ok(Async::nonblocking(socket)?)
+        // TODO unwrap()
+        UdpSocket::bind(addr.to_string().parse::<SocketAddr>().unwrap()).and_then(Async::new)
     }
 
     /// Sends data to the specified address.
@@ -1118,16 +1260,13 @@ impl Async<UdpSocket> {
 impl Async<UnixListener> {
     /// Creates a listener bound to the specified path.
     pub fn bind<P: AsRef<Path>>(path: P) -> io::Result<Async<UnixListener>> {
-        let listener = UnixListener::bind(path)?;
-        listener.set_nonblocking(true)?;
-        Ok(Async::nonblocking(listener)?)
+        UnixListener::bind(path).and_then(Async::new)
     }
 
     /// Accepts a new incoming connection.
     pub async fn accept(&self) -> io::Result<(Async<UnixStream>, UnixSocketAddr)> {
         let (stream, addr) = self.read_with(|inner| inner.accept()).await?;
-        stream.set_nonblocking(true)?;
-        Ok((Async::nonblocking(stream)?, addr))
+        Ok((Async::new(stream)?, addr))
     }
 
     /// Returns a stream over incoming connections.
@@ -1145,17 +1284,13 @@ impl Async<UnixListener> {
 impl Async<UnixStream> {
     /// Connects to the specified path.
     pub fn connect<P: AsRef<Path>>(path: P) -> io::Result<Async<UnixStream>> {
-        let stream = UnixStream::connect(path)?;
-        stream.set_nonblocking(true)?;
-        Ok(Async::nonblocking(stream)?)
+        UnixStream::connect(path).and_then(Async::new)
     }
 
     /// Creates an unnamed pair of connected streams.
     pub fn pair() -> io::Result<(Async<UnixStream>, Async<UnixStream>)> {
         let (stream1, stream2) = UnixStream::pair()?;
-        stream1.set_nonblocking(true)?;
-        stream2.set_nonblocking(true)?;
-        Ok((Async::nonblocking(stream1)?, Async::nonblocking(stream2)?))
+        Ok((Async::new(stream1)?, Async::new(stream2)?))
     }
 }
 
@@ -1163,24 +1298,18 @@ impl Async<UnixStream> {
 impl Async<UnixDatagram> {
     /// Creates a socket bound to the specified path.
     pub fn bind<P: AsRef<Path>>(path: P) -> io::Result<Async<UnixDatagram>> {
-        let socket = UnixDatagram::bind(path)?;
-        socket.set_nonblocking(true)?;
-        Ok(Async::nonblocking(socket)?)
+        UnixDatagram::bind(path).and_then(Async::new)
     }
 
     /// Creates a socket not bound to any address.
     pub fn unbound() -> io::Result<Async<UnixDatagram>> {
-        let socket = UnixDatagram::unbound()?;
-        socket.set_nonblocking(true)?;
-        Ok(Async::nonblocking(socket)?)
+        UnixDatagram::unbound().and_then(Async::new)
     }
 
     /// Creates an unnamed pair of connected sockets.
     pub fn pair() -> io::Result<(Async<UnixDatagram>, Async<UnixDatagram>)> {
         let (socket1, socket2) = UnixDatagram::pair()?;
-        socket1.set_nonblocking(true)?;
-        socket2.set_nonblocking(true)?;
-        Ok((Async::nonblocking(socket1)?, Async::nonblocking(socket2)?))
+        Ok((Async::new(socket1)?, Async::new(socket2)?))
     }
 
     /// Sends data to the specified address.
@@ -1300,15 +1429,15 @@ impl IoFlag {
 }
 
 #[cfg(unix)]
-impl std::os::unix::io::AsRawFd for IoFlag {
-    fn as_raw_fd(&self) -> std::os::unix::io::RawFd {
+impl AsRawFd for IoFlag {
+    fn as_raw_fd(&self) -> RawFd {
         self.socket_wakeup.as_raw_fd()
     }
 }
 
 #[cfg(windows)]
-impl std::os::windows::io::AsRawSocket for IoFlag {
-    fn as_raw_socket(&self) -> std::os::windows::io::RawSocket {
+impl AsRawSocket for IoFlag {
+    fn as_raw_socket(&self) -> RawSocket {
         self.socket_wakeup.as_raw_socket()
     }
 }

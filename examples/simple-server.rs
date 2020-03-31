@@ -9,17 +9,18 @@
 // 2. openssl pkcs12 -export -out identity.pfx -inkey localhost/key.pem -in localhost/cert.pem
 
 use std::fs;
-use std::net::{Shutdown, TcpListener, TcpStream};
+use std::net::{TcpListener, TcpStream};
 use std::path::Path;
 
 use anyhow::Result;
 use async_native_tls::TlsAcceptor;
 use futures::prelude::*;
-use smol::{Async, Task, blocking};
+use smol::{blocking, Async, Task};
 
 const RESPONSE: &[u8] = br#"
 HTTP/1.1 200 OK
 Content-Type: text/html
+Content-Length: 47
 
 <!DOCTYPE html><html><body>Hello!</body></html>
 "#;
@@ -29,7 +30,6 @@ async fn serve(mut stream: Async<TcpStream>, tls: Option<TlsAcceptor>) -> Result
         None => {
             println!("Serving http://{}", stream.get_ref().local_addr()?);
             stream.write_all(RESPONSE).await?;
-            stream.get_ref().shutdown(Shutdown::Both)?;
         }
         Some(tls) => {
             println!("Serving https://{}", stream.get_ref().local_addr()?);
@@ -57,11 +57,11 @@ fn main() -> Result<()> {
             futures::select! {
                 res = http.accept().fuse() => {
                     let (stream, _) = res?;
-                    Task::spawn(serve(stream, None)).unwrap().forget();
+                    Task::spawn(serve(stream, None)).unwrap().detach();
                 }
                 res = https.accept().fuse() => {
                     let (stream, _) = res?;
-                    Task::spawn(serve(stream, Some(tls.clone()))).unwrap().forget();
+                    Task::spawn(serve(stream, Some(tls.clone()))).unwrap().detach();
                 }
             }
         }

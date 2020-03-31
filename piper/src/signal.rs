@@ -9,8 +9,6 @@ use std::ptr::NonNull;
 use std::sync::atomic::{self, AtomicPtr, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::task::{Context, Poll, Waker};
-use std::thread::{self, Thread};
-use std::time::{Duration, Instant};
 
 /// Set when there is at least one watcher that has already been notified.
 const NOTIFIED: usize = 1 << 0;
@@ -22,7 +20,7 @@ struct Inner {
     /// Holds three bits: `LOCKED`, `NOTIFIED`, and `NOTIFIABLE`.
     flags: AtomicUsize,
 
-    /// A linked list holding blocked tasks or threads.
+    /// A linked list holding blocked tasks.
     list: Mutex<List>,
 }
 
@@ -152,71 +150,6 @@ pub struct SignalListener {
 unsafe impl Send for SignalListener {}
 unsafe impl Sync for SignalListener {}
 
-impl SignalListener {
-    /// Blocks until a notification is received.
-    pub fn wait(self) {
-        self.wait_internal(None);
-    }
-
-    /// Blocks until a notification is received or the timeout is reached.
-    ///
-    /// Returns `true` if a notification was received.
-    pub fn wait_timeout(self, timeout: Duration) -> bool {
-        self.wait_internal(Some(timeout))
-    }
-
-    /// Blocks the current thread with an optional timeout.
-    ///
-    /// Returns `true` if a notification was received.
-    fn wait_internal(mut self, mut timeout: Option<Duration>) -> bool {
-        let entry = match self.entry.take() {
-            None => unreachable!("cannot wait twice on a `SignalListener`"),
-            Some(entry) => entry,
-        };
-
-        {
-            let mut inner = self.inner.lock();
-            let e = unsafe { entry.as_ref() };
-
-            match e.state.replace(State::Notified) {
-                State::Notified => return inner.remove(entry).is_notified(),
-                _ => e.state.set(State::Waiting(thread::current())),
-            }
-        }
-
-        loop {
-            match &mut timeout {
-                None => thread::park(),
-                Some(t) => {
-                    let now = Instant::now();
-                    thread::park_timeout(*t);
-
-                    let elapsed = now.elapsed();
-                    if elapsed >= *t {
-                        *t = Duration::from_secs(0);
-                    } else {
-                        *t -= elapsed;
-                    }
-                }
-            }
-
-            let mut inner = self.inner.lock();
-            let e = unsafe { entry.as_ref() };
-
-            if let Some(t) = timeout {
-                if t == Duration::from_secs(0) {
-                    return inner.remove(entry).is_notified();
-                }
-            }
-
-            match e.state.replace(State::Notified) {
-                State::Notified => return inner.remove(entry).is_notified(),
-                state => e.state.set(state),
-            }
-        }
-    }
-}
-
 impl Future for SignalListener {
     type Output = ();
 
@@ -239,9 +172,6 @@ impl Future for SignalListener {
             }
             State::Created => state.set(State::Polling(cx.waker().clone())),
             State::Polling(w) => state.set(State::Polling(w)),
-            State::Waiting(_) => {
-                unreachable!("cannot poll and wait on `SignalListener` at the same time")
-            }
         }
 
         Poll::Pending
@@ -312,16 +242,13 @@ enum State {
 
     /// A task is polling it.
     Polling(Waker),
-
-    /// A thread is blocked on it.
-    Waiting(Thread),
 }
 
 impl State {
     fn is_notified(&self) -> bool {
         match self {
             State::Notified => true,
-            State::Created | State::Polling(_) | State::Waiting(_) => false,
+            State::Created | State::Polling(_) => false,
         }
     }
 }
@@ -418,7 +345,6 @@ impl List {
                 State::Notified => {}
                 State::Created => {}
                 State::Polling(w) => w.wake(),
-                State::Waiting(t) => t.unpark(),
             }
 
             if !is_notified {
