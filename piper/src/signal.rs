@@ -9,6 +9,7 @@ use std::ptr::NonNull;
 use std::sync::atomic::{self, AtomicPtr, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::task::{Context, Poll, Waker};
+use std::thread::{self, Thread};
 
 /// Set when there is at least one watcher that has already been notified.
 const NOTIFIED: usize = 1 << 0;
@@ -20,7 +21,7 @@ struct Inner {
     /// Holds three bits: `LOCKED`, `NOTIFIED`, and `NOTIFIABLE`.
     flags: AtomicUsize,
 
-    /// A linked list holding blocked tasks.
+    /// A linked list holding blocked tasks or threads.
     list: Mutex<List>,
 }
 
@@ -150,6 +151,44 @@ pub struct SignalListener {
 unsafe impl Send for SignalListener {}
 unsafe impl Sync for SignalListener {}
 
+impl SignalListener {
+    /// Blocks until a notification is received.
+    pub fn wait(mut self) {
+        let entry = match self.entry.take() {
+            None => unreachable!("cannot wait twice on a `SignalListener`"),
+            Some(entry) => entry,
+        };
+
+        {
+            let mut inner = self.inner.lock();
+            let e = unsafe { entry.as_ref() };
+
+            match e.state.replace(State::Notified) {
+                State::Notified => {
+                    inner.remove(entry);
+                    return;
+                }
+                _ => e.state.set(State::Waiting(thread::current())),
+            }
+        }
+
+        loop {
+            thread::park();
+
+            let mut inner = self.inner.lock();
+            let e = unsafe { entry.as_ref() };
+
+            match e.state.replace(State::Notified) {
+                State::Notified => {
+                    inner.remove(entry);
+                    return;
+                }
+                state => e.state.set(state),
+            }
+        }
+    }
+}
+
 impl Future for SignalListener {
     type Output = ();
 
@@ -172,6 +211,9 @@ impl Future for SignalListener {
             }
             State::Created => state.set(State::Polling(cx.waker().clone())),
             State::Polling(w) => state.set(State::Polling(w)),
+            State::Waiting(_) => {
+                unreachable!("cannot poll and wait on `SignalListener` at the same time")
+            }
         }
 
         Poll::Pending
@@ -242,13 +284,16 @@ enum State {
 
     /// A task is polling it.
     Polling(Waker),
+
+    /// A thread is blocked on it.
+    Waiting(Thread),
 }
 
 impl State {
     fn is_notified(&self) -> bool {
         match self {
             State::Notified => true,
-            State::Created | State::Polling(_) => false,
+            State::Created | State::Polling(_) | State::Waiting(_) => false,
         }
     }
 }
@@ -345,6 +390,7 @@ impl List {
                 State::Notified => {}
                 State::Created => {}
                 State::Polling(w) => w.wake(),
+                State::Waiting(t) => t.unpark(),
             }
 
             if !is_notified {

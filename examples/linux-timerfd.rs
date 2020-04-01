@@ -15,6 +15,7 @@ fn main() -> std::io::Result<()> {
         }
     }
 
+    /// Sleeps using a `TimerFd`.
     async fn sleep(dur: Duration) -> io::Result<()> {
         // Create a timer.
         let mut timer = TimerFd::new()?;

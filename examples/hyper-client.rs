@@ -33,8 +33,8 @@ fn main() -> Result<()> {
                 Ok(body)
             })
             .await?;
-        println!("{}", String::from_utf8_lossy(&body));
 
+        println!("{}", String::from_utf8_lossy(&body));
         Ok(())
     })
 }

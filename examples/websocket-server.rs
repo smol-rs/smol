@@ -17,8 +17,35 @@ use tungstenite::Message;
 async fn serve(mut stream: WsStream, host: String) -> Result<()> {
     println!("Serving {}", host);
     let msg = stream.next().await.context("expected a message")??;
-    stream.send(Message::text(format!("Server echoes: {}", msg))).await?;
+    stream
+        .send(Message::text(format!("Server echoes: {}", msg)))
+        .await?;
     Ok(())
+}
+
+async fn listen(listener: Async<TcpListener>, tls: Option<TlsAcceptor>) -> Result<()> {
+    let host = match &tls {
+        None => format!("ws://{}", listener.get_ref().local_addr()?),
+        Some(_) => format!("wss://{}", listener.get_ref().local_addr()?),
+    };
+    println!("Listening on {}", host);
+
+    loop {
+        let (stream, _) = listener.accept().await?;
+        let host = host.clone();
+
+        match &tls {
+            None => {
+                let stream = WsStream::Plain(async_tungstenite::accept_async(stream).await?);
+                Task::spawn(serve(stream, host.clone())).unwrap().detach();
+            }
+            Some(tls) => {
+                let stream = tls.accept(stream).await?;
+                let stream = WsStream::Tls(async_tungstenite::accept_async(stream).await?);
+                Task::spawn(serve(stream, host.clone())).unwrap().detach();
+            }
+        }
+    }
 }
 
 fn main() -> Result<()> {
@@ -32,30 +59,11 @@ fn main() -> Result<()> {
         let identity = blocking!(fs::read(path))?;
         let tls = TlsAcceptor::new(&identity[..], "password").await?;
 
-        let ws = Async::<TcpListener>::bind("127.0.0.1:9000")?;
-        let wss = Async::<TcpListener>::bind("127.0.0.1:9001")?;
-        let ws_host = format!("ws://{}", ws.get_ref().local_addr()?);
-        let wss_host = format!("wss://{}", wss.get_ref().local_addr()?);
-        println!("Listening on {}", ws_host);
-        println!("Listening on {}", wss_host);
+        let ws = listen(Async::<TcpListener>::bind("127.0.0.1:9000")?, None);
+        let wss = listen(Async::<TcpListener>::bind("127.0.0.1:9001")?, Some(tls));
+        future::try_join(ws, wss).await?;
 
-        loop {
-            futures::select! {
-                res = ws.accept().fuse() => {
-                    let (stream, _) = res?;
-                    let stream = WsStream::Plain(async_tungstenite::accept_async(stream).await?);
-                    let ws_host = ws_host.clone();
-                    Task::spawn(serve(stream, ws_host)).unwrap().detach();
-                }
-                res = wss.accept().fuse() => {
-                    let (stream, _) = res?;
-                    let stream = tls.accept(stream).await?;
-                    let stream = WsStream::Tls(async_tungstenite::accept_async(stream).await?);
-                    let wss_host = wss_host.clone();
-                    Task::spawn(serve(stream, wss_host)).unwrap().detach();
-                }
-            }
-        }
+        Ok(())
     })
 }
 

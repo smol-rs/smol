@@ -42,28 +42,27 @@ async fn serve(mut stream: Async<TcpStream>, tls: Option<TlsAcceptor>) -> Result
     Ok(())
 }
 
+async fn listen(listener: Async<TcpListener>, tls: Option<TlsAcceptor>) -> Result<()> {
+    match &tls {
+        None => println!("Listening on http://{}", listener.get_ref().local_addr()?),
+        Some(_) => println!("Listening on https://{}", listener.get_ref().local_addr()?),
+    }
+    loop {
+        let (stream, _) = listener.accept().await?;
+        Task::spawn(serve(stream, tls.clone())).unwrap().detach();
+    }
+}
+
 fn main() -> Result<()> {
     smol::run(async {
         let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("identity.pfx");
         let identity = blocking!(fs::read(path))?;
         let tls = TlsAcceptor::new(&identity[..], "password").await?;
 
-        let http = Async::<TcpListener>::bind("127.0.0.1:8000")?;
-        let https = Async::<TcpListener>::bind("127.0.0.1:8001")?;
-        println!("Listening on http://{}", http.get_ref().local_addr()?);
-        println!("Listening on https://{}", https.get_ref().local_addr()?);
+        let http = listen(Async::<TcpListener>::bind("127.0.0.1:8000")?, None);
+        let https = listen(Async::<TcpListener>::bind("127.0.0.1:8001")?, Some(tls));
+        future::try_join(http, https).await?;
 
-        loop {
-            futures::select! {
-                res = http.accept().fuse() => {
-                    let (stream, _) = res?;
-                    Task::spawn(serve(stream, None)).unwrap().detach();
-                }
-                res = https.accept().fuse() => {
-                    let (stream, _) = res?;
-                    Task::spawn(serve(stream, Some(tls.clone()))).unwrap().detach();
-                }
-            }
-        }
+        Ok(())
     })
 }

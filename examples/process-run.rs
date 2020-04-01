@@ -1,7 +1,7 @@
 use std::env;
-use std::io;
-use std::io::prelude::*;
 use std::process::Command;
+
+use futures::io;
 
 fn main() -> io::Result<()> {
     smol::run(async {
@@ -10,11 +10,8 @@ fn main() -> io::Result<()> {
         for arg in args {
             cmd.arg(arg);
         }
-        let out = smol::blocking!(cmd.output())?;
 
-        println!("{}", out.status);
-        io::stdout().write_all(&out.stdout)?;
-        io::stdout().write_all(&out.stderr)?;
+        println!("{}", smol::blocking!(cmd.output())?.status);
         Ok(())
     })
 }

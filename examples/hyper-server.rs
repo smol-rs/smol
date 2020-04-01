@@ -18,6 +18,24 @@ async fn serve(req: Request<Body>, host: String) -> Result<Response<Body>> {
     Ok(Response::new(Body::from("Hello from hyper!")))
 }
 
+async fn listen(listener: Async<TcpListener>, tls: Option<TlsAcceptor>) -> Result<()> {
+    let host = &match tls {
+        None => format!("http://{}", listener.get_ref().local_addr()?),
+        Some(_) => format!("https://{}", listener.get_ref().local_addr()?),
+    };
+    println!("Listening on {}", host);
+
+    Server::builder(SmolListener::new(listener, tls))
+        .executor(SmolExecutor)
+        .serve(make_service_fn(move |_| {
+            let host = host.clone();
+            async { Ok::<_, Error>(service_fn(move |req| serve(req, host.clone()))) }
+        }))
+        .await?;
+
+    Ok(())
+}
+
 fn main() -> Result<()> {
     // Create a thread pool.
     for _ in 0..num_cpus::get_physical().max(1) {
@@ -29,28 +47,10 @@ fn main() -> Result<()> {
         let identity = blocking!(fs::read(path))?;
         let tls = TlsAcceptor::new(&identity[..], "password").await?;
 
-        let http = Async::<TcpListener>::bind("127.0.0.1:8000")?;
-        let https = Async::<TcpListener>::bind("127.0.0.1:8001")?;
-        let http_host = format!("http://{}", http.get_ref().local_addr()?);
-        let https_host = format!("https://{}", https.get_ref().local_addr()?);
-        println!("Listening on {}", http_host);
-        println!("Listening on {}", https_host);
-
-        let http = Server::builder(SmolListener::http(http))
-            .executor(SmolExecutor)
-            .serve(make_service_fn(move |_| {
-                let http_host = http_host.clone();
-                async { Ok::<_, Error>(service_fn(move |req| serve(req, http_host.clone()))) }
-            }));
-
-        let https = Server::builder(SmolListener::https(https, tls))
-            .executor(SmolExecutor)
-            .serve(make_service_fn(move |_| {
-                let https_host = https_host.clone();
-                async { Ok::<_, Error>(service_fn(move |req| serve(req, https_host.clone()))) }
-            }));
-
+        let http = listen(Async::<TcpListener>::bind("127.0.0.1:8000")?, None);
+        let https = listen(Async::<TcpListener>::bind("127.0.0.1:8001")?, Some(tls));
         future::try_join(http, https).await?;
+
         Ok(())
     })
 }
@@ -70,13 +70,7 @@ struct SmolListener {
 }
 
 impl SmolListener {
-    fn http(listener: Async<TcpListener>) -> Self {
-        let tls = None;
-        Self { listener, tls }
-    }
-
-    fn https(listener: Async<TcpListener>, tls: TlsAcceptor) -> Self {
-        let tls = Some(tls);
+    fn new(listener: Async<TcpListener>, tls: Option<TlsAcceptor>) -> Self {
         Self { listener, tls }
     }
 }

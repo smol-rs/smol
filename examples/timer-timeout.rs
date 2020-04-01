@@ -1,14 +1,16 @@
 use std::time::Duration;
 
 use anyhow::{bail, Result};
+use futures::future::Either;
 use futures::io::BufReader;
 use futures::prelude::*;
 use smol::Timer;
 
 async fn timeout<T>(dur: Duration, f: impl Future<Output = T>) -> Result<T> {
-    futures::select! {
-        res = f.fuse() => Ok(res),
-        _ = Timer::after(dur).fuse() => bail!("timed out"),
+    futures::pin_mut!(f);
+    match future::select(f, Timer::after(dur)).await {
+        Either::Left((out, _)) => Ok(out),
+        Either::Right(_) => bail!("timed out"),
     }
 }
 

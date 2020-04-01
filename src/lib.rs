@@ -45,6 +45,7 @@ use std::os::windows::io::{AsRawSocket, FromRawSocket, RawSocket};
 use crossbeam_deque::{Injector, Steal, Stealer, Worker};
 use crossbeam_queue::SegQueue;
 use crossbeam_utils::sync::{Parker, ShardedLock};
+use futures::future::Either;
 use futures::io::AllowStdIo;
 use futures::prelude::*;
 use once_cell::sync::Lazy;
@@ -147,7 +148,7 @@ pub fn block_on<T>(future: impl Future<Output = T>) -> T {
         // Panic if `block_on()` is called recursively.
         let (parker, waker) = &mut *cache.try_borrow_mut().ok().expect("recursive `block_on()`");
 
-        pin_utils::pin_mut!(future);
+        futures::pin_mut!(future);
         let cx = &mut Context::from_waker(&waker);
         loop {
             match future.as_mut().poll(cx) {
@@ -171,7 +172,7 @@ pub fn run<T>(future: impl Future<Output = T>) -> T {
         let w = async_task::waker_fn(move || f.get_ref().set());
         let cx = &mut Context::from_waker(&w);
 
-        pin_utils::pin_mut!(future);
+        futures::pin_mut!(future);
 
         loop {
             flag.get_ref().clear();
@@ -185,12 +186,13 @@ pub fn run<T>(future: impl Future<Output = T>) -> T {
                     REACTOR.poll_quick().expect("failure while polling I/O");
                 } else {
                     block_on(async {
-                        futures::select! {
-                            _ = flag.ready().fuse() => {}
-                            mut poller = REACTOR.lock().fuse() => {
-                                if !flag.get_ref().get() {
-                                    poller.poll().expect("failure while polling I/O");
-                                }
+                        let lock = REACTOR.lock();
+                        let ready = flag.ready();
+                        futures::pin_mut!(lock);
+                        futures::pin_mut!(ready);
+                        if let Either::Left((mut poller, _)) = future::select(lock, ready).await {
+                            if !flag.get_ref().get() {
+                                poller.poll().expect("failure while polling I/O");
                             }
                         }
                     });
@@ -956,11 +958,17 @@ pub struct Async<T> {
 impl<T: AsRawFd> Async<T> {
     /// Converts a non-blocking I/O handle into an async I/O handle.
     pub fn new(inner: T) -> io::Result<Async<T>> {
+        // Put the I/O handle into non-blocking mode.
         nix::fcntl::fcntl(
             inner.as_raw_fd(),
             nix::fcntl::FcntlArg::F_SETFL(nix::fcntl::OFlag::O_NONBLOCK),
         )
-        .unwrap(); // TODO unwrap and windows
+        .map_err(|err| match err {
+            nix::Error::Sys(code) => code.into(),
+            err => io::Error::new(io::ErrorKind::Other, Box::new(err)),
+        })?;
+
+        // Register the I/O handle in the reactor.
         Ok(Async {
             source: REACTOR.register(sys::Raw::new(&inner))?,
             inner: Some(Box::new(inner)),
@@ -972,9 +980,11 @@ impl<T: AsRawFd> Async<T> {
 impl<T: AsRawSocket> Async<T> {
     /// Converts a non-blocking I/O handle into an async I/O handle.
     pub fn new(inner: T) -> io::Result<Async<T>> {
+        // Put the I/O handle into non-blocking mode.
         let socket = unsafe { Socket::from_raw_socket(inner.as_raw_socket()) };
         mem::ManuallyDrop::new(socket).set_nonblocking(true)?;
 
+        // Register the I/O handle in the reactor.
         Ok(Async {
             source: REACTOR.register(sys::Raw::new(&inner))?,
             inner: Some(Box::new(inner)),
@@ -1085,7 +1095,7 @@ impl<T: Read> AsyncRead for Async<T> {
         buf: &mut [u8],
     ) -> Poll<io::Result<usize>> {
         let fut = self.read_with_mut(|inner| inner.read(buf));
-        pin_utils::pin_mut!(fut);
+        futures::pin_mut!(fut);
         fut.poll(cx)
     }
 }
@@ -1100,7 +1110,7 @@ where
         buf: &mut [u8],
     ) -> Poll<io::Result<usize>> {
         let fut = self.read_with(|inner| (&*inner).read(buf));
-        pin_utils::pin_mut!(fut);
+        futures::pin_mut!(fut);
         fut.poll(cx)
     }
 }
@@ -1112,13 +1122,13 @@ impl<T: Write> AsyncWrite for Async<T> {
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
         let fut = self.write_with_mut(|inner| inner.write(buf));
-        pin_utils::pin_mut!(fut);
+        futures::pin_mut!(fut);
         fut.poll(cx)
     }
 
     fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         let fut = self.write_with_mut(|inner| inner.flush());
-        pin_utils::pin_mut!(fut);
+        futures::pin_mut!(fut);
         fut.poll(cx)
     }
 
@@ -1137,13 +1147,13 @@ where
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
         let fut = self.write_with(|inner| (&*inner).write(buf));
-        pin_utils::pin_mut!(fut);
+        futures::pin_mut!(fut);
         fut.poll(cx)
     }
 
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         let fut = self.write_with(|inner| (&*inner).flush());
-        pin_utils::pin_mut!(fut);
+        futures::pin_mut!(fut);
         fut.poll(cx)
     }
 
