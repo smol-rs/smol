@@ -22,7 +22,7 @@ use std::fmt::Debug;
 use std::io::{self, Read, Write};
 use std::mem;
 use std::net::{SocketAddr, TcpListener, TcpStream, ToSocketAddrs, UdpSocket};
-use std::panic::catch_unwind;
+use std::panic;
 use std::pin::Pin;
 use std::sync::atomic::{self, AtomicBool, Ordering};
 use std::sync::Arc;
@@ -42,16 +42,16 @@ use std::{
 #[cfg(windows)]
 use std::os::windows::io::{AsRawSocket, FromRawSocket, RawSocket};
 
-use crossbeam_deque::{Injector, Steal, Stealer, Worker};
-use crossbeam_queue::SegQueue;
-use crossbeam_utils::sync::{Parker, ShardedLock};
+use crossbeam::deque::{Injector, Steal, Stealer, Worker};
+use crossbeam::queue::SegQueue;
+use crossbeam::sync::{Parker, ShardedLock};
 use futures::future::Either;
 use futures::io::AllowStdIo;
 use futures::prelude::*;
 use once_cell::sync::Lazy;
-use parking_lot::{Condvar, Mutex, MutexGuard};
 use slab::Slab;
 use socket2::{Domain, Protocol, Socket, Type};
+use std::sync::{Condvar, Mutex, MutexGuard};
 
 // ----- Task -----
 
@@ -318,7 +318,7 @@ impl Executor {
     }
 
     /// TODO
-    fn processor<T>(&self, f: impl FnOnce(&Processor) -> T) -> T {
+    fn processor<T>(&self, run: impl FnOnce(&Processor) -> T) -> T {
         let id = thread::current().id();
 
         PROCESSOR.with(|proc| {
@@ -331,17 +331,21 @@ impl Executor {
             }
             proc.is_registered.set(true);
 
-            // Unregister the processor at the end of this scope.
-            scopeguard::defer! {{
-                let id = thread::current().id();
-                self.stealers.write().unwrap().remove(&id);
-                while let Some(r) = proc.worker.pop() {
-                    self.injector.push(r);
-                }
-                proc.is_registered.set(false);
-            }}
+            // Run the processor.
+            let res = panic::catch_unwind(panic::AssertUnwindSafe(|| run(proc)));
 
-            f(proc)
+            // Unregister the processor.
+            let id = thread::current().id();
+            self.stealers.write().unwrap().remove(&id);
+            while let Some(r) = proc.worker.pop() {
+                self.injector.push(r);
+            }
+            proc.is_registered.set(false);
+
+            match res {
+                Ok(t) => t,
+                Err(err) => panic::resume_unwind(err),
+            }
         })
     }
 }
@@ -475,35 +479,35 @@ impl ThreadPool {
 
     /// Runs the main loop on the current thread.
     fn run(&'static self) {
-        let mut state = self.state.lock();
+        let mut state = self.state.lock().unwrap();
         loop {
             state.idle_count -= 1;
 
             // Run tasks in the queue.
             while let Some(runnable) = state.queue.pop_front() {
                 self.spawn_more(state);
-                let _ = catch_unwind(|| runnable.run());
-                state = self.state.lock();
+                let _ = panic::catch_unwind(|| runnable.run());
+                state = self.state.lock().unwrap();
             }
 
             // Put the thread to sleep until another task is scheduled.
             state.idle_count += 1;
             let timeout = Duration::from_millis(500);
+            let (s, res) = self.cvar.wait_timeout(state, timeout).unwrap();
+            state = s;
 
-            if self.cvar.wait_for(&mut state, timeout).timed_out() {
-                if state.queue.is_empty() {
-                    // If there are no tasks after a while, stop this thread.
-                    state.idle_count -= 1;
-                    state.thread_count -= 1;
-                    break;
-                }
+            if res.timed_out() && state.queue.is_empty() {
+                // If there are no tasks after a while, stop this thread.
+                state.idle_count -= 1;
+                state.thread_count -= 1;
+                break;
             }
         }
     }
 
     /// Schedules a runnable task for execution.
     fn schedule(&'static self, runnable: Runnable) {
-        let mut state = self.state.lock();
+        let mut state = self.state.lock().unwrap();
         state.queue.push_back(runnable);
         // Notify a sleeping thread and spawn more threads if needed.
         self.cvar.notify_one();
@@ -618,6 +622,10 @@ pub fn reader(reader: impl Read + Send + 'static) -> impl AsyncRead + Send + Unp
 }
 
 /// Creates a writer that runs on a thread.
+///
+/// Make sure to flush before dropping the writer.
+///
+/// TODO
 pub fn writer(writer: impl Write + Send + 'static) -> impl AsyncWrite + Send + Unpin + 'static {
     enum State<T> {
         Idle(Option<T>),
@@ -705,16 +713,16 @@ static INTERRUPT: Lazy<Async<IoFlag>> = Lazy::new(|| {
 struct Source {
     raw: sys::Raw,
     index: usize,
-    readers: Mutex<Vec<Waker>>,
-    writers: Mutex<Vec<Waker>>,
+    readers: piper::Lock<Vec<Waker>>,
+    writers: piper::Lock<Vec<Waker>>,
 }
 
 /// The async I/O and timers driver.
 struct Reactor {
     sys: sys::Reactor,
-    sources: Mutex<Slab<Arc<Source>>>,
+    sources: piper::Lock<Slab<Arc<Source>>>,
     events: piper::Mutex<sys::Events>,
-    timers: Mutex<BTreeMap<(Instant, usize), Waker>>,
+    timers: piper::Lock<BTreeMap<(Instant, usize), Waker>>,
 }
 
 impl Reactor {
@@ -722,9 +730,9 @@ impl Reactor {
     fn create() -> io::Result<Reactor> {
         Ok(Reactor {
             sys: sys::Reactor::create()?,
-            sources: Mutex::new(Slab::new()),
+            sources: piper::Lock::new(Slab::new()),
             events: piper::Mutex::new(sys::Events::new()),
-            timers: Mutex::new(BTreeMap::new()),
+            timers: piper::Lock::new(BTreeMap::new()),
         })
     }
 
@@ -735,8 +743,8 @@ impl Reactor {
         let source = Arc::new(Source {
             raw,
             index: vacant.key(),
-            readers: Mutex::new(Vec::new()),
-            writers: Mutex::new(Vec::new()),
+            readers: piper::Lock::new(Vec::new()),
+            writers: piper::Lock::new(Vec::new()),
         });
         self.sys.register(raw, source.index)?;
         Ok(vacant.insert(source).clone())
@@ -1011,8 +1019,8 @@ impl<T> Async<T> {
     }
 
     /// Converts a non-blocking read into an async operation.
-    pub async fn read_with<R>(&self, f: impl FnMut(&T) -> io::Result<R>) -> io::Result<R> {
-        let mut f = f;
+    pub async fn read_with<R>(&self, try_read: impl FnMut(&T) -> io::Result<R>) -> io::Result<R> {
+        let mut f = try_read;
         let mut inner = self.inner.as_ref().unwrap();
         let wakers = &self.source.readers;
         future::poll_fn(|cx| Self::poll_io(cx, |s| f(s), &mut inner, wakers)).await
@@ -1021,17 +1029,17 @@ impl<T> Async<T> {
     /// Converts a non-blocking read into an async operation.
     pub async fn read_with_mut<R>(
         &mut self,
-        f: impl FnMut(&mut T) -> io::Result<R>,
+        try_read: impl FnMut(&mut T) -> io::Result<R>,
     ) -> io::Result<R> {
-        let mut f = f;
+        let mut f = try_read;
         let mut inner = self.inner.as_mut().unwrap();
         let wakers = &self.source.readers;
         future::poll_fn(|cx| Self::poll_io(cx, |s| f(s), &mut inner, wakers)).await
     }
 
     /// Converts a non-blocking write into an async operation.
-    pub async fn write_with<R>(&self, f: impl FnMut(&T) -> io::Result<R>) -> io::Result<R> {
-        let mut f = f;
+    pub async fn write_with<R>(&self, try_write: impl FnMut(&T) -> io::Result<R>) -> io::Result<R> {
+        let mut f = try_write;
         let mut inner = self.inner.as_ref().unwrap();
         let wakers = &self.source.writers;
         future::poll_fn(|cx| Self::poll_io(cx, |s| f(s), &mut inner, wakers)).await
@@ -1040,9 +1048,9 @@ impl<T> Async<T> {
     /// Converts a non-blocking write into an async operation.
     pub async fn write_with_mut<R>(
         &mut self,
-        f: impl FnMut(&mut T) -> io::Result<R>,
+        try_write: impl FnMut(&mut T) -> io::Result<R>,
     ) -> io::Result<R> {
-        let mut f = f;
+        let mut f = try_write;
         let mut inner = self.inner.as_mut().unwrap();
         let wakers = &self.source.writers;
         future::poll_fn(|cx| Self::poll_io(cx, |s| f(s), &mut inner, wakers)).await
@@ -1052,7 +1060,7 @@ impl<T> Async<T> {
         cx: &mut Context<'_>,
         mut f: impl FnMut(&mut I) -> io::Result<R>,
         inner: &mut I,
-        wakers: &Mutex<Vec<Waker>>,
+        wakers: &piper::Lock<Vec<Waker>>,
     ) -> Poll<io::Result<R>> {
         // Attempt the non-blocking operation.
         match f(inner) {

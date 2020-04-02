@@ -1,4 +1,5 @@
 use std::cell::UnsafeCell;
+use std::fmt;
 use std::ops::{Deref, DerefMut};
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -6,6 +7,7 @@ use std::task::{Context, Poll};
 
 use crate::signal::Signal;
 
+use crossbeam_utils::Backoff;
 use futures::io::{self, AsyncRead, AsyncWrite};
 
 pub struct Lock<T> {
@@ -29,8 +31,15 @@ impl<T> Lock<T> {
     pub fn lock(&self) -> LockGuard<'_, T> {
         loop {
             // Try locking the lock.
-            if let Some(guard) = self.try_lock() {
-                return guard;
+            let backoff = Backoff::new();
+            loop {
+                if let Some(guard) = self.try_lock() {
+                    return guard;
+                }
+                if backoff.is_completed() {
+                    break;
+                }
+                backoff.snooze();
             }
 
             // Start watching for notifications and try locking again.
@@ -131,5 +140,21 @@ impl<T> Deref for LockGuard<'_, T> {
 impl<T> DerefMut for LockGuard<'_, T> {
     fn deref_mut(&mut self) -> &mut T {
         unsafe { &mut *self.0.value.get() }
+    }
+}
+
+impl<T: fmt::Debug> fmt::Debug for Lock<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        struct Locked;
+        impl fmt::Debug for Locked {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.write_str("<locked>")
+            }
+        }
+
+        match self.try_lock() {
+            None => f.debug_struct("Lock").field("data", &Locked).finish(),
+            Some(guard) => f.debug_struct("Lock").field("data", &&*guard).finish(),
+        }
     }
 }
