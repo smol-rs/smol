@@ -202,6 +202,50 @@ pub fn run<T>(future: impl Future<Output = T>) -> T {
     })
 }
 
+thread_local! {
+    static HITS: Cell<Option<i32>> = Cell::new(None);
+}
+
+// TODO: poll_throttle_read(), poll_throttle(cost: i32), static BUDGET
+/// Runs a budgeted task and returns `true` if the budget was completely used up.
+fn use_budget(run: impl FnOnce()) -> bool {
+    HITS.with(|hits| {
+        hits.set(Some(200));
+        let res = panic::catch_unwind(panic::AssertUnwindSafe(|| run()));
+        let is_used_up = hits.take() == Some(0);
+
+        match res {
+            Ok(()) => is_used_up,
+            Err(err) => panic::resume_unwind(err),
+        }
+    })
+}
+
+#[inline]
+fn poll_budget(cx: &mut Context<'_>, n: i32) -> Poll<()> {
+    HITS.with(|hits| match hits.get() {
+        None => Poll::Ready(()),
+        Some(h) if h == 0 => {
+            cx.waker().wake_by_ref();
+            Poll::Pending
+        }
+        Some(h) => {
+            hits.set(Some(h.saturating_sub(n)));
+            Poll::Ready(())
+        }
+    })
+}
+
+#[inline]
+fn poll_budget_read(cx: &mut Context<'_>) -> Poll<()> {
+    poll_budget(cx, 2)
+}
+
+#[inline]
+fn poll_budget_write(cx: &mut Context<'_>) -> Poll<()> {
+    poll_budget(cx, 1)
+}
+
 // ----- Local executor -----
 
 thread_local! {
@@ -253,7 +297,9 @@ impl Local {
         for _ in 0..100 {
             match self.pop() {
                 None => return false,
-                Some(runnable) => runnable.run(),
+                Some(runnable) => {
+                    use_budget(|| runnable.run());
+                }
             }
         }
         self.drain_remote();
@@ -378,19 +424,36 @@ impl Processor {
 
     /// Performs some work and returns `true` if there is more work to do.
     fn tick(&self) -> bool {
+        // Run a batch of local tasks and check if there are more of them.
         let more_local = LOCAL.with(|local| local.tick());
 
-        for _ in 0..100 {
+        for step in 0..100 {
+            if step % 16 == 0 {
+                self.flush_slot();
+            }
+
             match self.pop() {
                 None => return more_local,
-                Some(runnable) => runnable.run(),
+                Some(runnable) => {
+                    if use_budget(|| runnable.run()) {
+                        self.flush_slot();
+                    }
+                }
             }
         }
 
         if EXECUTOR.injector.steal_batch(&self.worker).is_success() {
             REACTOR.interrupt();
         }
+        self.flush_slot();
         true
+    }
+
+    fn flush_slot(&self) {
+        if let Some(runnable) = self.slot.replace(None) {
+            self.worker.push(runnable);
+            REACTOR.interrupt();
+        }
     }
 
     fn push(&self, runnable: Runnable) {
@@ -550,6 +613,8 @@ pub fn iter<T: Send + 'static>(
         type Item = T;
 
         fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<T>> {
+            futures::ready!(poll_budget_read(cx));
+
             match &mut *self {
                 State::Idle(iter) => {
                     let mut iter = iter.take().unwrap();
@@ -592,6 +657,8 @@ pub fn reader(reader: impl Read + Send + 'static) -> impl AsyncRead + Send + Unp
             cx: &mut Context<'_>,
             buf: &mut [u8],
         ) -> Poll<io::Result<usize>> {
+            futures::ready!(poll_budget_read(cx));
+
             match &mut *self {
                 State::Idle(io) => {
                     let mut io = io.take().unwrap();
@@ -655,6 +722,8 @@ pub fn writer(writer: impl Write + Send + 'static) -> impl AsyncWrite + Send + U
             cx: &mut Context<'_>,
             buf: &[u8],
         ) -> Poll<io::Result<usize>> {
+            futures::ready!(poll_budget_write(cx));
+
             loop {
                 match &mut *self {
                     State::Idle(None) => return Poll::Ready(Ok(0)),
@@ -671,6 +740,8 @@ pub fn writer(writer: impl Write + Send + 'static) -> impl AsyncWrite + Send + U
         }
 
         fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+            futures::ready!(poll_budget_write(cx));
+
             loop {
                 match &mut *self {
                     State::Idle(None) => return Poll::Ready(Ok(())),
@@ -956,6 +1027,8 @@ impl Future for Timer {
 // ----- Async I/O -----
 
 /// Async I/O.
+///
+/// TODO: does not work with files!
 #[derive(Debug)]
 pub struct Async<T> {
     inner: Option<Box<T>>,
@@ -1023,7 +1096,11 @@ impl<T> Async<T> {
         let mut f = try_read;
         let mut inner = self.inner.as_ref().unwrap();
         let wakers = &self.source.readers;
-        future::poll_fn(|cx| Self::poll_io(cx, |s| f(s), &mut inner, wakers)).await
+        future::poll_fn(|cx| {
+            futures::ready!(poll_budget_read(cx));
+            Self::poll_io(cx, |s| f(s), &mut inner, wakers)
+        })
+        .await
     }
 
     /// Converts a non-blocking read into an async operation.
@@ -1034,7 +1111,11 @@ impl<T> Async<T> {
         let mut f = try_read;
         let mut inner = self.inner.as_mut().unwrap();
         let wakers = &self.source.readers;
-        future::poll_fn(|cx| Self::poll_io(cx, |s| f(s), &mut inner, wakers)).await
+        future::poll_fn(|cx| {
+            futures::ready!(poll_budget_read(cx));
+            Self::poll_io(cx, |s| f(s), &mut inner, wakers)
+        })
+        .await
     }
 
     /// Converts a non-blocking write into an async operation.
@@ -1042,7 +1123,11 @@ impl<T> Async<T> {
         let mut f = try_write;
         let mut inner = self.inner.as_ref().unwrap();
         let wakers = &self.source.writers;
-        future::poll_fn(|cx| Self::poll_io(cx, |s| f(s), &mut inner, wakers)).await
+        future::poll_fn(|cx| {
+            futures::ready!(poll_budget_write(cx));
+            Self::poll_io(cx, |s| f(s), &mut inner, wakers)
+        })
+        .await
     }
 
     /// Converts a non-blocking write into an async operation.
@@ -1053,7 +1138,11 @@ impl<T> Async<T> {
         let mut f = try_write;
         let mut inner = self.inner.as_mut().unwrap();
         let wakers = &self.source.writers;
-        future::poll_fn(|cx| Self::poll_io(cx, |s| f(s), &mut inner, wakers)).await
+        future::poll_fn(|cx| {
+            futures::ready!(poll_budget_write(cx));
+            Self::poll_io(cx, |s| f(s), &mut inner, wakers)
+        })
+        .await
     }
 
     fn poll_io<I, R>(
@@ -1277,8 +1366,9 @@ impl Async<UdpSocket> {
 #[cfg(unix)]
 impl Async<UnixListener> {
     /// Creates a listener bound to the specified path.
-    pub fn bind<P: AsRef<Path>>(path: P) -> io::Result<Async<UnixListener>> {
-        UnixListener::bind(path).and_then(Async::new)
+    pub async fn bind<P: AsRef<Path>>(path: P) -> io::Result<Async<UnixListener>> {
+        let path = path.as_ref().to_owned();
+        blocking!(UnixListener::bind(path)).and_then(Async::new)
     }
 
     /// Accepts a new incoming connection.
@@ -1301,8 +1391,9 @@ impl Async<UnixListener> {
 #[cfg(unix)]
 impl Async<UnixStream> {
     /// Connects to the specified path.
-    pub fn connect<P: AsRef<Path>>(path: P) -> io::Result<Async<UnixStream>> {
-        UnixStream::connect(path).and_then(Async::new)
+    pub async fn connect<P: AsRef<Path>>(path: P) -> io::Result<Async<UnixStream>> {
+        let path = path.as_ref().to_owned();
+        blocking!(UnixStream::connect(path)).and_then(Async::new)
     }
 
     /// Creates an unnamed pair of connected streams.
@@ -1315,8 +1406,9 @@ impl Async<UnixStream> {
 #[cfg(unix)]
 impl Async<UnixDatagram> {
     /// Creates a socket bound to the specified path.
-    pub fn bind<P: AsRef<Path>>(path: P) -> io::Result<Async<UnixDatagram>> {
-        UnixDatagram::bind(path).and_then(Async::new)
+    pub async fn bind<P: AsRef<Path>>(path: P) -> io::Result<Async<UnixDatagram>> {
+        let path = path.as_ref().to_owned();
+        blocking!(UnixDatagram::bind(path)).and_then(Async::new)
     }
 
     /// Creates a socket not bound to any address.
@@ -1576,6 +1668,7 @@ mod sys {
 
     use nix::errno::Errno;
     use nix::fcntl::{fcntl, FcntlArg, FdFlag};
+    use nix::libc;
     use nix::sys::event::{kevent_ts, kqueue, EventFilter, EventFlag, FilterFlag, KEvent};
 
     #[derive(Clone, Copy, Debug)]
