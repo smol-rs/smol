@@ -7,7 +7,7 @@ use anyhow::Result;
 use async_native_tls::TlsAcceptor;
 use futures::prelude::*;
 use http_types::{Request, Response, StatusCode};
-use piper::{Arc, Lock};
+use piper::{Lock, Shared};
 use smol::{blocking, Async, Task};
 
 /// Serves a request and returns a response.
@@ -33,13 +33,13 @@ async fn listen(listener: Async<TcpListener>, tls: Option<TlsAcceptor>) -> Resul
 
         let task = match &tls {
             None => {
-                Task::spawn(async move { async_h1::accept(&host, Arc::new(stream), serve).await })
+                let stream = Shared::new(stream);
+                Task::spawn(async move { async_h1::accept(&host, stream, serve).await })
             }
             Some(tls) => {
                 let stream = tls.accept(stream).await?;
-                Task::spawn(async move {
-                    async_h1::accept(&host, Arc::new(Lock::new(stream)), serve).await
-                })
+                let stream = Shared::new(Lock::new(stream));
+                Task::spawn(async move { async_h1::accept(&host, stream, serve).await })
             }
         };
         task.unwrap().detach();

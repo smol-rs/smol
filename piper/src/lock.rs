@@ -10,21 +10,43 @@ use crate::signal::Signal;
 use crossbeam_utils::Backoff;
 use futures::io::{self, AsyncRead, AsyncWrite};
 
+/// A lock that implements async I/O traits.
+///
+/// This is a blocking mutex that adds the following impls:
+///
+/// - `impl<T> AsyncRead for Lock<T> where &T: AsyncRead + Unpin {}`
+/// - `impl<T> AsyncRead for &Lock<T> where &T: AsyncRead + Unpin {}`
+/// - `impl<T> AsyncWrite for Lock<T> where &T: AsyncWrite + Unpin {}`
+/// - `impl<T> AsyncWrite for &Lock<T> where &T: AsyncWrite + Unpin {}`
+///
+/// This lock is ensures fairness by handling lock operations in the first-in first-out order.
+///
+/// While primarily designed for wrapping async I/O objects, this lock can also be used as a
+/// regular blocking mutex. It's not quite as efficient as [`parking_lot`], it's still a big
+/// improvement over [`std::sync::Mutex`].
+///
+/// [`parking_lot`]: https://docs.rs/parking_lot
+/// [`std::sync::Mutex`]: https://doc.rust-lang.org/std/sync/struct.Mutex.html
 pub struct Lock<T> {
+    /// Set to `true` when the lock is acquired by a `LockGuard`.
     locked: AtomicBool,
+
+    /// Lock operations waiting for the mutex to get unlocked.
     lock_ops: Signal,
-    value: UnsafeCell<T>,
+
+    /// The value inside the lock.
+    data: UnsafeCell<T>,
 }
 
 unsafe impl<T: Send> Send for Lock<T> {}
 unsafe impl<T: Send> Sync for Lock<T> {}
 
 impl<T> Lock<T> {
-    pub fn new(t: T) -> Self {
+    pub fn new(data: T) -> Self {
         Lock {
             locked: AtomicBool::new(false),
             lock_ops: Signal::new(),
-            value: UnsafeCell::new(t),
+            data: UnsafeCell::new(data),
         }
     }
 
@@ -133,13 +155,13 @@ impl<T> Deref for LockGuard<'_, T> {
     type Target = T;
 
     fn deref(&self) -> &T {
-        unsafe { &*self.0.value.get() }
+        unsafe { &*self.0.data.get() }
     }
 }
 
 impl<T> DerefMut for LockGuard<'_, T> {
     fn deref_mut(&mut self) -> &mut T {
-        unsafe { &mut *self.0.value.get() }
+        unsafe { &mut *self.0.data.get() }
     }
 }
 

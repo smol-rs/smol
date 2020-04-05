@@ -39,7 +39,7 @@ use crate::signal::Signal;
 pub struct Mutex<T> {
     locked: AtomicBool,
     lock_ops: Signal,
-    value: UnsafeCell<T>,
+    data: UnsafeCell<T>,
 }
 
 unsafe impl<T: Send> Send for Mutex<T> {}
@@ -55,11 +55,11 @@ impl<T> Mutex<T> {
     ///
     /// let mutex = Mutex::new(0);
     /// ```
-    pub fn new(t: T) -> Mutex<T> {
+    pub fn new(data: T) -> Mutex<T> {
         Mutex {
             locked: AtomicBool::new(false),
             lock_ops: Signal::new(),
-            value: UnsafeCell::new(t),
+            data: UnsafeCell::new(data),
         }
     }
 
@@ -154,7 +154,7 @@ impl<T> Mutex<T> {
     /// assert_eq!(mutex.into_inner(), 10);
     /// ```
     pub fn into_inner(self) -> T {
-        self.value.into_inner()
+        self.data.into_inner()
     }
 
     /// Returns a mutable reference to the underlying data.
@@ -176,7 +176,7 @@ impl<T> Mutex<T> {
     /// # })
     /// ```
     pub fn get_mut(&mut self) -> &mut T {
-        unsafe { &mut *self.value.get() }
+        unsafe { &mut *self.data.get() }
     }
 }
 
@@ -237,12 +237,12 @@ impl<T> Deref for MutexGuard<'_, T> {
     type Target = T;
 
     fn deref(&self) -> &T {
-        unsafe { &*self.0.value.get() }
+        unsafe { &*self.0.data.get() }
     }
 }
 
 impl<T> DerefMut for MutexGuard<'_, T> {
     fn deref_mut(&mut self) -> &mut T {
-        unsafe { &mut *self.0.value.get() }
+        unsafe { &mut *self.0.data.get() }
     }
 }

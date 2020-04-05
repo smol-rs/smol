@@ -20,7 +20,7 @@ async fn echo(stream: Async<TcpStream>) -> io::Result<()> {
 fn main() -> io::Result<()> {
     smol::run(async {
         let listener = Async::<TcpListener>::bind("127.0.0.1:7000")?;
-        println!("Listening on http://{}", listener.get_ref().local_addr()?);
+        println!("Listening on {}", listener.get_ref().local_addr()?);
 
         loop {
             let (stream, _) = listener.accept().await?;

@@ -3,11 +3,11 @@ use std::net::{SocketAddr, TcpListener, TcpStream};
 
 use futures::io::{self, BufReader};
 use futures::prelude::*;
-use piper::{Arc, Receiver, Sender};
+use piper::{Receiver, Sender, Shared};
 use smol::{Async, Task};
 
 enum Update {
-    Join(SocketAddr, Arc<Async<TcpStream>>),
+    Join(SocketAddr, Shared<Async<TcpStream>>),
     Leave(SocketAddr),
     Message(SocketAddr, String),
 }
@@ -36,7 +36,7 @@ async fn dispatch(receiver: Receiver<Update>) -> io::Result<()> {
     Ok(())
 }
 
-async fn client(sender: Sender<Update>, stream: Arc<Async<TcpStream>>) -> io::Result<()> {
+async fn client(sender: Sender<Update>, stream: Shared<Async<TcpStream>>) -> io::Result<()> {
     let addr = stream.get_ref().peer_addr()?;
     let mut lines = BufReader::new(stream).lines();
 
@@ -49,14 +49,14 @@ async fn client(sender: Sender<Update>, stream: Arc<Async<TcpStream>>) -> io::Re
 fn main() -> io::Result<()> {
     smol::run(async {
         let listener = Async::<TcpListener>::bind("127.0.0.1:6000")?;
-        println!("Listening on http://{}", listener.get_ref().local_addr()?);
+        println!("Listening on {}", listener.get_ref().local_addr()?);
 
         let (sender, receiver) = piper::chan(100);
         Task::spawn(dispatch(receiver)).unwrap().detach();
 
         loop {
             let (stream, addr) = listener.accept().await?;
-            let stream = Arc::new(stream);
+            let stream = Shared::new(stream);
             let sender = sender.clone();
 
             Task::spawn(async move {
