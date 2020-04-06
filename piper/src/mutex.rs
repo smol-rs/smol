@@ -5,26 +5,27 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::signal::Signal;
 
-/// A mutual exclusion primitive for protecting shared data.
+/// An asynchronous mutex.
 ///
-/// This type is an async version of [`std::sync::Mutex`].
+/// This type is similar to [`std::sync::Mutex`], except locking is an asynchronous operation.
 ///
 /// [`std::sync::Mutex`]: https://doc.rust-lang.org/std/sync/struct.Mutex.html
 ///
 /// # Examples
 ///
 /// ```
-/// # async_std::task::block_on(async {
+/// # smol::run(async {
 /// #
-/// use async_std::sync::{Arc, Mutex};
-/// use async_std::task;
+/// use piper::Mutex;
+/// use smol::Task;
+/// use std::sync::Arc;
 ///
 /// let m = Arc::new(Mutex::new(0));
 /// let mut tasks = vec![];
 ///
 /// for _ in 0..10 {
 ///     let m = m.clone();
-///     tasks.push(task::spawn(async move {
+///     tasks.push(Task::spawn(async move {
 ///         *m.lock().await += 1;
 ///     }));
 /// }
@@ -46,12 +47,12 @@ unsafe impl<T: Send> Send for Mutex<T> {}
 unsafe impl<T: Send> Sync for Mutex<T> {}
 
 impl<T> Mutex<T> {
-    /// Creates a new mutex.
+    /// Creates a new async mutex.
     ///
     /// # Examples
     ///
     /// ```
-    /// use async_std::sync::Mutex;
+    /// use piper::Mutex;
     ///
     /// let mutex = Mutex::new(0);
     /// ```
@@ -63,27 +64,20 @@ impl<T> Mutex<T> {
         }
     }
 
-    /// Acquires the lock.
+    /// Acquires the mutex.
     ///
-    /// Returns a guard that releases the lock when dropped.
+    /// Returns a guard that releases the mutex when dropped.
     ///
     /// # Examples
     ///
     /// ```
-    /// # async_std::task::block_on(async {
+    /// # smol::block_on(async {
     /// #
-    /// use async_std::sync::{Arc, Mutex};
-    /// use async_std::task;
+    /// use piper::Mutex;
     ///
-    /// let m1 = Arc::new(Mutex::new(10));
-    /// let m2 = m1.clone();
-    ///
-    /// task::spawn(async move {
-    ///     *m1.lock().await = 20;
-    /// })
-    /// .await;
-    ///
-    /// assert_eq!(*m2.lock().await, 20);
+    /// let mutex = Mutex::new(10);
+    /// let guard = mutex.lock().await;
+    /// assert_eq!(*guard, 10);
     /// #
     /// # })
     /// ```
@@ -103,36 +97,23 @@ impl<T> Mutex<T> {
         }
     }
 
-    /// Attempts to acquire the lock.
+    /// Attempts to acquire the mutex.
     ///
-    /// If the lock could not be acquired at this time, then [`None`] is returned. Otherwise, a
-    /// guard is returned that releases the lock when dropped.
+    /// If the mutex could not be acquired at this time, then [`None`] is returned. Otherwise, a
+    /// guard is returned that releases the mutex when dropped.
     ///
     /// [`None`]: https://doc.rust-lang.org/std/option/enum.Option.html#variant.None
     ///
     /// # Examples
     ///
     /// ```
-    /// # async_std::task::block_on(async {
-    /// #
-    /// use async_std::sync::{Arc, Mutex};
-    /// use async_std::task;
+    /// use piper::Mutex;
     ///
-    /// let m1 = Arc::new(Mutex::new(10));
-    /// let m2 = m1.clone();
-    ///
-    /// task::spawn(async move {
-    ///     if let Some(mut guard) = m1.try_lock() {
-    ///         *guard = 20;
-    ///     } else {
-    ///         println!("try_lock failed");
-    ///     }
-    /// })
-    /// .await;
-    ///
-    /// assert_eq!(*m2.lock().await, 20);
-    /// #
-    /// # })
+    /// let mutex = Mutex::new(10);
+    /// if let Ok(guard) = mutex.try_lock() {
+    ///     assert_eq!(*guard, 10);
+    /// }
+    /// # ;
     /// ```
     #[inline]
     pub fn try_lock(&self) -> Option<MutexGuard<'_, T>> {
@@ -148,7 +129,7 @@ impl<T> Mutex<T> {
     /// # Examples
     ///
     /// ```
-    /// use async_std::sync::Mutex;
+    /// use piper::Mutex;
     ///
     /// let mutex = Mutex::new(10);
     /// assert_eq!(mutex.into_inner(), 10);
@@ -160,14 +141,14 @@ impl<T> Mutex<T> {
     /// Returns a mutable reference to the underlying data.
     ///
     /// Since this call borrows the mutex mutably, no actual locking takes place -- the mutable
-    /// borrow statically guarantees no locks exist.
+    /// borrow statically guarantees the mutex is not already acquired.
     ///
     /// # Examples
     ///
     /// ```
-    /// # async_std::task::block_on(async {
+    /// # smol::block_on(async {
     /// #
-    /// use async_std::sync::Mutex;
+    /// use piper::Mutex;
     ///
     /// let mut mutex = Mutex::new(0);
     /// *mutex.get_mut() = 10;
@@ -208,7 +189,7 @@ impl<T: Default> Default for Mutex<T> {
     }
 }
 
-/// A guard that releases the lock when dropped.
+/// A guard that releases the mutex when dropped.
 pub struct MutexGuard<'a, T>(&'a Mutex<T>);
 
 unsafe impl<T: Send> Send for MutexGuard<'_, T> {}

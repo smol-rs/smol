@@ -1,4 +1,4 @@
-//! Asynchronous pipes, channels, and mutexes.
+//! Asynchronous pipes, channels, mutexes, and other primitives.
 
 #![warn(missing_docs, missing_debug_implementations, rust_2018_idioms)]
 

@@ -7,9 +7,9 @@ use std::task::{Context, Poll};
 
 use futures::io::{self, AsyncRead, AsyncWrite};
 
-/// A reference-counting pointer that implements async I/O traits.
+/// A reference-counted pointer that implements async I/O traits.
 ///
-/// This is just a simple wrapper around `Arc<T>` that adds the following impls:
+/// This is just a wrapper around `Arc<T>` that adds the following impls:
 ///
 /// - `impl<T> AsyncRead for Shared<T> where &T: AsyncRead {}`
 /// - `impl<T> AsyncWrite for Shared<T> where &T: AsyncWrite {}`
@@ -34,7 +34,7 @@ use futures::io::{self, AsyncRead, AsyncWrite};
 /// io::copy(reader, &mut writer).await?;
 /// # Ok(()) }) }
 /// ```
-pub struct Shared<T>(pub Arc<T>);
+pub struct Shared<T>(Arc<T>);
 
 impl<T> Unpin for Shared<T> {}
 
@@ -96,14 +96,14 @@ impl<T> fmt::Pointer for Shared<T> {
 }
 
 impl<T: Default> Default for Shared<T> {
-    fn default() -> Self {
-        Self(Arc::new(Default::default()))
+    fn default() -> Shared<T> {
+        Shared(Arc::new(Default::default()))
     }
 }
 
 impl<T> From<T> for Shared<T> {
-    fn from(t: T) -> Self {
-        Self(Arc::new(t))
+    fn from(t: T) -> Shared<T> {
+        Shared(Arc::new(t))
     }
 }
 
