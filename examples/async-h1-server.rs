@@ -1,14 +1,12 @@
-use std::fs;
 use std::net::TcpListener;
-use std::path::Path;
 use std::thread;
 
 use anyhow::Result;
-use async_native_tls::TlsAcceptor;
+use async_native_tls::{Identity, TlsAcceptor};
 use futures::prelude::*;
 use http_types::{Request, Response, StatusCode};
 use piper::{Lock, Shared};
-use smol::{blocking, Async, Task};
+use smol::{Async, Task};
 
 /// Serves a request and returns a response.
 async fn serve(req: Request) -> http_types::Result<Response> {
@@ -47,6 +45,9 @@ async fn listen(listener: Async<TcpListener>, tls: Option<TlsAcceptor>) -> Resul
 }
 
 fn main() -> Result<()> {
+    let identity = Identity::from_pkcs12(include_bytes!("../identity.pfx"), "password")?;
+    let tls = TlsAcceptor::from(native_tls::TlsAcceptor::new(identity)?);
+
     // Create a thread pool.
     let num_threads = num_cpus::get_physical().max(1);
     for _ in 0..num_threads {
@@ -54,14 +55,9 @@ fn main() -> Result<()> {
     }
 
     smol::block_on(async {
-        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("identity.pfx");
-        let identity = blocking!(fs::read(path))?;
-        let tls = TlsAcceptor::new(&identity[..], "password").await?;
-
         let http = listen(Async::<TcpListener>::bind("127.0.0.1:8000")?, None);
         let https = listen(Async::<TcpListener>::bind("127.0.0.1:8001")?, Some(tls));
         future::try_join(http, https).await?;
-
         Ok(())
     })
 }

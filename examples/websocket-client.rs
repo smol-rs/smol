@@ -3,7 +3,7 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use anyhow::{bail, Context as _, Result};
-use async_native_tls::TlsStream;
+use async_native_tls::{Certificate, TlsConnector, TlsStream};
 use async_tungstenite::WebSocketStream;
 use futures::prelude::*;
 use smol::Async;
@@ -11,7 +11,7 @@ use tungstenite::handshake::client::Response;
 use tungstenite::Message;
 use url::Url;
 
-async fn connect(addr: &str) -> Result<(WsStream, Response)> {
+async fn connect(addr: &str, tls: TlsConnector) -> Result<(WsStream, Response)> {
     // Parse the address.
     let url = Url::parse(addr)?;
     let host = url.host_str().context("cannot parse host")?.to_string();
@@ -26,7 +26,7 @@ async fn connect(addr: &str) -> Result<(WsStream, Response)> {
         }
         "wss" => {
             let stream = Async::<TcpStream>::connect(format!("{}:{}", host, port)).await?;
-            let stream = async_native_tls::connect(host, stream).await?;
+            let stream = tls.connect(host, stream).await?;
             let (stream, resp) = async_tungstenite::client_async(addr, stream).await?;
             Ok((WsStream::Tls(stream), resp))
         }
@@ -35,8 +35,13 @@ async fn connect(addr: &str) -> Result<(WsStream, Response)> {
 }
 
 fn main() -> Result<()> {
+    // Create a TLS connector that is able to connect to wss://localhost:9001
+    let mut builder = native_tls::TlsConnector::builder();
+    builder.add_root_certificate(Certificate::from_pem(include_bytes!("../certificate.pem"))?);
+    let tls = TlsConnector::from(builder);
+
     smol::run(async {
-        let (mut stream, resp) = connect("wss://echo.websocket.org").await?;
+        let (mut stream, resp) = connect("wss://echo.websocket.org", tls).await?;
         dbg!(resp);
 
         stream.send(Message::text("Hello!")).await?;

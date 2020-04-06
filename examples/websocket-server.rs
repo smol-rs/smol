@@ -1,17 +1,13 @@
-#![recursion_limit = "1024"]
-
-use std::fs;
 use std::net::{TcpListener, TcpStream};
-use std::path::Path;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 use std::thread;
 
 use anyhow::{Context as _, Result};
-use async_native_tls::{TlsAcceptor, TlsStream};
+use async_native_tls::{Identity, TlsAcceptor, TlsStream};
 use async_tungstenite::WebSocketStream;
 use futures::prelude::*;
-use smol::{blocking, Async, Task};
+use smol::{Async, Task};
 use tungstenite::Message;
 
 async fn serve(mut stream: WsStream, host: String) -> Result<()> {
@@ -49,20 +45,18 @@ async fn listen(listener: Async<TcpListener>, tls: Option<TlsAcceptor>) -> Resul
 }
 
 fn main() -> Result<()> {
+    let identity = Identity::from_pkcs12(include_bytes!("../identity.pfx"), "password")?;
+    let tls = TlsAcceptor::from(native_tls::TlsAcceptor::new(identity)?);
+
     // Create a thread pool.
     for _ in 0..num_cpus::get_physical().max(1) {
         thread::spawn(|| smol::run(future::pending::<()>()));
     }
 
     smol::block_on(async {
-        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("identity.pfx");
-        let identity = blocking!(fs::read(path))?;
-        let tls = TlsAcceptor::new(&identity[..], "password").await?;
-
         let ws = listen(Async::<TcpListener>::bind("127.0.0.1:9000")?, None);
         let wss = listen(Async::<TcpListener>::bind("127.0.0.1:9001")?, Some(tls));
         future::try_join(ws, wss).await?;
-
         Ok(())
     })
 }

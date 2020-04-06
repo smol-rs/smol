@@ -8,14 +8,12 @@
 // 1. minica --domains localhost -ip-addresses 127.0.0.1 -ca-cert certificate.pem
 // 2. openssl pkcs12 -export -out identity.pfx -inkey localhost/key.pem -in localhost/cert.pem
 
-use std::fs;
 use std::net::{TcpListener, TcpStream};
-use std::path::Path;
 
 use anyhow::Result;
-use async_native_tls::TlsAcceptor;
+use async_native_tls::{Identity, TlsAcceptor};
 use futures::prelude::*;
-use smol::{blocking, Async, Task};
+use smol::{Async, Task};
 
 const RESPONSE: &[u8] = br#"
 HTTP/1.1 200 OK
@@ -54,15 +52,13 @@ async fn listen(listener: Async<TcpListener>, tls: Option<TlsAcceptor>) -> Resul
 }
 
 fn main() -> Result<()> {
-    smol::run(async {
-        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("identity.pfx");
-        let identity = blocking!(fs::read(path))?;
-        let tls = TlsAcceptor::new(&identity[..], "password").await?;
+    let identity = Identity::from_pkcs12(include_bytes!("../identity.pfx"), "password")?;
+    let tls = TlsAcceptor::from(native_tls::TlsAcceptor::new(identity)?);
 
+    smol::run(async {
         let http = listen(Async::<TcpListener>::bind("127.0.0.1:8000")?, None);
         let https = listen(Async::<TcpListener>::bind("127.0.0.1:8001")?, Some(tls));
         future::try_join(http, https).await?;
-
         Ok(())
     })
 }

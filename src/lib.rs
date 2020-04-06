@@ -32,10 +32,8 @@ use std::time::{Duration, Instant};
 
 #[cfg(unix)]
 use std::{
-    os::unix::{
-        io::{AsRawFd, RawFd},
-        net::{SocketAddr as UnixSocketAddr, UnixDatagram, UnixListener, UnixStream},
-    },
+    os::unix::io::{AsRawFd, RawFd},
+    os::unix::net::{SocketAddr as UnixSocketAddr, UnixDatagram, UnixListener, UnixStream},
     path::Path,
 };
 
@@ -161,17 +159,17 @@ pub fn block_on<T>(future: impl Future<Output = T>) -> T {
 
 /// Executes all futures until the main one completes.
 pub fn run<T>(future: impl Future<Output = T>) -> T {
+    let flag = Arc::new(
+        IoFlag::create()
+            .and_then(Async::new)
+            .expect("cannot create waker flag"),
+    );
+
+    let f = flag.clone();
+    let w = async_task::waker_fn(move || f.get_ref().set());
+    let cx = &mut Context::from_waker(&w);
+
     EXECUTOR.processor(|proc| {
-        let flag = Arc::new(
-            IoFlag::create()
-                .and_then(Async::new)
-                .expect("cannot create waker flag"),
-        );
-
-        let f = flag.clone();
-        let w = async_task::waker_fn(move || f.get_ref().set());
-        let cx = &mut Context::from_waker(&w);
-
         futures::pin_mut!(future);
 
         loop {
@@ -182,9 +180,11 @@ pub fn run<T>(future: impl Future<Output = T>) -> T {
             }
 
             while !flag.get_ref().get() {
+                // TODO: separate Processor and Local, call tick() on both here
                 if proc.tick() {
                     REACTOR.poll_quick().expect("failure while polling I/O");
                 } else {
+                    // Block until either the reactor is locked or the flag is set.
                     block_on(async {
                         let lock = REACTOR.lock();
                         let ready = flag.ready();
@@ -203,16 +203,15 @@ pub fn run<T>(future: impl Future<Output = T>) -> T {
 }
 
 thread_local! {
-    static HITS: Cell<Option<i32>> = Cell::new(None);
+    static BUDGET: Cell<Option<i32>> = Cell::new(None);
 }
 
-// TODO: poll_throttle_read(), poll_throttle(cost: i32), static BUDGET
-/// Runs a budgeted task and returns `true` if the budget was completely used up.
-fn use_budget(run: impl FnOnce()) -> bool {
-    HITS.with(|hits| {
-        hits.set(Some(200));
+/// Runs a task and returns `true` if it was throttled.
+fn use_throttle(run: impl FnOnce()) -> bool {
+    BUDGET.with(|budget| {
+        budget.set(Some(200));
         let res = panic::catch_unwind(panic::AssertUnwindSafe(|| run()));
-        let is_used_up = hits.take() == Some(0);
+        let is_used_up = budget.take() == Some(0);
 
         match res {
             Ok(()) => is_used_up,
@@ -222,31 +221,21 @@ fn use_budget(run: impl FnOnce()) -> bool {
 }
 
 #[inline]
-fn poll_budget(cx: &mut Context<'_>, n: i32) -> Poll<()> {
-    HITS.with(|hits| match hits.get() {
+fn poll_throttle(cx: &mut Context<'_>) -> Poll<()> {
+    BUDGET.with(|budget| match budget.get() {
         None => Poll::Ready(()),
-        Some(h) if h == 0 => {
+        Some(b) if b == 0 => {
             cx.waker().wake_by_ref();
             Poll::Pending
         }
-        Some(h) => {
-            hits.set(Some(h.saturating_sub(n)));
+        Some(b) => {
+            budget.set(Some(b - 1));
             Poll::Ready(())
         }
     })
 }
 
-#[inline]
-fn poll_budget_read(cx: &mut Context<'_>) -> Poll<()> {
-    poll_budget(cx, 2)
-}
-
-#[inline]
-fn poll_budget_write(cx: &mut Context<'_>) -> Poll<()> {
-    poll_budget(cx, 1)
-}
-
-// ----- Local executor -----
+// ----- Single-thread executor -----
 
 thread_local! {
     /// Holds a queue of thread-local tasks.
@@ -298,7 +287,7 @@ impl Local {
             match self.pop() {
                 None => return false,
                 Some(runnable) => {
-                    use_budget(|| runnable.run());
+                    use_throttle(|| runnable.run());
                 }
             }
         }
@@ -324,7 +313,7 @@ impl Local {
     }
 }
 
-// ----- Global executor -----
+// ----- Work-stealing executor -----
 
 /// Holds the global task queue.
 static EXECUTOR: Lazy<Executor> = Lazy::new(|| Executor::new());
@@ -435,7 +424,7 @@ impl Processor {
             match self.pop() {
                 None => return more_local,
                 Some(runnable) => {
-                    if use_budget(|| runnable.run()) {
+                    if use_throttle(|| runnable.run()) {
                         self.flush_slot();
                     }
                 }
@@ -613,7 +602,7 @@ pub fn iter<T: Send + 'static>(
         type Item = T;
 
         fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<T>> {
-            futures::ready!(poll_budget_read(cx));
+            futures::ready!(poll_throttle(cx));
 
             match &mut *self {
                 State::Idle(iter) => {
@@ -657,7 +646,7 @@ pub fn reader(reader: impl Read + Send + 'static) -> impl AsyncRead + Send + Unp
             cx: &mut Context<'_>,
             buf: &mut [u8],
         ) -> Poll<io::Result<usize>> {
-            futures::ready!(poll_budget_read(cx));
+            futures::ready!(poll_throttle(cx));
 
             match &mut *self {
                 State::Idle(io) => {
@@ -722,7 +711,7 @@ pub fn writer(writer: impl Write + Send + 'static) -> impl AsyncWrite + Send + U
             cx: &mut Context<'_>,
             buf: &[u8],
         ) -> Poll<io::Result<usize>> {
-            futures::ready!(poll_budget_write(cx));
+            futures::ready!(poll_throttle(cx));
 
             loop {
                 match &mut *self {
@@ -740,7 +729,7 @@ pub fn writer(writer: impl Write + Send + 'static) -> impl AsyncWrite + Send + U
         }
 
         fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-            futures::ready!(poll_budget_write(cx));
+            futures::ready!(poll_throttle(cx));
 
             loop {
                 match &mut *self {
@@ -784,6 +773,7 @@ static INTERRUPT: Lazy<Async<IoFlag>> = Lazy::new(|| {
 struct Source {
     raw: sys::Raw,
     index: usize,
+    // TODO: watchers: piper::Lock<Vec<Waker>>,
     readers: piper::Lock<Vec<Waker>>,
     writers: piper::Lock<Vec<Waker>>,
 }
@@ -953,16 +943,13 @@ pub struct Timer {
 impl Timer {
     /// Fires after the specified duration of time.
     pub fn after(dur: Duration) -> Timer {
-        Timer {
-            when: Instant::now() + dur,
-            inserted: false,
-        }
+        Timer::at(Instant::now() + dur)
     }
 
     /// Fires at the specified instant in time.
-    pub fn at(dur: Duration) -> Timer {
+    pub fn at(when: Instant) -> Timer {
         Timer {
-            when: Instant::now() + dur,
+            when,
             inserted: false,
         }
     }
@@ -1039,15 +1026,44 @@ pub struct Async<T> {
 impl<T: AsRawFd> Async<T> {
     /// Converts a non-blocking I/O handle into an async I/O handle.
     pub fn new(inner: T) -> io::Result<Async<T>> {
-        // Put the I/O handle into non-blocking mode.
-        nix::fcntl::fcntl(
-            inner.as_raw_fd(),
-            nix::fcntl::FcntlArg::F_SETFL(nix::fcntl::OFlag::O_NONBLOCK),
-        )
-        .map_err(|err| match err {
-            nix::Error::Sys(code) => code.into(),
-            err => io::Error::new(io::ErrorKind::Other, Box::new(err)),
-        })?;
+        use nix::fcntl::{fcntl, FcntlArg, OFlag};
+
+        // Put the I/O handle in non-blocking mode.
+        let flags = fcntl(inner.as_raw_fd(), FcntlArg::F_GETFL).map_err(io_err)?;
+        let flags = OFlag::from_bits_truncate(flags) | OFlag::O_NONBLOCK;
+        fcntl(inner.as_raw_fd(), FcntlArg::F_SETFL(flags)).map_err(io_err)?;
+
+        // Register the I/O handle in the reactor.
+        Ok(Async {
+            source: REACTOR.register(sys::Raw::new(&inner))?,
+            inner: Some(Box::new(inner)),
+        })
+    }
+}
+
+#[cfg(unix)]
+impl<T: AsRawFd> AsRawFd for Async<T> {
+    fn as_raw_fd(&self) -> RawFd {
+        self.source.raw.0
+    }
+}
+
+/// Converts a `nix::Error` into `std::io::Error`.
+#[cfg(unix)]
+fn io_err(err: nix::Error) -> io::Error {
+    match err {
+        nix::Error::Sys(code) => code.into(),
+        err => io::Error::new(io::ErrorKind::Other, Box::new(err)),
+    }
+}
+
+#[cfg(windows)]
+impl<T: AsRawSocket> Async<T> {
+    /// Converts a non-blocking I/O handle into an async I/O handle.
+    pub fn new(inner: T) -> io::Result<Async<T>> {
+        // Put the I/O handle in non-blocking mode.
+        let socket = unsafe { Socket::from_raw_socket(inner.as_raw_socket()) };
+        mem::ManuallyDrop::new(socket).set_nonblocking(true)?;
 
         // Register the I/O handle in the reactor.
         Ok(Async {
@@ -1058,18 +1074,9 @@ impl<T: AsRawFd> Async<T> {
 }
 
 #[cfg(windows)]
-impl<T: AsRawSocket> Async<T> {
-    /// Converts a non-blocking I/O handle into an async I/O handle.
-    pub fn new(inner: T) -> io::Result<Async<T>> {
-        // Put the I/O handle into non-blocking mode.
-        let socket = unsafe { Socket::from_raw_socket(inner.as_raw_socket()) };
-        mem::ManuallyDrop::new(socket).set_nonblocking(true)?;
-
-        // Register the I/O handle in the reactor.
-        Ok(Async {
-            source: REACTOR.register(sys::Raw::new(&inner))?,
-            inner: Some(Box::new(inner)),
-        })
+impl<T: AsRawSocket> AsRawSocket for Async<T> {
+    fn as_raw_socket(&self) -> RawSocket {
+        self.source.raw.0
     }
 }
 
@@ -1091,16 +1098,25 @@ impl<T> Async<T> {
         Ok(inner)
     }
 
+    pub async fn with<R>(&self, try_op: impl FnMut(&T) -> io::Result<R>) -> io::Result<R> {
+        // TODO: use this in examples
+        todo!()
+    }
+
+    pub async fn with_mut<R>(
+        &mut self,
+        try_op: impl FnMut(&mut T) -> io::Result<R>,
+    ) -> io::Result<R> {
+        // TODO: use this in examples
+        todo!()
+    }
+
     /// Converts a non-blocking read into an async operation.
     pub async fn read_with<R>(&self, try_read: impl FnMut(&T) -> io::Result<R>) -> io::Result<R> {
         let mut f = try_read;
         let mut inner = self.inner.as_ref().unwrap();
         let wakers = &self.source.readers;
-        future::poll_fn(|cx| {
-            futures::ready!(poll_budget_read(cx));
-            Self::poll_io(cx, |s| f(s), &mut inner, wakers)
-        })
-        .await
+        future::poll_fn(|cx| Self::poll_io(cx, |s| f(s), &mut inner, wakers)).await
     }
 
     /// Converts a non-blocking read into an async operation.
@@ -1111,11 +1127,7 @@ impl<T> Async<T> {
         let mut f = try_read;
         let mut inner = self.inner.as_mut().unwrap();
         let wakers = &self.source.readers;
-        future::poll_fn(|cx| {
-            futures::ready!(poll_budget_read(cx));
-            Self::poll_io(cx, |s| f(s), &mut inner, wakers)
-        })
-        .await
+        future::poll_fn(|cx| Self::poll_io(cx, |s| f(s), &mut inner, wakers)).await
     }
 
     /// Converts a non-blocking write into an async operation.
@@ -1123,11 +1135,7 @@ impl<T> Async<T> {
         let mut f = try_write;
         let mut inner = self.inner.as_ref().unwrap();
         let wakers = &self.source.writers;
-        future::poll_fn(|cx| {
-            futures::ready!(poll_budget_write(cx));
-            Self::poll_io(cx, |s| f(s), &mut inner, wakers)
-        })
-        .await
+        future::poll_fn(|cx| Self::poll_io(cx, |s| f(s), &mut inner, wakers)).await
     }
 
     /// Converts a non-blocking write into an async operation.
@@ -1138,11 +1146,7 @@ impl<T> Async<T> {
         let mut f = try_write;
         let mut inner = self.inner.as_mut().unwrap();
         let wakers = &self.source.writers;
-        future::poll_fn(|cx| {
-            futures::ready!(poll_budget_write(cx));
-            Self::poll_io(cx, |s| f(s), &mut inner, wakers)
-        })
-        .await
+        future::poll_fn(|cx| Self::poll_io(cx, |s| f(s), &mut inner, wakers)).await
     }
 
     fn poll_io<I, R>(
@@ -1151,6 +1155,8 @@ impl<T> Async<T> {
         inner: &mut I,
         wakers: &piper::Lock<Vec<Waker>>,
     ) -> Poll<io::Result<R>> {
+        futures::ready!(poll_throttle(cx));
+
         // Attempt the non-blocking operation.
         match f(inner) {
             Err(err) if err.kind() == io::ErrorKind::WouldBlock => {}
@@ -1456,8 +1462,10 @@ impl IoFlag {
     /// Creates an I/O flag.
     fn create() -> io::Result<IoFlag> {
         // The only portable way of manually triggering I/O events is to create a socket and
-        // send/receive dummy data on it. See the following links for more information.
+        // send/receive dummy data on it. This pattern is also known as "the self-pipe trick".
+        // See the links below for more information.
         //
+        // https://cr.yp.to/docs/selfpipe.html
         // https://github.com/python-trio/trio/blob/master/trio/_core/_wakeup_socketpair.py
         // https://stackoverflow.com/questions/24933411/how-to-emulate-socket-socketpair-on-windows
         // https://gist.github.com/geertj/4325783
@@ -1581,7 +1589,7 @@ mod sys {
     };
 
     #[derive(Clone, Copy, Debug)]
-    pub struct Raw(RawFd);
+    pub struct Raw(pub RawFd);
     impl Raw {
         pub fn new(s: &impl AsRawFd) -> Raw {
             Raw(s.as_raw_fd())
@@ -1592,12 +1600,12 @@ mod sys {
     impl Reactor {
         pub fn create() -> io::Result<Reactor> {
             Ok(Reactor(
-                epoll_create1(EpollCreateFlags::EPOLL_CLOEXEC).map_err(io_err)?,
+                epoll_create1(EpollCreateFlags::EPOLL_CLOEXEC).map_err(super::io_err)?,
             ))
         }
         pub fn register(&self, raw: Raw, index: usize) -> io::Result<()> {
             let ev = &mut EpollEvent::new(flags(), index as u64);
-            epoll_ctl(self.0, EpollOp::EpollCtlAdd, raw.0, Some(ev)).map_err(io_err)
+            epoll_ctl(self.0, EpollOp::EpollCtlAdd, raw.0, Some(ev)).map_err(super::io_err)
         }
         pub fn reregister(&self, _raw: Raw, _index: usize) -> io::Result<()> {
             Ok(())
@@ -1612,16 +1620,13 @@ mod sys {
             events.len = match epoll_wait(self.0, &mut events.list, timeout_ms) {
                 Ok(len) => len,
                 Err(nix::Error::Sys(Errno::EINTR)) => 0,
-                Err(err) => return Err(io_err(err)),
+                Err(err) => return Err(super::io_err(err)),
             };
             Ok(events.len)
         }
     }
     fn flags() -> EpollFlags {
         EpollFlags::EPOLLET | EpollFlags::EPOLLIN | EpollFlags::EPOLLOUT | EpollFlags::EPOLLRDHUP
-    }
-    fn io_err(err: impl std::error::Error + Send + Sync + 'static) -> io::Error {
-        io::Error::new(io::ErrorKind::Other, Box::new(err))
     }
 
     pub struct Events {
@@ -1672,7 +1677,7 @@ mod sys {
     use nix::sys::event::{kevent_ts, kqueue, EventFilter, EventFlag, FilterFlag, KEvent};
 
     #[derive(Clone, Copy, Debug)]
-    pub struct Raw(RawFd);
+    pub struct Raw(pub RawFd);
     impl Raw {
         pub fn new(s: &impl AsRawFd) -> Raw {
             Raw(s.as_raw_fd())
@@ -1682,8 +1687,8 @@ mod sys {
     pub struct Reactor(RawFd);
     impl Reactor {
         pub fn create() -> io::Result<Reactor> {
-            let fd = kqueue().map_err(io_err)?;
-            fcntl(fd, FcntlArg::F_SETFD(FdFlag::FD_CLOEXEC)).map_err(io_err)?;
+            let fd = kqueue().map_err(super::io_err)?;
+            fcntl(fd, FcntlArg::F_SETFD(FdFlag::FD_CLOEXEC)).map_err(super::io_err)?;
             Ok(Reactor(fd))
         }
         pub fn register(&self, raw: Raw, index: usize) -> io::Result<()> {
@@ -1698,7 +1703,7 @@ mod sys {
             let mut eventlist = changelist.clone();
             match kevent_ts(self.0, &changelist, &mut eventlist, None) {
                 Ok(_) | Err(nix::Error::Sys(Errno::EINTR)) => {}
-                Err(err) => return Err(io_err(err)),
+                Err(err) => return Err(super::io_err(err)),
             }
             for ev in &eventlist {
                 // See https://github.com/tokio-rs/mio/issues/582
@@ -1725,7 +1730,7 @@ mod sys {
             let mut eventlist = changelist.clone();
             match kevent_ts(self.0, &changelist, &mut eventlist, None) {
                 Ok(_) | Err(nix::Error::Sys(Errno::EINTR)) => {}
-                Err(err) => return Err(io_err(err)),
+                Err(err) => return Err(super::io_err(err)),
             }
             for ev in &eventlist {
                 if ev.data() != 0 && ev.flags().contains(EventFlag::EV_ERROR) {
@@ -1743,13 +1748,10 @@ mod sys {
             events.len = match kevent_ts(self.0, &[], &mut events.list, timeout) {
                 Ok(n) => n,
                 Err(nix::Error::Sys(Errno::EINTR)) => 0,
-                Err(err) => return Err(io_err(err)),
+                Err(err) => return Err(super::io_err(err)),
             };
             Ok(events.len)
         }
-    }
-    fn io_err(err: impl std::error::Error + Send + Sync + 'static) -> io::Error {
-        io::Error::new(io::ErrorKind::Other, Box::new(err))
     }
 
     pub struct Events {
@@ -1792,7 +1794,7 @@ mod sys {
     use wepoll_binding::{Epoll, EventFlag};
 
     #[derive(Clone, Copy, Debug)]
-    pub struct Raw(RawSocket);
+    pub struct Raw(pub RawSocket);
     impl Raw {
         pub fn new(s: &impl AsRawSocket) -> Raw {
             Raw(s.as_raw_socket())
