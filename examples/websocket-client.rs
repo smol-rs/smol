@@ -35,7 +35,7 @@ async fn connect(addr: &str, tls: TlsConnector) -> Result<(WsStream, Response)> 
 }
 
 fn main() -> Result<()> {
-    // Create a TLS connector that is able to connect to wss://localhost:9001
+    // Create a TLS connector that is able to connect to wss://127.0.0.1:9001
     let mut builder = native_tls::TlsConnector::builder();
     builder.add_root_certificate(Certificate::from_pem(include_bytes!("../certificate.pem"))?);
     let tls = TlsConnector::from(builder);

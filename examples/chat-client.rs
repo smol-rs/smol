@@ -8,7 +8,7 @@ fn main() -> io::Result<()> {
     smol::run(async {
         let stdin = smol::reader(std::io::stdin());
         let mut stdout = smol::writer(std::io::stdout());
-        let stream = Async::<TcpStream>::connect("localhost:6000").await?;
+        let stream = Async::<TcpStream>::connect("127.0.0.1:6000").await?;
         println!("Connected to {}", stream.get_ref().peer_addr()?);
 
         future::try_join(

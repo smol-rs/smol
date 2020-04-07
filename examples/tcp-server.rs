@@ -3,7 +3,7 @@
 //! To send messages, do:
 //!
 //! ```sh
-//! $ nc localhost 8080
+//! $ nc 127.0.0.1 8080
 //! ```
 
 use std::net::{TcpListener, TcpStream};
