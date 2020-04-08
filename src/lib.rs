@@ -47,6 +47,7 @@ use futures::future::Either;
 use futures::io::AllowStdIo;
 use futures::prelude::*;
 use once_cell::sync::Lazy;
+use scoped_tls::scoped_thread_local;
 use slab::Slab;
 use socket2::{Domain, Protocol, Socket, Type};
 use std::sync::{Condvar, Mutex, MutexGuard};
@@ -165,74 +166,63 @@ pub fn run<T>(future: impl Future<Output = T>) -> T {
             .expect("cannot create waker flag"),
     );
 
+    let proc = Processor::new();
+
     let f = flag.clone();
     let w = async_task::waker_fn(move || f.get_ref().set());
     let cx = &mut Context::from_waker(&w);
+    futures::pin_mut!(future);
 
-    EXECUTOR.processor(|proc| {
-        futures::pin_mut!(future);
+    loop {
+        flag.get_ref().clear();
+        match future.as_mut().poll(cx) {
+            Poll::Ready(val) => return val,
+            Poll::Pending => {}
+        }
 
-        loop {
-            flag.get_ref().clear();
-            match future.as_mut().poll(cx) {
-                Poll::Ready(val) => return val,
-                Poll::Pending => {}
-            }
+        while !flag.get_ref().get() {
+            let more_local = LOCAL.with(|local| local.tick());
+            let more_proc = PROCESSOR.set(&proc, || proc.tick());
 
-            while !flag.get_ref().get() {
-                // TODO: separate Processor and Local, call tick() on both here
-                if proc.tick() {
-                    REACTOR.poll_quick().expect("failure while polling I/O");
-                } else {
-                    // Block until either the reactor is locked or the flag is set.
-                    block_on(async {
-                        let lock = REACTOR.lock();
-                        let ready = flag.ready();
-                        futures::pin_mut!(lock);
-                        futures::pin_mut!(ready);
-                        if let Either::Left((mut poller, _)) = future::select(lock, ready).await {
-                            if !flag.get_ref().get() {
-                                poller.poll().expect("failure while polling I/O");
-                            }
+            if more_local || more_proc {
+                REACTOR.poll_quick().expect("failure while polling I/O");
+            } else {
+                // Block until either the reactor is locked or the flag is set.
+                block_on(async {
+                    let lock = REACTOR.lock();
+                    let ready = flag.ready();
+                    futures::pin_mut!(lock);
+                    futures::pin_mut!(ready);
+                    if let Either::Left((mut poller, _)) = future::select(lock, ready).await {
+                        if !flag.get_ref().get() {
+                            poller.poll().expect("failure while polling I/O");
                         }
-                    });
-                }
+                    }
+                });
             }
         }
-    })
+    }
 }
 
-thread_local! {
-    static BUDGET: Cell<Option<i32>> = Cell::new(None);
-}
+scoped_thread_local!(static BUDGET: Cell<u32>);
 
 /// Runs a task and returns `true` if it was throttled.
 fn use_throttle(run: impl FnOnce()) -> bool {
-    BUDGET.with(|budget| {
-        budget.set(Some(200));
-        let res = panic::catch_unwind(panic::AssertUnwindSafe(|| run()));
-        let is_used_up = budget.take() == Some(0);
-
-        match res {
-            Ok(()) => is_used_up,
-            Err(err) => panic::resume_unwind(err),
-        }
-    })
+    let b = Cell::new(200);
+    BUDGET.set(&b, run);
+    b.get() == 0
 }
 
 #[inline]
 fn poll_throttle(cx: &mut Context<'_>) -> Poll<()> {
-    BUDGET.with(|budget| match budget.get() {
-        None => Poll::Ready(()),
-        Some(b) if b == 0 => {
+    if BUDGET.is_set() {
+        let val = BUDGET.with(|b| b.replace(b.get().saturating_sub(1)));
+        if val == 0 {
             cx.waker().wake_by_ref();
-            Poll::Pending
+            return Poll::Pending;
         }
-        Some(b) => {
-            budget.set(Some(b - 1));
-            Poll::Ready(())
-        }
-    })
+    }
+    Poll::Ready(())
 }
 
 // ----- Thread-local executor -----
@@ -337,66 +327,29 @@ impl Executor {
         future: impl Future<Output = T> + Send + 'static,
     ) -> Task<T> {
         let schedule = |runnable| {
-            PROCESSOR.with(|proc| {
-                if proc.is_registered.get() {
-                    proc.push(runnable);
-                } else {
-                    EXECUTOR.injector.push(runnable);
-                    REACTOR.interrupt();
-                }
-            });
+            if PROCESSOR.is_set() {
+                PROCESSOR.with(|proc| proc.push(runnable));
+            } else {
+                EXECUTOR.injector.push(runnable);
+                REACTOR.interrupt();
+            }
         };
 
         let (runnable, handle) = async_task::spawn(future, schedule, ());
         runnable.schedule();
         Task(Some(handle))
     }
-
-    /// TODO
-    fn processor<T>(&self, run: impl FnOnce(&Processor) -> T) -> T {
-        let id = thread::current().id();
-
-        PROCESSOR.with(|proc| {
-            // Register a new processor.
-            match self.stealers.write().unwrap().entry(id) {
-                Entry::Occupied(_) => panic!("recursive `run()`"),
-                Entry::Vacant(e) => {
-                    e.insert(proc.worker.stealer());
-                }
-            }
-            proc.is_registered.set(true);
-
-            // Run the processor.
-            let res = panic::catch_unwind(panic::AssertUnwindSafe(|| run(proc)));
-
-            // Unregister the processor.
-            let id = thread::current().id();
-            self.stealers.write().unwrap().remove(&id);
-            while let Some(r) = proc.worker.pop() {
-                self.injector.push(r);
-            }
-            proc.is_registered.set(false);
-
-            match res {
-                Ok(t) => t,
-                Err(err) => panic::resume_unwind(err),
-            }
-        })
-    }
 }
 
-thread_local! {
-    /// Holds a queue of some stealable global tasks.
-    ///
-    /// Each thread has its own queue in order to reduce contention on the global task queue.
-    static PROCESSOR: Lazy<Processor> = Lazy::new(|| Processor::new());
-}
+// Holds a queue of some stealable global tasks.
+//
+// Each thread has its own queue in order to reduce contention on the global task queue.
+scoped_thread_local!(static PROCESSOR: Processor);
 
 /// A queue of some stealable global tasks.
 ///
 /// Each thread has its own processor in order to reduce contention on the global task queue.
 struct Processor {
-    is_registered: Cell<bool>,
     slot: Cell<Option<Runnable>>,
     worker: Worker<Runnable>,
 }
@@ -404,25 +357,30 @@ struct Processor {
 impl Processor {
     /// Creates a new processor.
     fn new() -> Processor {
-        Processor {
-            is_registered: Cell::new(false),
-            slot: Cell::new(None),
-            worker: Worker::new_fifo(),
+        // Register a new processor.
+        let id = thread::current().id();
+        match EXECUTOR.stealers.write().unwrap().entry(id) {
+            Entry::Occupied(_) => panic!("recursive `run()`"),
+            Entry::Vacant(e) => {
+                let proc = Processor {
+                    slot: Cell::new(None),
+                    worker: Worker::new_fifo(),
+                };
+                e.insert(proc.worker.stealer());
+                proc
+            }
         }
     }
 
     /// Performs some work and returns `true` if there is more work to do.
     fn tick(&self) -> bool {
-        // Run a batch of local tasks and check if there are more of them.
-        let more_local = LOCAL.with(|local| local.tick());
-
         for step in 0..100 {
             if step % 16 == 0 {
                 self.flush_slot();
             }
 
             match self.pop() {
-                None => return more_local,
+                None => return ralse,
                 Some(runnable) => {
                     if use_throttle(|| runnable.run()) {
                         self.flush_slot();
@@ -489,6 +447,16 @@ impl Processor {
             }
         }
         None
+    }
+}
+
+impl Drop for Processor {
+    fn drop(&mut self) {
+        let id = thread::current().id();
+        EXECUTOR.stealers.write().unwrap().remove(&id);
+        while let Some(r) = self.worker.pop() {
+            EXECUTOR.injector.push(r);
+        }
     }
 }
 
@@ -691,16 +659,15 @@ pub fn writer(writer: impl Write + Send + 'static) -> impl AsyncWrite + Send + U
     impl<T: AsyncWrite + Send + Unpin + 'static> State<T> {
         fn start(&mut self) {
             if let State::Idle(io) = self {
-                if let Some(mut io) = io.take() {
-                    let (reader, writer) = piper::pipe(8 * 1024 * 1024); // 8 MB
-                    let task = Task::blocking(async move {
-                        match futures::io::copy(reader, &mut io).await {
-                            Ok(_) => (io.flush().await, io),
-                            Err(err) => (Err(err), io),
-                        }
-                    });
-                    *self = State::Busy(Some(writer), task);
-                }
+                let mut io = io.take().unwrap();
+                let (reader, writer) = piper::pipe(8 * 1024 * 1024); // 8 MB
+                let task = Task::blocking(async move {
+                    match futures::io::copy(reader, &mut io).await {
+                        Ok(_) => (io.flush().await, io),
+                        Err(err) => (Err(err), io),
+                    }
+                });
+                *self = State::Busy(Some(writer), task);
             }
         }
     }
@@ -849,6 +816,7 @@ impl Reactor {
 
     /// Interrupts the current or the next blocking poll invocation.
     fn interrupt(&self) {
+        // TODO: how about fn interrupt(&self, val: bool)
         INTERRUPT.get_ref().set();
     }
 }
@@ -898,9 +866,13 @@ impl Poller<'_> {
         };
 
         // Block on I/O events.
-        // TODO: handle einterrupted, make a loop
-        if self.reactor.sys.poll(&mut self.events, timeout)? == 0 {
-            return Ok(());
+        loop {
+            match self.reactor.sys.poll(&mut self.events, timeout) {
+                Ok(0) => return Ok(()),
+                Ok(_) => break,
+                Err(err) if err.kind() == io::ErrorKind::Interrupted => {}
+                Err(err) => return Err(err),
+            }
         }
 
         let sources = self.reactor.sources.lock();
@@ -1214,8 +1186,11 @@ where
 impl Async<TcpListener> {
     /// Creates a listener bound to the specified address.
     pub fn bind<A: ToString>(addr: A) -> io::Result<Async<TcpListener>> {
-        // TODO: unwrap
-        TcpListener::bind(addr.to_string().parse::<SocketAddr>().unwrap()).and_then(Async::new)
+        let addr = addr
+            .to_string()
+            .parse::<SocketAddr>()
+            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        TcpListener::bind(addr).and_then(Async::new)
     }
 
     /// Accepts a new incoming connection.
@@ -1279,8 +1254,11 @@ impl Async<TcpStream> {
 impl Async<UdpSocket> {
     /// Creates a socket bound to the specified address.
     pub fn bind<A: ToString>(addr: A) -> io::Result<Async<UdpSocket>> {
-        // TODO unwrap()
-        UdpSocket::bind(addr.to_string().parse::<SocketAddr>().unwrap()).and_then(Async::new)
+        let addr = addr
+            .to_string()
+            .parse::<SocketAddr>()
+            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        UdpSocket::bind(addr).and_then(Async::new)
     }
 
     /// Sends data to the specified address.
