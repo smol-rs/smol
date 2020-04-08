@@ -9,7 +9,7 @@ fn main() -> std::io::Result<()> {
     type Event = (OsString, EventMask);
 
     /// Reads some events without blocking.
-    fn try_read(inotify: &mut Inotify) -> io::Result<Vec<Event>> {
+    fn read_op(inotify: &mut Inotify) -> io::Result<Vec<Event>> {
         let mut buffer = [0; 1024];
         let events = inotify
             .read_events(&mut buffer)?
@@ -30,7 +30,7 @@ fn main() -> std::io::Result<()> {
         println!("Watching for filesystem events in the current directory...");
 
         loop {
-            for event in inotify.with_mut(try_read).await? {
+            for event in inotify.with_mut(read_op).await? {
                 println!("{:?}", event);
             }
         }
