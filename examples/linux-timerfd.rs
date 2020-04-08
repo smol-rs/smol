@@ -23,7 +23,7 @@ fn main() -> std::io::Result<()> {
 
         // When the timer fires, a 64-bit integer can be read from it.
         Async::new(timer)?
-            .read_with(|timer| nix::unistd::read(timer.as_raw_fd(), &mut [0u8; 8]).map_err(io_err))
+            .with(|t| nix::unistd::read(t.as_raw_fd(), &mut [0u8; 8]).map_err(io_err))
             .await?;
         Ok(())
     }

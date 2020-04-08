@@ -30,7 +30,7 @@ fn main() -> std::io::Result<()> {
         println!("Watching for filesystem events in the current directory...");
 
         loop {
-            for event in inotify.read_with_mut(try_read).await? {
+            for event in inotify.with_mut(try_read).await? {
                 println!("{:?}", event);
             }
         }

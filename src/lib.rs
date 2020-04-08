@@ -235,7 +235,7 @@ fn poll_throttle(cx: &mut Context<'_>) -> Poll<()> {
     })
 }
 
-// ----- Single-thread executor -----
+// ----- Thread-local executor -----
 
 thread_local! {
     /// Holds a queue of thread-local tasks.
@@ -530,7 +530,7 @@ impl ThreadPool {
     }
 
     /// Runs the main loop on the current thread.
-    fn run(&'static self) {
+    fn execute(&'static self) {
         let mut state = self.state.lock().unwrap();
         loop {
             state.idle_count -= 1;
@@ -574,7 +574,7 @@ impl ThreadPool {
             state.idle_count += 1;
             state.thread_count += 1;
             self.cvar.notify_all();
-            thread::spawn(move || self.run());
+            thread::spawn(move || self.execute());
         }
     }
 }
@@ -771,11 +771,15 @@ static INTERRUPT: Lazy<Async<IoFlag>> = Lazy::new(|| {
 /// A source of I/O events.
 #[derive(Debug)]
 struct Source {
-    raw: sys::Raw,
+    #[cfg(unix)]
+    raw: RawFd,
+
+    #[cfg(windows)]
+    raw: RawSocket,
+
     index: usize,
-    // TODO: watchers: piper::Lock<Vec<Waker>>,
-    readers: piper::Lock<Vec<Waker>>,
-    writers: piper::Lock<Vec<Waker>>,
+
+    wakers: piper::Lock<Vec<Waker>>,
 }
 
 /// The async I/O and timers driver.
@@ -798,14 +802,17 @@ impl Reactor {
     }
 
     /// Registers an I/O source in the reactor.
-    fn register(&self, raw: sys::Raw) -> io::Result<Arc<Source>> {
+    fn register(
+        &self,
+        #[cfg(unix)] raw: RawFd,
+        #[cfg(windows)] raw: RawSocket,
+    ) -> io::Result<Arc<Source>> {
         let mut sources = self.sources.lock();
         let vacant = sources.vacant_entry();
         let source = Arc::new(Source {
             raw,
             index: vacant.key(),
-            readers: piper::Lock::new(Vec::new()),
-            writers: piper::Lock::new(Vec::new()),
+            wakers: piper::Lock::new(Vec::new()),
         });
         self.sys.register(raw, source.index)?;
         Ok(vacant.insert(source).clone())
@@ -872,7 +879,7 @@ impl Poller<'_> {
             let pending = timers.split_off(&(now, 0));
             let ready = mem::replace(&mut *timers, pending);
 
-            // Wake up tasks waiting on ready timers.
+            // Wake up tasks waiting on timers.
             for (_, waker) in ready {
                 waker.wake();
             }
@@ -891,40 +898,24 @@ impl Poller<'_> {
         };
 
         // Block on I/O events.
+        // TODO: handle einterrupted, make a loop
         if self.reactor.sys.poll(&mut self.events, timeout)? == 0 {
             return Ok(());
         }
 
-        let mut wakers = VecDeque::new();
         let sources = self.reactor.sources.lock();
 
-        // Collect all wakers readied by I/O events.
-        for ev in self.events.iter() {
-            if let Some(source) = sources.get(ev.index) {
+        // Wake up tasks readied by I/O events.
+        for index in self.events.iter() {
+            if let Some(source) = sources.get(index) {
                 // I/O events may unregister sources, so we need to re-register.
                 self.reactor.sys.reregister(source.raw, source.index)?;
 
-                // In order to minimize worst-case latency, wake writers before readers.
-                // See https://twitter.com/kingprotty/status/1222152589405384705?s=19
-                if ev.is_write {
-                    for w in source.writers.lock().drain(..) {
-                        wakers.push_front(w);
-                    }
-                }
-                if ev.is_read {
-                    for w in source.readers.lock().drain(..) {
-                        wakers.push_back(w);
-                    }
+                // Wake up tasks waiting on I/O.
+                for w in source.wakers.lock().drain(..) {
+                    w.wake();
                 }
             }
-        }
-
-        // Drop the lock rather sooner than later for performance reasons.
-        drop(sources);
-
-        // Wake up tasks waiting on I/O.
-        for waker in wakers {
-            waker.wake();
         }
 
         Ok(())
@@ -1035,7 +1026,7 @@ impl<T: AsRawFd> Async<T> {
 
         // Register the I/O handle in the reactor.
         Ok(Async {
-            source: REACTOR.register(sys::Raw::new(&inner))?,
+            source: REACTOR.register(inner.as_raw_fd())?,
             inner: Some(Box::new(inner)),
         })
     }
@@ -1044,7 +1035,7 @@ impl<T: AsRawFd> Async<T> {
 #[cfg(unix)]
 impl<T: AsRawFd> AsRawFd for Async<T> {
     fn as_raw_fd(&self) -> RawFd {
-        self.source.raw.0
+        self.source.raw
     }
 }
 
@@ -1067,7 +1058,7 @@ impl<T: AsRawSocket> Async<T> {
 
         // Register the I/O handle in the reactor.
         Ok(Async {
-            source: REACTOR.register(sys::Raw::new(&inner))?,
+            source: REACTOR.register(inner.as_raw_socket())?,
             inner: Some(Box::new(inner)),
         })
     }
@@ -1076,7 +1067,7 @@ impl<T: AsRawSocket> Async<T> {
 #[cfg(windows)]
 impl<T: AsRawSocket> AsRawSocket for Async<T> {
     fn as_raw_socket(&self) -> RawSocket {
-        self.source.raw.0
+        self.source.raw
     }
 }
 
@@ -1098,67 +1089,29 @@ impl<T> Async<T> {
         Ok(inner)
     }
 
-    pub async fn with<R>(&self, try_op: impl FnMut(&T) -> io::Result<R>) -> io::Result<R> {
-        // TODO: use this in examples
-        todo!()
-    }
-
-    pub async fn with_mut<R>(
-        &mut self,
-        try_op: impl FnMut(&mut T) -> io::Result<R>,
-    ) -> io::Result<R> {
-        // TODO: use this in examples
-        todo!()
-    }
-
-    /// Converts a non-blocking read into an async operation.
-    pub async fn read_with<R>(&self, try_read: impl FnMut(&T) -> io::Result<R>) -> io::Result<R> {
-        let mut f = try_read;
+    pub async fn with<R>(&self, op: impl FnMut(&T) -> io::Result<R>) -> io::Result<R> {
+        let mut op = op;
         let mut inner = self.inner.as_ref().unwrap();
-        let wakers = &self.source.readers;
-        future::poll_fn(|cx| Self::poll_io(cx, |s| f(s), &mut inner, wakers)).await
+        let wakers = &self.source.wakers;
+        future::poll_fn(|cx| Self::poll_io(cx, || op(&mut inner), wakers)).await
     }
 
-    /// Converts a non-blocking read into an async operation.
-    pub async fn read_with_mut<R>(
-        &mut self,
-        try_read: impl FnMut(&mut T) -> io::Result<R>,
-    ) -> io::Result<R> {
-        let mut f = try_read;
+    pub async fn with_mut<R>(&mut self, op: impl FnMut(&mut T) -> io::Result<R>) -> io::Result<R> {
+        let mut op = op;
         let mut inner = self.inner.as_mut().unwrap();
-        let wakers = &self.source.readers;
-        future::poll_fn(|cx| Self::poll_io(cx, |s| f(s), &mut inner, wakers)).await
+        let wakers = &self.source.wakers;
+        future::poll_fn(|cx| Self::poll_io(cx, || op(&mut inner), wakers)).await
     }
 
-    /// Converts a non-blocking write into an async operation.
-    pub async fn write_with<R>(&self, try_write: impl FnMut(&T) -> io::Result<R>) -> io::Result<R> {
-        let mut f = try_write;
-        let mut inner = self.inner.as_ref().unwrap();
-        let wakers = &self.source.writers;
-        future::poll_fn(|cx| Self::poll_io(cx, |s| f(s), &mut inner, wakers)).await
-    }
-
-    /// Converts a non-blocking write into an async operation.
-    pub async fn write_with_mut<R>(
-        &mut self,
-        try_write: impl FnMut(&mut T) -> io::Result<R>,
-    ) -> io::Result<R> {
-        let mut f = try_write;
-        let mut inner = self.inner.as_mut().unwrap();
-        let wakers = &self.source.writers;
-        future::poll_fn(|cx| Self::poll_io(cx, |s| f(s), &mut inner, wakers)).await
-    }
-
-    fn poll_io<I, R>(
+    fn poll_io<R>(
         cx: &mut Context<'_>,
-        mut f: impl FnMut(&mut I) -> io::Result<R>,
-        inner: &mut I,
+        mut op: impl FnMut() -> io::Result<R>,
         wakers: &piper::Lock<Vec<Waker>>,
     ) -> Poll<io::Result<R>> {
         futures::ready!(poll_throttle(cx));
 
         // Attempt the non-blocking operation.
-        match f(inner) {
+        match op() {
             Err(err) if err.kind() == io::ErrorKind::WouldBlock => {}
             res => return Poll::Ready(res),
         }
@@ -1167,7 +1120,7 @@ impl<T> Async<T> {
         let mut wakers = wakers.lock();
 
         // Attempt the non-blocking operation again.
-        match f(inner) {
+        match op() {
             Err(err) if err.kind() == io::ErrorKind::WouldBlock => {}
             res => return Poll::Ready(res),
         }
@@ -1191,15 +1144,18 @@ impl<T> Drop for Async<T> {
     }
 }
 
+fn poll_future<T>(cx: &mut Context<'_>, fut: impl Future<Output = T>) -> Poll<T> {
+    futures::pin_mut!(fut);
+    fut.poll(cx)
+}
+
 impl<T: Read> AsyncRead for Async<T> {
     fn poll_read(
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
         buf: &mut [u8],
     ) -> Poll<io::Result<usize>> {
-        let fut = self.read_with_mut(|inner| inner.read(buf));
-        futures::pin_mut!(fut);
-        fut.poll(cx)
+        poll_future(cx, self.with_mut(|inner| inner.read(buf)))
     }
 }
 
@@ -1212,9 +1168,7 @@ where
         cx: &mut Context<'_>,
         buf: &mut [u8],
     ) -> Poll<io::Result<usize>> {
-        let fut = self.read_with(|inner| (&*inner).read(buf));
-        futures::pin_mut!(fut);
-        fut.poll(cx)
+        poll_future(cx, self.with(|inner| (&*inner).read(buf)))
     }
 }
 
@@ -1224,15 +1178,11 @@ impl<T: Write> AsyncWrite for Async<T> {
         cx: &mut Context<'_>,
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
-        let fut = self.write_with_mut(|inner| inner.write(buf));
-        futures::pin_mut!(fut);
-        fut.poll(cx)
+        poll_future(cx, self.with_mut(|inner| inner.write(buf)))
     }
 
     fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        let fut = self.write_with_mut(|inner| inner.flush());
-        futures::pin_mut!(fut);
-        fut.poll(cx)
+        poll_future(cx, self.with_mut(|inner| inner.flush()))
     }
 
     fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
@@ -1249,15 +1199,11 @@ where
         cx: &mut Context<'_>,
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
-        let fut = self.write_with(|inner| (&*inner).write(buf));
-        futures::pin_mut!(fut);
-        fut.poll(cx)
+        poll_future(cx, self.with(|inner| (&*inner).write(buf)))
     }
 
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        let fut = self.write_with(|inner| (&*inner).flush());
-        futures::pin_mut!(fut);
-        fut.poll(cx)
+        poll_future(cx, self.with(|inner| (&*inner).flush()))
     }
 
     fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
@@ -1274,7 +1220,7 @@ impl Async<TcpListener> {
 
     /// Accepts a new incoming connection.
     pub async fn accept(&self) -> io::Result<(Async<TcpStream>, SocketAddr)> {
-        let (stream, addr) = self.read_with(|inner| inner.accept()).await?;
+        let (stream, addr) = self.with(|inner| inner.accept()).await?;
         Ok((Async::new(stream)?, addr))
     }
 
@@ -1319,14 +1265,14 @@ impl Async<TcpStream> {
             res => res.map(|_| ()),
         };
         // The stream becomes writable when connected.
-        stream.write_with(|inner| wait_connect(inner)).await?;
+        stream.with(|inner| wait_connect(inner)).await?;
 
         Ok(stream)
     }
 
     /// Receives data from the stream without removing it from the buffer.
     pub async fn peek(&self, buf: &mut [u8]) -> io::Result<usize> {
-        self.read_with(|inner| inner.peek(buf)).await
+        self.with(|inner| inner.peek(buf)).await
     }
 }
 
@@ -1340,32 +1286,32 @@ impl Async<UdpSocket> {
     /// Sends data to the specified address.
     pub async fn send_to<A: Into<SocketAddr>>(&self, buf: &[u8], addr: A) -> io::Result<usize> {
         let addr = addr.into();
-        self.write_with(|inner| inner.send_to(buf, addr)).await
+        self.with(|inner| inner.send_to(buf, addr)).await
     }
 
     /// Sends data to the socket's peer.
     pub async fn send(&self, buf: &[u8]) -> io::Result<usize> {
-        self.write_with(|inner| inner.send(buf)).await
+        self.with(|inner| inner.send(buf)).await
     }
 
     /// Receives data from the socket.
     pub async fn recv_from(&self, buf: &mut [u8]) -> io::Result<(usize, SocketAddr)> {
-        self.read_with(|inner| inner.recv_from(buf)).await
+        self.with(|inner| inner.recv_from(buf)).await
     }
 
     /// Receives data from the socket's peer.
     pub async fn recv(&self, buf: &mut [u8]) -> io::Result<usize> {
-        self.read_with(|inner| inner.recv(buf)).await
+        self.with(|inner| inner.recv(buf)).await
     }
 
     /// Receives data without removing it from the buffer.
     pub async fn peek_from(&self, buf: &mut [u8]) -> io::Result<(usize, SocketAddr)> {
-        self.read_with(|inner| inner.peek_from(buf)).await
+        self.with(|inner| inner.peek_from(buf)).await
     }
 
     /// Receives data from the socket's peer without removing it from the buffer.
     pub async fn peek(&self, buf: &mut [u8]) -> io::Result<usize> {
-        self.read_with(|inner| inner.peek(buf)).await
+        self.with(|inner| inner.peek(buf)).await
     }
 }
 
@@ -1379,7 +1325,7 @@ impl Async<UnixListener> {
 
     /// Accepts a new incoming connection.
     pub async fn accept(&self) -> io::Result<(Async<UnixStream>, UnixSocketAddr)> {
-        let (stream, addr) = self.read_with(|inner| inner.accept()).await?;
+        let (stream, addr) = self.with(|inner| inner.accept()).await?;
         Ok((Async::new(stream)?, addr))
     }
 
@@ -1430,26 +1376,29 @@ impl Async<UnixDatagram> {
 
     /// Sends data to the specified address.
     pub async fn send_to<P: AsRef<Path>>(&self, buf: &[u8], path: P) -> io::Result<usize> {
-        self.write_with(|inner| inner.send_to(buf, &path)).await
+        self.with(|inner| inner.send_to(buf, &path)).await
     }
 
     /// Sends data to the socket's peer.
     pub async fn send(&self, buf: &[u8]) -> io::Result<usize> {
-        self.write_with(|inner| inner.send(buf)).await
+        self.with(|inner| inner.send(buf)).await
     }
 
     /// Receives data from the socket.
     pub async fn recv_from(&self, buf: &mut [u8]) -> io::Result<(usize, UnixSocketAddr)> {
-        self.read_with(|inner| inner.recv_from(buf)).await
+        self.with(|inner| inner.recv_from(buf)).await
     }
 
     /// Receives data from the socket's peer.
     pub async fn recv(&self, buf: &mut [u8]) -> io::Result<usize> {
-        self.read_with(|inner| inner.recv(buf)).await
+        self.with(|inner| inner.recv(buf)).await
     }
 }
 
 // ----- I/O flag -----
+
+// TODO: make this async without having to wrap into Async<T>
+// TODO: rename to SelfPipe?
 
 /// A boolean flag that triggers I/O events whenever changed.
 struct IoFlag {
@@ -1505,18 +1454,8 @@ impl IoFlag {
             // If this thread sets it...
             if !self.flag.swap(true, Ordering::SeqCst) {
                 // Trigger an I/O event by writing a byte into the sending socket.
-                loop {
-                    match (&self.socket_notify).write(&[1]) {
-                        Err(err) if err.kind() == io::ErrorKind::Interrupted => {}
-                        _ => break,
-                    }
-                }
-                loop {
-                    match (&self.socket_notify).flush() {
-                        Err(err) if err.kind() == io::ErrorKind::Interrupted => {}
-                        _ => break,
-                    }
-                }
+                let _ = (&self.socket_notify).write(&[1]);
+                let _ = (&self.socket_notify).flush();
             }
         }
     }
@@ -1531,13 +1470,7 @@ impl IoFlag {
         let value = self.flag.swap(false, Ordering::SeqCst);
         if value {
             // Read all available bytes from the receiving socket.
-            loop {
-                match (&self.socket_wakeup).read(&mut [0; 64]) {
-                    Ok(n) if n > 0 => {}
-                    Err(err) if err.kind() == io::ErrorKind::Interrupted => {}
-                    _ => break,
-                }
-            }
+            while (&self.socket_wakeup).read(&mut [0; 64]).is_ok() {}
         }
 
         // Publish all in-memory changes after clearing the flag.
@@ -1565,7 +1498,7 @@ impl Async<IoFlag> {
     ///
     /// Note that this method may spuriously report changes when they didn't really happen.
     async fn ready(&self) {
-        self.read_with(|inner| match inner.get() {
+        self.with(|inner| match inner.get() {
             true => Ok(()),
             false => Err(io::Error::new(io::ErrorKind::WouldBlock, "")),
         })
@@ -1580,48 +1513,36 @@ impl Async<IoFlag> {
 mod sys {
     use std::convert::TryInto;
     use std::io;
-    use std::os::unix::io::{AsRawFd, RawFd};
+    use std::os::unix::io::RawFd;
     use std::time::Duration;
 
-    use nix::errno::Errno;
     use nix::sys::epoll::{
         epoll_create1, epoll_ctl, epoll_wait, EpollCreateFlags, EpollEvent, EpollFlags, EpollOp,
     };
 
-    #[derive(Clone, Copy, Debug)]
-    pub struct Raw(pub RawFd);
-    impl Raw {
-        pub fn new(s: &impl AsRawFd) -> Raw {
-            Raw(s.as_raw_fd())
-        }
-    }
+    use super::io_err;
 
     pub struct Reactor(RawFd);
     impl Reactor {
         pub fn create() -> io::Result<Reactor> {
-            Ok(Reactor(
-                epoll_create1(EpollCreateFlags::EPOLL_CLOEXEC).map_err(super::io_err)?,
-            ))
+            let epoll_fd = epoll_create1(EpollCreateFlags::EPOLL_CLOEXEC).map_err(io_err)?;
+            Ok(Reactor(epoll_fd))
         }
-        pub fn register(&self, raw: Raw, index: usize) -> io::Result<()> {
+        pub fn register(&self, fd: RawFd, index: usize) -> io::Result<()> {
             let ev = &mut EpollEvent::new(flags(), index as u64);
-            epoll_ctl(self.0, EpollOp::EpollCtlAdd, raw.0, Some(ev)).map_err(super::io_err)
+            epoll_ctl(self.0, EpollOp::EpollCtlAdd, fd, Some(ev)).map_err(io_err)
         }
-        pub fn reregister(&self, _raw: Raw, _index: usize) -> io::Result<()> {
+        pub fn reregister(&self, _raw: RawFd, _index: usize) -> io::Result<()> {
             Ok(())
         }
-        pub fn deregister(&self, raw: Raw) -> io::Result<()> {
-            Ok(epoll_ctl(self.0, EpollOp::EpollCtlDel, raw.0, None).unwrap())
+        pub fn deregister(&self, fd: RawFd) -> io::Result<()> {
+            epoll_ctl(self.0, EpollOp::EpollCtlDel, fd, None).map_err(io_err)
         }
         pub fn poll(&self, events: &mut Events, timeout: Option<Duration>) -> io::Result<usize> {
             let timeout_ms = timeout
                 .and_then(|t| t.as_millis().try_into().ok())
                 .unwrap_or(-1);
-            events.len = match epoll_wait(self.0, &mut events.list, timeout_ms) {
-                Ok(len) => len,
-                Err(nix::Error::Sys(Errno::EINTR)) => 0,
-                Err(err) => return Err(super::io_err(err)),
-            };
+            events.len = epoll_wait(self.0, &mut events.list, timeout_ms).map_err(io_err)?;
             Ok(events.len)
         }
     }
@@ -1635,23 +1556,13 @@ mod sys {
     }
     impl Events {
         pub fn new() -> Events {
-            Events {
-                list: vec![EpollEvent::empty(); 1000].into_boxed_slice(),
-                len: 0,
-            }
+            let list = vec![EpollEvent::empty(); 1000].into_boxed_slice();
+            let len = 0;
+            Events { list, len }
         }
-        pub fn iter(&self) -> impl Iterator<Item = Event> + '_ {
-            self.list[..self.len].iter().map(|ev| Event {
-                is_read: ev.events() != EpollFlags::EPOLLOUT,
-                is_write: ev.events() != EpollFlags::EPOLLIN,
-                index: ev.data() as usize,
-            })
+        pub fn iter(&self) -> impl Iterator<Item = usize> + '_ {
+            self.list[..self.len].iter().map(|ev| ev.data() as usize)
         }
-    }
-    pub struct Event {
-        pub is_read: bool,
-        pub is_write: bool,
-        pub index: usize,
     }
 }
 
@@ -1668,7 +1579,7 @@ mod sys {
 mod sys {
     use std::convert::TryInto;
     use std::io;
-    use std::os::unix::io::{AsRawFd, RawFd};
+    use std::os::unix::io::RawFd;
     use std::time::Duration;
 
     use nix::errno::Errno;
@@ -1676,65 +1587,48 @@ mod sys {
     use nix::libc;
     use nix::sys::event::{kevent_ts, kqueue, EventFilter, EventFlag, FilterFlag, KEvent};
 
-    #[derive(Clone, Copy, Debug)]
-    pub struct Raw(pub RawFd);
-    impl Raw {
-        pub fn new(s: &impl AsRawFd) -> Raw {
-            Raw(s.as_raw_fd())
-        }
-    }
+    use super::io_err;
 
     pub struct Reactor(RawFd);
     impl Reactor {
         pub fn create() -> io::Result<Reactor> {
-            let fd = kqueue().map_err(super::io_err)?;
-            fcntl(fd, FcntlArg::F_SETFD(FdFlag::FD_CLOEXEC)).map_err(super::io_err)?;
+            let fd = kqueue().map_err(io_err)?;
+            fcntl(fd, FcntlArg::F_SETFD(FdFlag::FD_CLOEXEC)).map_err(io_err)?;
             Ok(Reactor(fd))
         }
-        pub fn register(&self, raw: Raw, index: usize) -> io::Result<()> {
-            let ident = raw.0 as _;
+        pub fn register(&self, fd: RawFd, index: usize) -> io::Result<()> {
             let flags = EventFlag::EV_CLEAR | EventFlag::EV_RECEIPT | EventFlag::EV_ADD;
-            let fflags = FilterFlag::empty();
             let udata = index as _;
             let changelist = [
-                KEvent::new(ident, EventFilter::EVFILT_WRITE, flags, fflags, 0, udata),
-                KEvent::new(ident, EventFilter::EVFILT_READ, flags, fflags, 0, udata),
+                KEvent::new(fd as _, EventFilter::EVFILT_WRITE, flags, FFLAGS, 0, udata),
+                KEvent::new(fd as _, EventFilter::EVFILT_READ, flags, FFLAGS, 0, udata),
             ];
             let mut eventlist = changelist.clone();
-            match kevent_ts(self.0, &changelist, &mut eventlist, None) {
-                Ok(_) | Err(nix::Error::Sys(Errno::EINTR)) => {}
-                Err(err) => return Err(super::io_err(err)),
-            }
+            kevent_ts(self.0, &changelist, &mut eventlist, None).map_err(io_err)?;
             for ev in &eventlist {
                 // See https://github.com/tokio-rs/mio/issues/582
-                if ev.data() != 0
-                    && ev.data() != Errno::EPIPE as _
-                    && ev.flags().contains(EventFlag::EV_ERROR)
-                {
-                    return Err(io::Error::from_raw_os_error(ev.data() as _));
+                let (flags, data) = (ev.flags(), ev.data());
+                if flags.contains(EventFlag::EV_ERROR) && data != 0 && data != Errno::EPIPE as _ {
+                    return Err(io::Error::from_raw_os_error(data as _));
                 }
             }
             Ok(())
         }
-        pub fn reregister(&self, _raw: Raw, _index: usize) -> io::Result<()> {
+        pub fn reregister(&self, _fd: RawFd, _index: usize) -> io::Result<()> {
             Ok(())
         }
-        pub fn deregister(&self, raw: Raw) -> io::Result<()> {
-            let ident = raw.0 as _;
+        pub fn deregister(&self, fd: RawFd) -> io::Result<()> {
             let flags = EventFlag::EV_RECEIPT | EventFlag::EV_DELETE;
-            let fflags = FilterFlag::empty();
             let changelist = [
-                KEvent::new(ident, EventFilter::EVFILT_WRITE, flags, fflags, 0, 0),
-                KEvent::new(ident, EventFilter::EVFILT_READ, flags, fflags, 0, 0),
+                KEvent::new(fd as _, EventFilter::EVFILT_WRITE, flags, FFLAGS, 0, 0),
+                KEvent::new(fd as _, EventFilter::EVFILT_READ, flags, FFLAGS, 0, 0),
             ];
             let mut eventlist = changelist.clone();
-            match kevent_ts(self.0, &changelist, &mut eventlist, None) {
-                Ok(_) | Err(nix::Error::Sys(Errno::EINTR)) => {}
-                Err(err) => return Err(super::io_err(err)),
-            }
+            kevent_ts(self.0, &changelist, &mut eventlist, None).map_err(io_err)?;
             for ev in &eventlist {
-                if ev.data() != 0 && ev.flags().contains(EventFlag::EV_ERROR) {
-                    return Err(io::Error::from_raw_os_error(ev.data() as _));
+                let (flags, data) = (ev.flags(), ev.data());
+                if flags.contains(EventFlag::EV_ERROR) && data != 0 {
+                    return Err(io::Error::from_raw_os_error(data as _));
                 }
             }
             Ok(())
@@ -1745,14 +1639,11 @@ mod sys {
                 tv_sec: (ms / 1000) as libc::time_t,
                 tv_nsec: ((ms % 1000) * 1_000_000) as libc::c_long,
             });
-            events.len = match kevent_ts(self.0, &[], &mut events.list, timeout) {
-                Ok(n) => n,
-                Err(nix::Error::Sys(Errno::EINTR)) => 0,
-                Err(err) => return Err(super::io_err(err)),
-            };
+            events.len = kevent_ts(self.0, &[], &mut events.list, timeout).map_err(io_err)?;
             Ok(events.len)
         }
     }
+    const FFLAGS: EventFlag = EventFlag::empty();
 
     pub struct Events {
         list: Box<[KEvent]>,
@@ -1761,25 +1652,14 @@ mod sys {
     impl Events {
         pub fn new() -> Events {
             let flags = EventFlag::empty();
-            let fflags = FilterFlag::empty();
-            let event = KEvent::new(0, EventFilter::EVFILT_USER, flags, fflags, 0, 0);
-            Events {
-                list: vec![event; 1000].into_boxed_slice(),
-                len: 0,
-            }
+            let event = KEvent::new(0, EventFilter::EVFILT_USER, flags, FFLAGS, 0, 0);
+            let list = vec![event; 1000].into_boxed_slice();
+            let len = 0;
+            Events { list, len }
         }
-        pub fn iter(&self) -> impl Iterator<Item = Event> + '_ {
-            self.list[..self.len].iter().map(|ev| Event {
-                is_read: ev.filter() != EventFilter::EVFILT_WRITE,
-                is_write: ev.filter() != EventFilter::EVFILT_READ,
-                index: ev.udata() as usize,
-            })
+        pub fn iter(&self) -> impl Iterator<Item = usize> + '_ {
+            self.list[..self.len].iter().map(|ev| ev.udata() as usize)
         }
-    }
-    pub struct Event {
-        pub is_read: bool,
-        pub is_write: bool,
-        pub index: usize,
     }
 }
 
@@ -1793,45 +1673,33 @@ mod sys {
 
     use wepoll_binding::{Epoll, EventFlag};
 
-    #[derive(Clone, Copy, Debug)]
-    pub struct Raw(pub RawSocket);
-    impl Raw {
-        pub fn new(s: &impl AsRawSocket) -> Raw {
-            Raw(s.as_raw_socket())
-        }
-    }
-    impl AsRawSocket for Raw {
-        fn as_raw_socket(&self) -> RawSocket {
-            self.0
-        }
-    }
-
     pub struct Reactor(Epoll);
     impl Reactor {
         pub fn create() -> io::Result<Reactor> {
             Ok(Reactor(Epoll::new()?))
         }
-        pub fn register(&self, raw: Raw, index: usize) -> io::Result<()> {
-            self.0.register(&raw, flags(), index as u64)
+        pub fn register(&self, sock: RawSocket, index: usize) -> io::Result<()> {
+            self.0.register(&As(sock), flags(), index as u64)
         }
-        pub fn reregister(&self, raw: Raw, index: usize) -> io::Result<()> {
+        pub fn reregister(&self, sock: RawSocket, index: usize) -> io::Result<()> {
             // Ignore errors because a concurrent poll can reregister the handle at any point.
-            let _ = self.0.reregister(&raw, flags(), index as u64);
+            let _ = self.0.reregister(&As(sock), flags(), index as u64);
             Ok(())
         }
-        pub fn deregister(&self, raw: Raw) -> io::Result<()> {
+        pub fn deregister(&self, sock: RawSocket) -> io::Result<()> {
             // Ignore errors because an event can deregister the handle at any point.
-            let _ = self.0.deregister(&raw);
+            let _ = self.0.deregister(&As(sock));
             Ok(())
         }
         pub fn poll(&self, events: &mut Events, timeout: Option<Duration>) -> io::Result<usize> {
             events.0.clear();
-            let n = match self.0.poll(&mut events.0, timeout) {
-                Ok(n) => n,
-                Err(err) if err.kind() == io::ErrorKind::Interrupted => 0,
-                Err(err) => return Err(err),
-            };
-            Ok(n)
+            self.0.poll(&mut events.0, timeout)
+        }
+    }
+    struct As(RawSocket);
+    impl AsRawSocket for As {
+        fn as_raw_socket(&self) -> RawSocket {
+            self.0
         }
     }
     fn flags() -> EventFlag {
@@ -1843,17 +1711,8 @@ mod sys {
         pub fn new() -> Events {
             Events(wepoll_binding::Events::with_capacity(1000))
         }
-        pub fn iter(&self) -> impl Iterator<Item = Event> + '_ {
-            self.0.iter().map(|ev| Event {
-                is_read: ev.flags() != EventFlag::OUT,
-                is_write: ev.flags() != EventFlag::IN,
-                index: ev.data() as usize,
-            })
+        pub fn iter(&self) -> impl Iterator<Item = usize> + '_ {
+            self.0.iter().map(|ev| ev.data() as usize)
         }
-    }
-    pub struct Event {
-        pub is_read: bool,
-        pub is_write: bool,
-        pub index: usize,
     }
 }
