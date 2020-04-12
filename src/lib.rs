@@ -1641,7 +1641,7 @@ mod sys {
             Ok(events.len)
         }
     }
-    const FFLAGS: EventFlag = EventFlag::empty();
+    const FFLAGS: FilterFlag = FilterFlag::empty();
 
     pub struct Events {
         list: Box<[KEvent]>,
