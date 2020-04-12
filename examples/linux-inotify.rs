@@ -17,7 +17,7 @@ fn main() -> std::io::Result<()> {
             .collect::<Vec<_>>();
 
         if events.is_empty() {
-            Err(io::Error::new(io::ErrorKind::WouldBlock, ""))
+            Err(io::ErrorKind::WouldBlock.into())
         } else {
             Ok(events)
         }

@@ -466,7 +466,7 @@ impl List {
     /// Notifies an entry.
     #[cold]
     fn notify(&mut self, notify_all: bool) {
-        let mut entry = self.head;
+        let mut entry = self.tail;
 
         // Iterate over the entries in the list.
         while let Some(e) = entry {
@@ -491,7 +491,7 @@ impl List {
 
             // If all entries need to be notified, go to the next one.
             if notify_all {
-                entry = e.next.get();
+                entry = e.prev.get();
             } else {
                 break;
             }

@@ -16,12 +16,12 @@
 compile_error!("smol does not support this target OS");
 
 use std::cell::{Cell, RefCell};
-use std::collections::hash_map::Entry;
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::{BTreeMap, VecDeque};
 use std::fmt::Debug;
 use std::io::{self, Read, Write};
 use std::mem;
 use std::net::{SocketAddr, TcpListener, TcpStream, ToSocketAddrs, UdpSocket};
+use std::num::Wrapping;
 use std::panic;
 use std::pin::Pin;
 use std::sync::atomic::{self, AtomicBool, AtomicU64, Ordering};
@@ -52,7 +52,26 @@ use slab::Slab;
 use socket2::{Domain, Protocol, Socket, Type};
 use std::sync::{Condvar, Mutex, MutexGuard};
 
-// ----- Task -----
+// ----- Global variables -----
+
+// Holds a queue of thread-local tasks.
+scoped_thread_local!(static LOCAL_EXECUTOR: LocalExecutor);
+
+// Holds a queue of some stealable global tasks.
+//
+// Each thread has its own queue in order to reduce contention on the global task queue.
+scoped_thread_local!(static WORKER: Worker);
+
+// Holds the global task queue.
+static WORK_STEALING: Lazy<WorkStealing> = Lazy::new(|| WorkStealing::new());
+
+static BLOCKING_POOL: Lazy<BlockingPool> = Lazy::new(|| BlockingPool::new());
+
+static REACTOR: Lazy<Reactor> = Lazy::new(|| Reactor::create().unwrap());
+
+static INTERRUPT: Lazy<SelfPipe> = Lazy::new(|| SelfPipe::create().unwrap());
+
+// ----- The task system -----
 
 /// A runnable future, ready for execution.
 type Runnable = async_task::Task<()>;
@@ -67,7 +86,7 @@ impl<T: Send + 'static> Task<T> {
     ///
     /// This future is allowed to be stolen by another executor.
     pub fn spawn(future: impl Future<Output = T> + Send + 'static) -> Task<T> {
-        GLOBAL_EXECUTOR.spawn(future)
+        WORK_STEALING.spawn(future)
     }
 
     /// Spawns a future onto a thread where blocking is allowed.
@@ -157,51 +176,56 @@ pub fn block_on<T>(future: impl Future<Output = T>) -> T {
 
 /// Executes all futures until the main one completes.
 pub fn run<T>(future: impl Future<Output = T>) -> T {
-    let worker = GLOBAL_EXECUTOR.worker();
+    if LOCAL_EXECUTOR.is_set() || WORKER.is_set() {
+        panic!("recursive `run()`");
+    }
+
+    // TODO: Explain how this runs three executors (block_on, local, ws)
+    // -> it's like concurrent block_on(), LocalExecutor::execute(), Worker::execute()
 
     let flag = Arc::new(SelfPipe::create().expect("cannot create a self-pipe"));
-    let flag2 = flag.clone();
-    let waker = async_task::waker_fn(move || flag2.set());
+    let local = LocalExecutor::new(flag.clone());
+    let worker = WORK_STEALING.worker();
+
+    let f = flag.clone();
+    let waker = async_task::waker_fn(move || f.set());
     let cx = &mut Context::from_waker(&waker);
     futures::pin_mut!(future);
 
-    loop {
-        flag.clear();
-        if let Poll::Ready(val) = future.as_mut().poll(cx) {
-            return val;
-        }
+    LOCAL_EXECUTOR.set(&local, || {
+        WORKER.set(&worker, || {
+            loop {
+                if let Poll::Ready(val) = use_throttle(|| future.as_mut().poll(cx)) {
+                    return val;
+                }
+                let more_local = local.execute();
+                let more_worker = worker.execute();
 
-        while !flag.get() {
-            let more_local = LOCAL_EXECUTOR.with(|ex| ex.execute());
-            let more_worker = WORKER.set(&worker, || worker.execute());
+                if !flag.clear() && !more_local && !more_worker {
+                    let lock = REACTOR.lock();
+                    let ready = flag.ready();
+                    futures::pin_mut!(lock);
+                    futures::pin_mut!(ready);
 
-            if !more_local && !more_worker {
-                let lock = REACTOR.lock();
-                let ready = flag.ready();
-                futures::pin_mut!(lock);
-                futures::pin_mut!(ready);
-
-                // Block until either the reactor is locked or the flag is set.
-                if let Either::Left((mut reactor, _)) = block_on(future::select(lock, ready)) {
-                    if !flag.get() {
-                        reactor.wait().expect("failure while polling I/O");
+                    // Block until either the reactor is locked or the flag is set.
+                    if let Either::Left((mut reactor, _)) = block_on(future::select(lock, ready)) {
+                        if !flag.clear() && !INTERRUPT.clear() {
+                            reactor.wait().expect("failure while polling I/O");
+                        }
                     }
                 }
             }
-        }
-    }
+        })
+    })
 }
 
 scoped_thread_local!(static BUDGET: Cell<u32>);
 
 /// Runs a task and returns `true` if it was throttled.
-fn use_throttle(run: impl FnOnce()) -> bool {
-    let b = Cell::new(200);
-    BUDGET.set(&b, run);
-    b.get() == 0
+fn use_throttle<T>(run: impl FnOnce() -> T) -> T {
+    BUDGET.set(&Cell::new(200), run)
 }
 
-#[inline]
 fn poll_throttle(cx: &mut Context<'_>) -> Poll<()> {
     if BUDGET.is_set() && BUDGET.with(|b| b.replace(b.get().saturating_sub(1))) == 0 {
         cx.waker().wake_by_ref();
@@ -212,43 +236,42 @@ fn poll_throttle(cx: &mut Context<'_>) -> Poll<()> {
 
 // ----- Thread-local executor -----
 
-thread_local! {
-    /// Holds a queue of thread-local tasks.
-    static LOCAL_EXECUTOR: Lazy<LocalExecutor> = Lazy::new(|| LocalExecutor::new());
-}
-
 /// A queue of thread-local tasks.
 struct LocalExecutor {
-    id: ThreadId,
     queue: RefCell<VecDeque<Runnable>>,
-    remote: Arc<SegQueue<Runnable>>,
+    injector: Arc<LocalInjector>,
+}
+
+struct LocalInjector {
+    flag: Arc<SelfPipe>,
+    queue: SegQueue<Runnable>,
 }
 
 impl LocalExecutor {
-    fn new() -> LocalExecutor {
+    fn new(flag: Arc<SelfPipe>) -> LocalExecutor {
         LocalExecutor {
-            id: thread::current().id(),
             queue: RefCell::new(VecDeque::new()),
-            remote: Arc::new(SegQueue::new()),
+            injector: Arc::new(LocalInjector {
+                flag,
+                queue: SegQueue::new(),
+            }),
         }
     }
 
     fn spawn<T: 'static>(&self, future: impl Future<Output = T> + 'static) -> Task<T> {
-        let id = self.id;
-        let remote = self.remote.clone();
+        let id = thread_id();
+        let injector = self.injector.clone();
 
         let schedule = move |runnable| {
-            LOCAL_EXECUTOR.with(|ex| {
-                if ex.id == id {
-                    // If scheduling from the original thread, push into the main queue.
-                    ex.queue.borrow_mut().push_back(runnable);
-                } else {
-                    // If scheduling from a remote thread, push into the remote queue.
-                    remote.push(runnable);
-                    // The original thread may be currently polling so let's interrupt it.
-                    INTERRUPT.set();
-                }
-            });
+            if thread_id() == id {
+                // If scheduling from the original thread, push into the main queue.
+                LOCAL_EXECUTOR.with(|ex| ex.queue.borrow_mut().push_back(runnable));
+            } else {
+                // If scheduling from a remote thread, push into the injector queue.
+                injector.queue.push(runnable);
+                // The original thread may be currently polling so let's interrupt it.
+                injector.flag.set();
+            }
         };
 
         let (runnable, handle) = async_task::spawn_local(future, schedule, ());
@@ -256,14 +279,15 @@ impl LocalExecutor {
         Task(Some(handle))
     }
 
-    /// Performs some work and returns `true` if there is more work to do.
+    /// Executes a batch of tasks and returns `true` if there is more work to do.
     fn execute(&self) -> bool {
-        for _ in 0..100 {
-            let runnable = match self.pop() {
+        for _ in 0..200 {
+            match self.pop() {
                 None => return false,
-                Some(r) => r,
-            };
-            use_throttle(|| runnable.run());
+                Some(r) => {
+                    use_throttle(|| r.run());
+                }
+            }
         }
         self.fetch();
         true
@@ -283,28 +307,32 @@ impl LocalExecutor {
         REACTOR.poll().expect("failure while polling I/O");
 
         let mut queue = self.queue.borrow_mut();
-        while let Ok(r) = self.remote.pop() {
+        while let Ok(r) = self.injector.queue.pop() {
             queue.push_back(r);
         }
     }
 }
 
-// ----- Global work-stealing executor -----
-
-/// Holds the global task queue.
-static GLOBAL_EXECUTOR: Lazy<GlobalExecutor> = Lazy::new(|| GlobalExecutor::new());
-
-/// Holds the global task queue and registered workers.
-struct GlobalExecutor {
-    injector: deque::Injector<Runnable>,
-    stealers: ShardedLock<HashMap<ThreadId, deque::Stealer<Runnable>>>,
+fn thread_id() -> ThreadId {
+    thread_local! {
+        static ID: ThreadId = thread::current().id();
+    }
+    ID.with(|id| *id)
 }
 
-impl GlobalExecutor {
-    fn new() -> GlobalExecutor {
-        GlobalExecutor {
+// ----- Global work-stealing executor -----
+
+/// Holds the global task queue and registered workers.
+struct WorkStealing {
+    injector: deque::Injector<Runnable>,
+    stealers: ShardedLock<Slab<deque::Stealer<Runnable>>>,
+}
+
+impl WorkStealing {
+    fn new() -> WorkStealing {
+        WorkStealing {
             injector: deque::Injector::new(),
-            stealers: ShardedLock::new(HashMap::new()),
+            stealers: ShardedLock::new(Slab::new()),
         }
     }
 
@@ -328,24 +356,18 @@ impl GlobalExecutor {
     }
 
     /// Registers a new worker.
-    fn worker(&self) -> Worker {
-        let id = thread::current().id();
-        match self.stealers.write().unwrap().entry(id) {
-            Entry::Occupied(_) => panic!("recursive `run()`"),
-            Entry::Vacant(vacant) => {
-                let slot = Cell::new(None);
-                let worker = deque::Worker::new_fifo();
-                vacant.insert(worker.stealer());
-                Worker { id, slot, worker }
-            }
-        }
+    fn worker(&'static self) -> Worker {
+        let mut stealers = self.stealers.write().unwrap();
+        let vacant = stealers.vacant_entry();
+        let worker = Worker {
+            id: vacant.key(),
+            slot: Cell::new(None),
+            worker: deque::Worker::new_fifo(),
+        };
+        vacant.insert(worker.worker.stealer());
+        worker
     }
 }
-
-// Holds a queue of some stealable global tasks.
-//
-// Each thread has its own queue in order to reduce contention on the global task queue.
-scoped_thread_local!(static WORKER: Worker);
 
 // TODO: explain that whenever something is pushed into worker/injector, we need to interrupt
 
@@ -353,27 +375,28 @@ scoped_thread_local!(static WORKER: Worker);
 ///
 /// Each thread has its own worker in order to reduce contention on the global task queue.
 struct Worker {
-    id: ThreadId,
+    id: usize,
     slot: Cell<Option<Runnable>>,
     worker: deque::Worker<Runnable>,
 }
 
 impl Worker {
-    /// Performs some work and returns `true` if there is more work to do.
+    /// Executes a batch of tasks and returns `true` if there is more work to do.
     fn execute(&self) -> bool {
-        for _ in 0..10 {
-            for _ in 0..10 {
-                let runnable = match self.pop().or_else(|| self.steal()) {
+        for _ in 0..4 {
+            for _ in 0..50 {
+                match self.pop() {
                     None => return false,
-                    Some(r) => r,
-                };
-                if use_throttle(|| runnable.run()) {
-                    break;
+                    Some(r) => {
+                        if use_throttle(|| r.run()) {
+                            self.push(None);
+                        }
+                    }
                 }
             }
             self.push(None);
+            self.fetch();
         }
-        self.fetch();
         true
     }
 
@@ -399,40 +422,71 @@ impl Worker {
 
     fn fetch(&self) {
         // Try stealing from the global queue.
-        if let Some(()) = retry(|| GLOBAL_EXECUTOR.injector.steal_batch(&self.worker)) {
-            // A task has been pushed into the local queue - we need to interrupt.
+        if let Some(r) = ws_retry(|| WORK_STEALING.injector.steal_batch_and_pop(&self.worker)) {
+            self.push(r); // TODO: optimize interrupts
+                          // A task has been pushed into the local queue - we need to interrupt.
             INTERRUPT.set();
         }
+
         // Poll the reactor.
         REACTOR.poll().expect("failure while polling I/O");
-    }
 
-    fn steal(&self) -> Option<Runnable> {
-        let stealers = GLOBAL_EXECUTOR.stealers.read().unwrap();
-        if let Some(r) = retry(|| {
+        if let Some(r) = self.slot.take() {
+            self.slot.set(Some(r));
+            return;
+        }
+        if !self.worker.is_empty() {
+            return;
+        }
+
+        let stealers = WORK_STEALING.stealers.read().unwrap();
+        let mid = fast_random(stealers.len());
+        if let Some(r) = ws_retry(|| {
             stealers
-                .values()
-                .map(|s| s.steal_batch_and_pop(&self.worker))
+                .iter()
+                .chain(stealers.iter())
+                .skip(mid)
+                .take(stealers.len())
+                .map(|(_, s)| s.steal_batch_and_pop(&self.worker))
                 .collect()
         }) {
+            self.slot.set(Some(r));
             // A task may have been pushed into the local queue - we need to interrupt.
             INTERRUPT.set();
-            return Some(r);
         }
-        None
     }
+}
+
+fn fast_random(n: usize) -> usize {
+    thread_local! {
+        static RNG: Cell<Wrapping<u32>> = Cell::new(Wrapping(1));
+    }
+
+    RNG.with(|rng| {
+        // This is the 32-bit variant of Xorshift.
+        // https://en.wikipedia.org/wiki/Xorshift
+        let mut x = rng.get();
+        x ^= x << 13;
+        x ^= x >> 17;
+        x ^= x << 5;
+        rng.set(x);
+
+        // This is a fast alternative to `x % n`.
+        // https://lemire.me/blog/2016/06/27/a-fast-alternative-to-the-modulo-reduction/
+        ((x.0 as u64).wrapping_mul(n as u64) >> 32) as usize
+    })
 }
 
 impl Drop for Worker {
     fn drop(&mut self) {
-        GLOBAL_EXECUTOR.stealers.write().unwrap().remove(&self.id);
+        WORK_STEALING.stealers.write().unwrap().remove(self.id);
         while let Some(r) = self.worker.pop() {
-            GLOBAL_EXECUTOR.injector.push(r);
+            WORK_STEALING.injector.push(r);
         }
     }
 }
 
-fn retry<T>(mut f: impl FnMut() -> deque::Steal<T>) -> Option<T> {
+fn ws_retry<T>(mut f: impl FnMut() -> deque::Steal<T>) -> Option<T> {
     loop {
         match f() {
             deque::Steal::Success(t) => return Some(t),
@@ -443,15 +497,6 @@ fn retry<T>(mut f: impl FnMut() -> deque::Steal<T>) -> Option<T> {
 }
 
 // ----- Blocking executor -----
-
-static BLOCKING_POOL: Lazy<BlockingPool> = Lazy::new(|| BlockingPool {
-    state: Mutex::new(State {
-        idle_count: 0,
-        thread_count: 0,
-        queue: VecDeque::new(),
-    }),
-    cvar: Condvar::new(),
-});
 
 /// A thread pool for blocking tasks.
 struct BlockingPool {
@@ -469,6 +514,17 @@ struct State {
 }
 
 impl BlockingPool {
+    fn new() -> BlockingPool {
+        BlockingPool {
+            state: Mutex::new(State {
+                idle_count: 0,
+                thread_count: 0,
+                queue: VecDeque::new(),
+            }),
+            cvar: Condvar::new(),
+        }
+    }
+
     /// Spawns a blocking task onto the thread pool.
     fn spawn<T: Send + 'static>(
         &'static self,
@@ -480,7 +536,7 @@ impl BlockingPool {
     }
 
     /// Runs the main loop on the current thread.
-    fn execute(&'static self) {
+    fn main_loop(&'static self) {
         let mut state = self.state.lock().unwrap();
         loop {
             state.idle_count -= 1;
@@ -524,7 +580,7 @@ impl BlockingPool {
             state.idle_count += 1;
             state.thread_count += 1;
             self.cvar.notify_all();
-            thread::spawn(move || self.execute());
+            thread::spawn(move || self.main_loop());
         }
     }
 }
@@ -709,11 +765,6 @@ pub fn writer(writer: impl Write + Send + 'static) -> impl AsyncWrite + Send + U
 
 // ----- Reactor -----
 
-static REACTOR: Lazy<Reactor> = Lazy::new(|| Reactor::create().expect("cannot create a reactor"));
-
-static INTERRUPT: Lazy<SelfPipe> =
-    Lazy::new(|| SelfPipe::create().expect("cannot create a self-pipe"));
-
 /// A source of I/O events.
 #[derive(Debug)]
 struct Source {
@@ -726,6 +777,7 @@ struct Source {
     index: usize,
 
     wakers: piper::Lock<Vec<Waker>>,
+    tick: AtomicU64,
 }
 
 /// The async I/O and timers driver.
@@ -759,6 +811,7 @@ impl Reactor {
             raw,
             index: vacant.key(),
             wakers: piper::Lock::new(Vec::new()),
+            tick: AtomicU64::new(0),
         });
         self.sys.register(raw, source.index)?;
         Ok(vacant.insert(source).clone())
@@ -819,8 +872,7 @@ impl ReactorGuard<'_> {
             timers.keys().next().map(|(when, _)| *when)
         };
 
-        // If this poll blocks, clear the interrupt flag.
-        let timeout = if block && !INTERRUPT.clear() {
+        let timeout = if block {
             // Calculate the timeout till the first timer fires.
             next_timer.map(|when| when.saturating_duration_since(Instant::now()))
         } else {
@@ -844,8 +896,12 @@ impl ReactorGuard<'_> {
             // I/O events may deregister sources, so we need to re-register.
             self.reactor.sys.reregister(source.raw, source.index)?;
 
+            let mut wakers = source.wakers.lock();
+            let tick = source.tick.load(Ordering::Acquire);
+            source.tick.store(tick.wrapping_add(1), Ordering::Release);
+
             // Wake up tasks waiting on I/O.
-            for w in source.wakers.lock().drain(..) {
+            for w in wakers.drain(..) {
                 w.wake();
             }
         }
@@ -854,8 +910,6 @@ impl ReactorGuard<'_> {
 }
 
 // ----- Timer -----
-
-static ID_GENERATOR: AtomicU64 = AtomicU64::new(1);
 
 /// Fires at a certain point in time.
 #[derive(Debug)]
@@ -887,8 +941,11 @@ impl Timer {
                 }
             }
 
-            // Insert this timer into the timers map.
+            // Generate a new ID.
+            static ID_GENERATOR: AtomicU64 = AtomicU64::new(1);
             let id = ID_GENERATOR.fetch_add(1, Ordering::Relaxed);
+
+            // Insert this timer into the timers map.
             timers.insert((self.when, id), cx.waker().clone());
             self.id = Some(id);
         }
@@ -1012,40 +1069,41 @@ impl<T> Async<T> {
     pub async fn with<R>(&self, op: impl FnMut(&T) -> io::Result<R>) -> io::Result<R> {
         let mut op = op;
         let mut io = self.io.as_ref().unwrap();
-        let wakers = &self.source.wakers;
-        future::poll_fn(|cx| Self::poll_io(cx, || op(&mut io), wakers)).await
+        let source = &self.source;
+        future::poll_fn(|cx| Self::poll_io(cx, || op(&mut io), source)).await
     }
 
     pub async fn with_mut<R>(&mut self, op: impl FnMut(&mut T) -> io::Result<R>) -> io::Result<R> {
         let mut op = op;
         let mut io = self.io.as_mut().unwrap();
-        let wakers = &self.source.wakers;
-        future::poll_fn(|cx| Self::poll_io(cx, || op(&mut io), wakers)).await
+        let source = &self.source;
+        future::poll_fn(|cx| Self::poll_io(cx, || op(&mut io), source)).await
     }
 
     fn poll_io<R>(
         cx: &mut Context<'_>,
         mut op: impl FnMut() -> io::Result<R>,
-        wakers: &piper::Lock<Vec<Waker>>,
+        source: &Source,
     ) -> Poll<io::Result<R>> {
         futures::ready!(poll_throttle(cx));
 
-        // Attempt the non-blocking operation.
-        match op() {
-            Err(err) if err.kind() == io::ErrorKind::WouldBlock => {}
-            res => return Poll::Ready(res),
-        }
+        loop {
+            let tick = source.tick.load(Ordering::Acquire);
+            // Attempt the non-blocking operation.
+            match op() {
+                Err(err) if err.kind() == io::ErrorKind::WouldBlock => {}
+                res => return Poll::Ready(res),
+            }
 
-        // Lock the waker list and retry the non-blocking operation.
-        let mut wakers = wakers.lock();
-        match op() {
-            Err(err) if err.kind() == io::ErrorKind::WouldBlock => {}
-            res => return Poll::Ready(res),
-        }
-
-        // If the operation would still block, add the current task to the list.
-        if !wakers.iter().any(|w| w.will_wake(cx.waker())) {
-            wakers.push(cx.waker().clone());
+            // Lock the waker list and retry the non-blocking operation.
+            let mut wakers = source.wakers.lock();
+            if wakers.iter().any(|w| w.will_wake(cx.waker())) {
+                break;
+            }
+            if source.tick.load(Ordering::Acquire) == tick {
+                wakers.push(cx.waker().clone());
+                break;
+            }
         }
         Poll::Pending
     }
@@ -1322,6 +1380,8 @@ impl Async<UnixDatagram> {
 // ----- The self-pipe trick -----
 
 /// A boolean flag that triggers I/O events whenever changed.
+///
+/// https://cr.yp.to/docs/selfpipe.html
 struct SelfPipe {
     flag: AtomicBool,
     writer: Socket,
@@ -1331,31 +1391,9 @@ struct SelfPipe {
 impl SelfPipe {
     /// Creates an I/O flag.
     fn create() -> io::Result<SelfPipe> {
-        // The only portable way of manually triggering I/O events is to create a socket and
-        // send/receive dummy data on it. This pattern is also known as "the self-pipe trick".
-        // See the links below for more information.
-        //
-        // https://cr.yp.to/docs/selfpipe.html
-        // https://github.com/python-trio/trio/blob/master/trio/_core/_wakeup_socketpair.py
-        // https://stackoverflow.com/questions/24933411/how-to-emulate-socket-socketpair-on-windows
-        // https://gist.github.com/geertj/4325783
-
-        // Create a temporary listener.
-        let listener = Socket::new(Domain::ipv4(), Type::stream(), None)?;
-        listener.bind(&SocketAddr::from(([127, 0, 0, 1], 0)).into())?;
-        listener.listen(1)?;
-
-        // First socket: start connecting to the listener.
-        let writer = Socket::new(Domain::ipv4(), Type::stream(), None)?;
-        writer.set_nonblocking(true)?;
-        let _ = writer.connect(&listener.local_addr()?);
-        let _ = writer.set_nodelay(true);
+        let (writer, reader) = pipe()?;
         writer.set_send_buffer_size(1)?;
-
-        // Second socket: accept a connection from the listener.
-        let (reader, _) = listener.accept()?;
         reader.set_recv_buffer_size(1)?;
-
         Ok(SelfPipe {
             flag: AtomicBool::new(false),
             writer,
@@ -1364,6 +1402,7 @@ impl SelfPipe {
     }
 
     /// Sets the flag to `true`.
+    // TODO: rename to raise() as in "raise a signal"?
     fn set(&self) {
         // Publish all in-memory changes before setting the flag.
         atomic::fence(Ordering::SeqCst);
@@ -1379,18 +1418,11 @@ impl SelfPipe {
         }
     }
 
-    /// Gets the current value of the flag.
-    fn get(&self) -> bool {
-        self.flag.load(Ordering::SeqCst)
-    }
-
     /// Sets the flag to `false`.
     fn clear(&self) -> bool {
+        // Read all available bytes from the receiving socket.
+        while self.reader.get_ref().read(&mut [0; 64]).is_ok() {}
         let value = self.flag.swap(false, Ordering::SeqCst);
-        if value {
-            // Read all available bytes from the receiving socket.
-            while self.reader.get_ref().read(&mut [0; 64]).is_ok() {}
-        }
 
         // Publish all in-memory changes after clearing the flag.
         atomic::fence(Ordering::SeqCst);
@@ -1402,13 +1434,48 @@ impl SelfPipe {
     /// Note that this method may spuriously report changes when they didn't really happen.
     async fn ready(&self) {
         self.reader
-            .with(|_| match self.get() {
+            .with(|_| match self.flag.load(Ordering::SeqCst) {
                 true => Ok(()),
                 false => Err(io::Error::new(io::ErrorKind::WouldBlock, "")),
             })
             .await
             .expect("failure while waiting on an I/O flag")
     }
+}
+
+#[cfg(unix)]
+fn pipe() -> io::Result<(Socket, Socket)> {
+    let ty = Type::raw().cloexec().non_blocking();
+    Socket::pair(Domain::unix(), ty, None)
+}
+
+#[cfg(windows)]
+fn pipe() -> io::Result<(Socket, Socket)> {
+    // TODO The only portable way of manually triggering I/O events is to create a socket and
+    // send/receive dummy data on it. This pattern is also known as "the self-pipe trick".
+    // See the links below for more information.
+    //
+    // https://github.com/python-trio/trio/blob/master/trio/_core/_wakeup_socketpair.py
+    // https://stackoverflow.com/questions/24933411/how-to-emulate-socket-socketpair-on-windows
+    // https://gist.github.com/geertj/4325783
+
+    // Create a temporary listener.
+    let listener = Socket::new(Domain::ipv4(), Type::stream(), None)?;
+    listener.bind(&SocketAddr::from(([127, 0, 0, 1], 0)).into())?;
+    listener.listen(1)?;
+
+    // First socket: start connecting to the listener.
+    let sock1 = Socket::new(Domain::ipv4(), Type::stream(), None)?;
+    sock1.set_nonblocking(true)?;
+    let _ = sock1.set_nodelay(true)?;
+    let _ = sock1.connect(&listener.local_addr()?);
+
+    // Second socket: accept a connection from the listener.
+    let (sock2, _) = listener.accept()?;
+    sock2.set_nonblocking(true)?;
+    let _ = sock2.set_nodelay(true)?;
+
+    Ok((sock1, sock2))
 }
 
 // ----- epoll (Linux, Android) -----

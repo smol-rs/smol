@@ -39,7 +39,7 @@ fn main() -> Result<()> {
     let tls = TlsAcceptor::from(native_tls::TlsAcceptor::new(identity)?);
 
     // Create a thread pool.
-    for _ in 0..num_cpus::get_physical().max(1) {
+    for _ in 0..num_cpus::get().max(1) {
         thread::spawn(|| smol::run(future::pending::<()>()));
     }
 
