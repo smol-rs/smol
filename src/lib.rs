@@ -1,4 +1,26 @@
-//! A very smol and fast async runtime.
+//! A very small and fast async runtime.
+//!
+//! # Examples
+//!
+//! Connect to a HTTP website, make a GET request, and pipe the response to the standard output:
+//!
+//! ```
+//! use futures::prelude::*;
+//! use smol::Async;
+//! use std::net::TcpStream;
+//!
+//! fn main() -> std::io::Result<()> {
+//!     smol::run(async {
+//!         let mut stream = Async::<TcpStream>::connect("example.com:80").await?;
+//!         let req = b"GET / HTTP/1.1\r\nHost: example.com\r\nConnection: close\r\n\r\n";
+//!         stream.write_all(req).await?;
+//!
+//!         let mut stdout = smol::writer(std::io::stdout());
+//!         futures::io::copy(&stream, &mut stdout).await?;
+//!         Ok(())
+//!     })
+//! }
+//! ```
 
 #![warn(missing_docs, missing_debug_implementations, rust_2018_idioms)]
 
@@ -54,8 +76,11 @@ use std::sync::{Condvar, Mutex, MutexGuard};
 
 // ----- Global variables -----
 
-// Holds a queue of thread-local tasks.
+// Executes thread-local tasks.
 scoped_thread_local!(static LOCAL_EXECUTOR: LocalExecutor);
+
+// A flag that is set whenever a thread-local task is woken from another thread.
+scoped_thread_local!(static LOCAL_EVENT: Arc<SelfPipe>);
 
 // Holds a queue of some stealable global tasks.
 //
@@ -67,9 +92,13 @@ static WORK_STEALING: Lazy<WorkStealing> = Lazy::new(|| WorkStealing::new());
 
 static BLOCKING_POOL: Lazy<BlockingPool> = Lazy::new(|| BlockingPool::new());
 
+// TODO: contains sources of events
+// - a timer fires
+// - an I/O resource becomes ready
+// - a task is spawned using Task::spawn()
 static REACTOR: Lazy<Reactor> = Lazy::new(|| Reactor::create().unwrap());
 
-static INTERRUPT: Lazy<SelfPipe> = Lazy::new(|| SelfPipe::create().unwrap());
+static GLOBAL_EVENT: Lazy<SelfPipe> = Lazy::new(|| SelfPipe::create().unwrap());
 
 // ----- The task system -----
 
@@ -180,41 +209,46 @@ pub fn run<T>(future: impl Future<Output = T>) -> T {
         panic!("recursive `run()`");
     }
 
+    let local = LocalExecutor::new();
+    let worker = WORK_STEALING.worker();
+    let local_event = Arc::new(SelfPipe::create().expect("cannot create a self-pipe"));
+
     // TODO: Explain how this runs three executors (block_on, local, ws)
     // -> it's like concurrent block_on(), LocalExecutor::execute(), Worker::execute()
 
-    let flag = Arc::new(SelfPipe::create().expect("cannot create a self-pipe"));
-    let local = LocalExecutor::new(flag.clone());
-    let worker = WORK_STEALING.worker();
-
-    let f = flag.clone();
-    let waker = async_task::waker_fn(move || f.set());
+    let ev = local_event.clone();
+    let waker = async_task::waker_fn(move || ev.set());
     let cx = &mut Context::from_waker(&waker);
     futures::pin_mut!(future);
 
-    LOCAL_EXECUTOR.set(&local, || {
-        WORKER.set(&worker, || {
-            loop {
-                if let Poll::Ready(val) = use_throttle(|| future.as_mut().poll(cx)) {
-                    return val;
-                }
-                let more_local = local.execute();
-                let more_worker = worker.execute();
+    // Set up thread-locals.
+    LOCAL_EVENT.set(&local_event, || {
+        LOCAL_EXECUTOR.set(&local, || {
+            WORKER.set(&worker, || {
+                loop {
+                    if let Poll::Ready(val) = use_throttle(|| future.as_mut().poll(cx)) {
+                        return val;
+                    }
+                    let more_local = local.execute();
+                    let more_worker = worker.execute();
 
-                if !flag.clear() && !more_local && !more_worker {
-                    let lock = REACTOR.lock();
-                    let ready = flag.ready();
-                    futures::pin_mut!(lock);
-                    futures::pin_mut!(ready);
+                    if !local_event.clear() && !more_local && !more_worker {
+                        let lock = REACTOR.lock();
+                        let ready = local_event.ready();
+                        futures::pin_mut!(lock);
+                        futures::pin_mut!(ready);
 
-                    // Block until either the reactor is locked or the flag is set.
-                    if let Either::Left((mut reactor, _)) = block_on(future::select(lock, ready)) {
-                        if !flag.clear() && !INTERRUPT.clear() {
-                            reactor.wait().expect("failure while polling I/O");
+                        // Block until either the reactor is locked or a local event occurs.
+                        if let Either::Left((mut reactor, _)) =
+                            block_on(future::select(lock, ready))
+                        {
+                            if !local_event.clear() && !GLOBAL_EVENT.clear() {
+                                reactor.wait().expect("failure while polling I/O");
+                            }
                         }
                     }
                 }
-            }
+            })
         })
     })
 }
@@ -239,28 +273,21 @@ fn poll_throttle(cx: &mut Context<'_>) -> Poll<()> {
 /// A queue of thread-local tasks.
 struct LocalExecutor {
     queue: RefCell<VecDeque<Runnable>>,
-    injector: Arc<LocalInjector>,
-}
-
-struct LocalInjector {
-    flag: Arc<SelfPipe>,
-    queue: SegQueue<Runnable>,
+    injector: Arc<SegQueue<Runnable>>,
 }
 
 impl LocalExecutor {
-    fn new(flag: Arc<SelfPipe>) -> LocalExecutor {
+    fn new() -> LocalExecutor {
         LocalExecutor {
             queue: RefCell::new(VecDeque::new()),
-            injector: Arc::new(LocalInjector {
-                flag,
-                queue: SegQueue::new(),
-            }),
+            injector: Arc::new(SegQueue::new()),
         }
     }
 
     fn spawn<T: 'static>(&self, future: impl Future<Output = T> + 'static) -> Task<T> {
         let id = thread_id();
         let injector = self.injector.clone();
+        let local_event = LOCAL_EVENT.with(Arc::clone);
 
         let schedule = move |runnable| {
             if thread_id() == id {
@@ -268,9 +295,9 @@ impl LocalExecutor {
                 LOCAL_EXECUTOR.with(|ex| ex.queue.borrow_mut().push_back(runnable));
             } else {
                 // If scheduling from a remote thread, push into the injector queue.
-                injector.queue.push(runnable);
+                injector.push(runnable);
                 // The original thread may be currently polling so let's interrupt it.
-                injector.flag.set();
+                local_event.set();
             }
         };
 
@@ -307,7 +334,7 @@ impl LocalExecutor {
         REACTOR.poll().expect("failure while polling I/O");
 
         let mut queue = self.queue.borrow_mut();
-        while let Ok(r) = self.injector.queue.pop() {
+        while let Ok(r) = self.injector.pop() {
             queue.push_back(r);
         }
     }
@@ -346,7 +373,7 @@ impl WorkStealing {
             } else {
                 self.injector.push(runnable);
                 // A task has been pushed into the global queue - we need to interrupt.
-                INTERRUPT.set();
+                GLOBAL_EVENT.set();
             }
         };
 
@@ -406,7 +433,7 @@ impl Worker {
             Some(runnable) => {
                 self.worker.push(runnable);
                 // A task has been pushed into the local queue - we need to interrupt.
-                INTERRUPT.set();
+                GLOBAL_EVENT.set();
             }
         }
     }
@@ -425,7 +452,7 @@ impl Worker {
         if let Some(r) = ws_retry(|| WORK_STEALING.injector.steal_batch_and_pop(&self.worker)) {
             self.push(r); // TODO: optimize interrupts
                           // A task has been pushed into the local queue - we need to interrupt.
-            INTERRUPT.set();
+            GLOBAL_EVENT.set();
         }
 
         // Poll the reactor.
@@ -452,7 +479,7 @@ impl Worker {
         }) {
             self.slot.set(Some(r));
             // A task may have been pushed into the local queue - we need to interrupt.
-            INTERRUPT.set();
+            GLOBAL_EVENT.set();
         }
     }
 }
@@ -937,7 +964,7 @@ impl Timer {
             // If this timer is going to be the earliest one, interrupt the reactor.
             if let Some((first, _)) = timers.keys().next() {
                 if self.when < *first {
-                    INTERRUPT.set();
+                    GLOBAL_EVENT.set();
                 }
             }
 
@@ -986,8 +1013,8 @@ impl Future for Timer {
 /// TODO: does not work with files!
 #[derive(Debug)]
 pub struct Async<T> {
-    io: Option<Box<T>>,
     source: Arc<Source>,
+    io: Option<Box<T>>,
 }
 
 #[cfg(unix)]
