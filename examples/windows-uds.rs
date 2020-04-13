@@ -18,16 +18,16 @@ fn main() -> std::io::Result<()> {
         Ok(())
     }
 
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("socket");
-    let _ = fs::remove_file(&path);
+    let path = "socket";
+    let _ = fs::remove_file(path);
 
     smol::run(async {
         // Create a listener.
-        let listener = Async::new(UnixListener::bind(&path)?)?;
+        let listener = Async::new(UnixListener::bind(path)?)?;
         println!("Listening on {:?}", listener.get_ref().local_addr()?);
 
         // Spawn a client task.
-        let task = Task::spawn(client(path.clone()));
+        let task = Task::spawn(client(path.into()));
 
         // Accept the client.
         let (stream, _) = listener.with(|l| l.accept()).await?;
