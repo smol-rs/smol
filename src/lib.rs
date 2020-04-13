@@ -90,8 +90,6 @@ scoped_thread_local!(static WORKER: Worker);
 // Holds the global task queue.
 static WORK_STEALING: Lazy<WorkStealing> = Lazy::new(|| WorkStealing::new());
 
-static BLOCKING_POOL: Lazy<BlockingPool> = Lazy::new(|| BlockingPool::new());
-
 // TODO: contains sources of events
 // - a timer fires
 // - an I/O resource becomes ready
@@ -99,6 +97,8 @@ static BLOCKING_POOL: Lazy<BlockingPool> = Lazy::new(|| BlockingPool::new());
 static REACTOR: Lazy<Reactor> = Lazy::new(|| Reactor::create().unwrap());
 
 static GLOBAL_EVENT: Lazy<SelfPipe> = Lazy::new(|| SelfPipe::create().unwrap());
+
+static BLOCKING_POOL: Lazy<BlockingPool> = Lazy::new(|| BlockingPool::new());
 
 // ----- The task system -----
 
@@ -521,273 +521,6 @@ fn ws_retry<T>(mut f: impl FnMut() -> deque::Steal<T>) -> Option<T> {
             deque::Steal::Retry => {}
         }
     }
-}
-
-// ----- Blocking executor -----
-
-/// A thread pool for blocking tasks.
-struct BlockingPool {
-    state: Mutex<State>,
-    cvar: Condvar,
-}
-
-struct State {
-    /// Number of sleeping threads in the pool.
-    idle_count: usize,
-    /// Total number of thread in the pool.
-    thread_count: usize,
-    /// Runnable blocking tasks.
-    queue: VecDeque<Runnable>,
-}
-
-impl BlockingPool {
-    fn new() -> BlockingPool {
-        BlockingPool {
-            state: Mutex::new(State {
-                idle_count: 0,
-                thread_count: 0,
-                queue: VecDeque::new(),
-            }),
-            cvar: Condvar::new(),
-        }
-    }
-
-    /// Spawns a blocking task onto the thread pool.
-    fn spawn<T: Send + 'static>(
-        &'static self,
-        future: impl Future<Output = T> + Send + 'static,
-    ) -> Task<T> {
-        let (runnable, handle) = async_task::spawn(future, move |r| self.schedule(r), ());
-        runnable.schedule();
-        Task(Some(handle))
-    }
-
-    /// Runs the main loop on the current thread.
-    fn main_loop(&'static self) {
-        let mut state = self.state.lock().unwrap();
-        loop {
-            state.idle_count -= 1;
-
-            // Run tasks in the queue.
-            while let Some(runnable) = state.queue.pop_front() {
-                self.spawn_more(state);
-                let _ = panic::catch_unwind(|| runnable.run());
-                state = self.state.lock().unwrap();
-            }
-
-            // Put the thread to sleep until another task is scheduled.
-            state.idle_count += 1;
-            let timeout = Duration::from_millis(500);
-            let (s, res) = self.cvar.wait_timeout(state, timeout).unwrap();
-            state = s;
-
-            if res.timed_out() && state.queue.is_empty() {
-                // If there are no tasks after a while, stop this thread.
-                state.idle_count -= 1;
-                state.thread_count -= 1;
-                break;
-            }
-        }
-    }
-
-    /// Schedules a runnable task for execution.
-    fn schedule(&'static self, runnable: Runnable) {
-        let mut state = self.state.lock().unwrap();
-        state.queue.push_back(runnable);
-        // Notify a sleeping thread and spawn more threads if needed.
-        self.cvar.notify_one();
-        self.spawn_more(state);
-    }
-
-    /// Spawns more blocking threads if the pool is overloaded with work.
-    fn spawn_more(&'static self, mut state: MutexGuard<'static, State>) {
-        // If runnable tasks greatly outnumber idle threads and there aren't too many threads
-        // already, then be aggressive: wake all idle threads and spawn one more thread.
-        while state.queue.len() > state.idle_count * 5 && state.thread_count < 500 {
-            state.idle_count += 1;
-            state.thread_count += 1;
-            self.cvar.notify_all();
-            thread::spawn(move || self.main_loop());
-        }
-    }
-}
-
-/// Spawns blocking code onto a thread.
-#[macro_export]
-macro_rules! blocking {
-    ($($expr:tt)*) => {
-        $crate::Task::blocking(async move { $($expr)* }).await
-    };
-}
-
-/// Creates an iterator that runs on a thread.
-pub fn iter<T: Send + 'static>(
-    iter: impl Iterator<Item = T> + Send + 'static,
-) -> impl Stream<Item = T> + Send + Unpin + 'static {
-    enum State<T, I> {
-        Idle(Option<I>),
-        Busy(piper::Receiver<T>, Task<I>),
-    }
-
-    impl<T, I> Unpin for State<T, I> {}
-
-    impl<T: Send + 'static, I: Iterator<Item = T> + Send + 'static> Stream for State<T, I> {
-        type Item = T;
-
-        fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<T>> {
-            futures::ready!(poll_throttle(cx));
-
-            match &mut *self {
-                State::Idle(iter) => {
-                    let mut iter = iter.take().unwrap();
-                    let (sender, receiver) = piper::chan(8 * 1024);
-                    let task = Task::blocking(async move {
-                        for item in &mut iter {
-                            sender.send(item).await;
-                        }
-                        iter
-                    });
-                    *self = State::Busy(receiver, task);
-                    self.poll_next(cx)
-                }
-                State::Busy(receiver, task) => {
-                    let opt = futures::ready!(Pin::new(receiver).poll_next(cx));
-                    if opt.is_none() {
-                        // At the end of stream, retrieve the iterator back.
-                        let iter = futures::ready!(Pin::new(task).poll(cx));
-                        *self = State::Idle(Some(iter));
-                    }
-                    Poll::Ready(opt)
-                }
-            }
-        }
-    }
-
-    State::Idle(Some(iter))
-}
-
-/// Creates a reader that runs on a thread.
-pub fn reader(reader: impl Read + Send + 'static) -> impl AsyncRead + Send + Unpin + 'static {
-    enum State<T> {
-        Idle(Option<T>),
-        Busy(piper::Reader, Task<(io::Result<()>, T)>),
-    }
-
-    impl<T: AsyncRead + Send + Unpin + 'static> AsyncRead for State<T> {
-        fn poll_read(
-            mut self: Pin<&mut Self>,
-            cx: &mut Context<'_>,
-            buf: &mut [u8],
-        ) -> Poll<io::Result<usize>> {
-            futures::ready!(poll_throttle(cx));
-
-            match &mut *self {
-                State::Idle(io) => {
-                    let mut io = io.take().unwrap();
-                    let (reader, mut writer) = piper::pipe(8 * 1024 * 1024); // 8 MB
-                    let task = Task::blocking(async move {
-                        let res = futures::io::copy(&mut io, &mut writer).await;
-                        (res.map(drop), io)
-                    });
-                    *self = State::Busy(reader, task);
-                    self.poll_read(cx, buf)
-                }
-                State::Busy(reader, task) => {
-                    let n = futures::ready!(Pin::new(reader).poll_read(cx, buf))?;
-                    if n == 0 {
-                        // At the end of stream, retrieve the reader back.
-                        let (res, io) = futures::ready!(Pin::new(task).poll(cx));
-                        *self = State::Idle(Some(io));
-                        res?;
-                    }
-                    Poll::Ready(Ok(n))
-                }
-            }
-        }
-    }
-
-    let io = Box::pin(AllowStdIo::new(reader));
-    State::Idle(Some(io))
-}
-
-/// Creates a writer that runs on a thread.
-///
-/// Make sure to flush before dropping the writer.
-///
-/// TODO
-pub fn writer(writer: impl Write + Send + 'static) -> impl AsyncWrite + Send + Unpin + 'static {
-    enum State<T> {
-        Idle(Option<T>),
-        Busy(Option<piper::Writer>, Task<(io::Result<()>, T)>),
-    }
-
-    impl<T: AsyncWrite + Send + Unpin + 'static> State<T> {
-        fn start(&mut self) {
-            if let State::Idle(io) = self {
-                let mut io = io.take().unwrap();
-                let (reader, writer) = piper::pipe(8 * 1024 * 1024); // 8 MB
-                let task = Task::blocking(async move {
-                    match futures::io::copy(reader, &mut io).await {
-                        Ok(_) => (io.flush().await, io),
-                        Err(err) => (Err(err), io),
-                    }
-                });
-                *self = State::Busy(Some(writer), task);
-            }
-        }
-    }
-
-    impl<T: AsyncWrite + Send + Unpin + 'static> AsyncWrite for State<T> {
-        fn poll_write(
-            mut self: Pin<&mut Self>,
-            cx: &mut Context<'_>,
-            buf: &[u8],
-        ) -> Poll<io::Result<usize>> {
-            futures::ready!(poll_throttle(cx));
-
-            loop {
-                match &mut *self {
-                    State::Idle(None) => return Poll::Ready(Ok(0)),
-                    State::Idle(Some(_)) => self.start(),
-                    State::Busy(None, task) => {
-                        // The writing end of the pipe is closed, so await the task.
-                        let (res, io) = futures::ready!(Pin::new(task).poll(cx));
-                        *self = State::Idle(Some(io));
-                        res?;
-                    }
-                    State::Busy(Some(writer), _) => return Pin::new(writer).poll_write(cx, buf),
-                }
-            }
-        }
-
-        fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-            futures::ready!(poll_throttle(cx));
-
-            loop {
-                match &mut *self {
-                    State::Idle(None) => return Poll::Ready(Ok(())),
-                    State::Idle(Some(_)) => self.start(),
-                    State::Busy(writer, task) => {
-                        // Close the writing end of the pipe and await the task.
-                        writer.take();
-                        let (res, io) = futures::ready!(Pin::new(task).poll(cx));
-                        *self = State::Idle(Some(io));
-                        return Poll::Ready(res);
-                    }
-                }
-            }
-        }
-
-        fn poll_close(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-            // Flush and then drop the I/O handle.
-            futures::ready!(Pin::new(&mut *self).poll_flush(cx))?;
-            *self = State::Idle(None);
-            Poll::Ready(Ok(()))
-        }
-    }
-
-    let io = AllowStdIo::new(writer);
-    State::Idle(Some(io))
 }
 
 // ----- Reactor -----
@@ -1472,8 +1205,13 @@ impl SelfPipe {
 
 #[cfg(unix)]
 fn pipe() -> io::Result<(Socket, Socket)> {
-    let ty = Type::raw().cloexec().non_blocking();
-    Socket::pair(Domain::unix(), ty, None)
+    let ty = Type::raw();
+    #[cfg(target_os = "linux")]
+    let ty = ty.cloexec();
+    let (sock1, sock2) = Socket::pair(Domain::unix(), ty, None)?;
+    sock1.set_nonblocking(true)?;
+    sock2.set_nonblocking(true)?;
+    Ok((sock1, sock2))
 }
 
 #[cfg(windows)]
@@ -1503,6 +1241,273 @@ fn pipe() -> io::Result<(Socket, Socket)> {
     let _ = sock2.set_nodelay(true)?;
 
     Ok((sock1, sock2))
+}
+
+// ----- Blocking executor -----
+
+/// A thread pool for blocking tasks.
+struct BlockingPool {
+    state: Mutex<State>,
+    cvar: Condvar,
+}
+
+struct State {
+    /// Number of sleeping threads in the pool.
+    idle_count: usize,
+    /// Total number of thread in the pool.
+    thread_count: usize,
+    /// Runnable blocking tasks.
+    queue: VecDeque<Runnable>,
+}
+
+impl BlockingPool {
+    fn new() -> BlockingPool {
+        BlockingPool {
+            state: Mutex::new(State {
+                idle_count: 0,
+                thread_count: 0,
+                queue: VecDeque::new(),
+            }),
+            cvar: Condvar::new(),
+        }
+    }
+
+    /// Spawns a blocking task onto the thread pool.
+    fn spawn<T: Send + 'static>(
+        &'static self,
+        future: impl Future<Output = T> + Send + 'static,
+    ) -> Task<T> {
+        let (runnable, handle) = async_task::spawn(future, move |r| self.schedule(r), ());
+        runnable.schedule();
+        Task(Some(handle))
+    }
+
+    /// Runs the main loop on the current thread.
+    fn main_loop(&'static self) {
+        let mut state = self.state.lock().unwrap();
+        loop {
+            state.idle_count -= 1;
+
+            // Run tasks in the queue.
+            while let Some(runnable) = state.queue.pop_front() {
+                self.spawn_more(state);
+                let _ = panic::catch_unwind(|| runnable.run());
+                state = self.state.lock().unwrap();
+            }
+
+            // Put the thread to sleep until another task is scheduled.
+            state.idle_count += 1;
+            let timeout = Duration::from_millis(500);
+            let (s, res) = self.cvar.wait_timeout(state, timeout).unwrap();
+            state = s;
+
+            if res.timed_out() && state.queue.is_empty() {
+                // If there are no tasks after a while, stop this thread.
+                state.idle_count -= 1;
+                state.thread_count -= 1;
+                break;
+            }
+        }
+    }
+
+    /// Schedules a runnable task for execution.
+    fn schedule(&'static self, runnable: Runnable) {
+        let mut state = self.state.lock().unwrap();
+        state.queue.push_back(runnable);
+        // Notify a sleeping thread and spawn more threads if needed.
+        self.cvar.notify_one();
+        self.spawn_more(state);
+    }
+
+    /// Spawns more blocking threads if the pool is overloaded with work.
+    fn spawn_more(&'static self, mut state: MutexGuard<'static, State>) {
+        // If runnable tasks greatly outnumber idle threads and there aren't too many threads
+        // already, then be aggressive: wake all idle threads and spawn one more thread.
+        while state.queue.len() > state.idle_count * 5 && state.thread_count < 500 {
+            state.idle_count += 1;
+            state.thread_count += 1;
+            self.cvar.notify_all();
+            thread::spawn(move || self.main_loop());
+        }
+    }
+}
+
+/// Spawns blocking code onto a thread.
+#[macro_export]
+macro_rules! blocking {
+    ($($expr:tt)*) => {
+        $crate::Task::blocking(async move { $($expr)* }).await
+    };
+}
+
+/// Creates an iterator that runs on a thread.
+pub fn iter<T: Send + 'static>(
+    iter: impl Iterator<Item = T> + Send + 'static,
+) -> impl Stream<Item = T> + Send + Unpin + 'static {
+    enum State<T, I> {
+        Idle(Option<I>),
+        Busy(piper::Receiver<T>, Task<I>),
+    }
+
+    impl<T, I> Unpin for State<T, I> {}
+
+    impl<T: Send + 'static, I: Iterator<Item = T> + Send + 'static> Stream for State<T, I> {
+        type Item = T;
+
+        fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<T>> {
+            futures::ready!(poll_throttle(cx));
+
+            match &mut *self {
+                State::Idle(iter) => {
+                    let mut iter = iter.take().unwrap();
+                    let (sender, receiver) = piper::chan(8 * 1024);
+                    let task = Task::blocking(async move {
+                        for item in &mut iter {
+                            sender.send(item).await;
+                        }
+                        iter
+                    });
+                    *self = State::Busy(receiver, task);
+                    self.poll_next(cx)
+                }
+                State::Busy(receiver, task) => {
+                    let opt = futures::ready!(Pin::new(receiver).poll_next(cx));
+                    if opt.is_none() {
+                        // At the end of stream, retrieve the iterator back.
+                        let iter = futures::ready!(Pin::new(task).poll(cx));
+                        *self = State::Idle(Some(iter));
+                    }
+                    Poll::Ready(opt)
+                }
+            }
+        }
+    }
+
+    State::Idle(Some(iter))
+}
+
+/// Creates a reader that runs on a thread.
+pub fn reader(reader: impl Read + Send + 'static) -> impl AsyncRead + Send + Unpin + 'static {
+    enum State<T> {
+        Idle(Option<T>),
+        Busy(piper::Reader, Task<(io::Result<()>, T)>),
+    }
+
+    impl<T: AsyncRead + Send + Unpin + 'static> AsyncRead for State<T> {
+        fn poll_read(
+            mut self: Pin<&mut Self>,
+            cx: &mut Context<'_>,
+            buf: &mut [u8],
+        ) -> Poll<io::Result<usize>> {
+            futures::ready!(poll_throttle(cx));
+
+            match &mut *self {
+                State::Idle(io) => {
+                    let mut io = io.take().unwrap();
+                    let (reader, mut writer) = piper::pipe(8 * 1024 * 1024); // 8 MB
+                    let task = Task::blocking(async move {
+                        let res = futures::io::copy(&mut io, &mut writer).await;
+                        (res.map(drop), io)
+                    });
+                    *self = State::Busy(reader, task);
+                    self.poll_read(cx, buf)
+                }
+                State::Busy(reader, task) => {
+                    let n = futures::ready!(Pin::new(reader).poll_read(cx, buf))?;
+                    if n == 0 {
+                        // At the end of stream, retrieve the reader back.
+                        let (res, io) = futures::ready!(Pin::new(task).poll(cx));
+                        *self = State::Idle(Some(io));
+                        res?;
+                    }
+                    Poll::Ready(Ok(n))
+                }
+            }
+        }
+    }
+
+    let io = Box::pin(AllowStdIo::new(reader));
+    State::Idle(Some(io))
+}
+
+/// Creates a writer that runs on a thread.
+///
+/// Make sure to flush before dropping the writer.
+///
+/// TODO
+pub fn writer(writer: impl Write + Send + 'static) -> impl AsyncWrite + Send + Unpin + 'static {
+    enum State<T> {
+        Idle(Option<T>),
+        Busy(Option<piper::Writer>, Task<(io::Result<()>, T)>),
+    }
+
+    impl<T: AsyncWrite + Send + Unpin + 'static> State<T> {
+        fn start(&mut self) {
+            if let State::Idle(io) = self {
+                let mut io = io.take().unwrap();
+                let (reader, writer) = piper::pipe(8 * 1024 * 1024); // 8 MB
+                let task = Task::blocking(async move {
+                    match futures::io::copy(reader, &mut io).await {
+                        Ok(_) => (io.flush().await, io),
+                        Err(err) => (Err(err), io),
+                    }
+                });
+                *self = State::Busy(Some(writer), task);
+            }
+        }
+    }
+
+    impl<T: AsyncWrite + Send + Unpin + 'static> AsyncWrite for State<T> {
+        fn poll_write(
+            mut self: Pin<&mut Self>,
+            cx: &mut Context<'_>,
+            buf: &[u8],
+        ) -> Poll<io::Result<usize>> {
+            futures::ready!(poll_throttle(cx));
+
+            loop {
+                match &mut *self {
+                    State::Idle(None) => return Poll::Ready(Ok(0)),
+                    State::Idle(Some(_)) => self.start(),
+                    State::Busy(None, task) => {
+                        // The writing end of the pipe is closed, so await the task.
+                        let (res, io) = futures::ready!(Pin::new(task).poll(cx));
+                        *self = State::Idle(Some(io));
+                        res?;
+                    }
+                    State::Busy(Some(writer), _) => return Pin::new(writer).poll_write(cx, buf),
+                }
+            }
+        }
+
+        fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+            futures::ready!(poll_throttle(cx));
+
+            loop {
+                match &mut *self {
+                    State::Idle(None) => return Poll::Ready(Ok(())),
+                    State::Idle(Some(_)) => self.start(),
+                    State::Busy(writer, task) => {
+                        // Close the writing end of the pipe and await the task.
+                        writer.take();
+                        let (res, io) = futures::ready!(Pin::new(task).poll(cx));
+                        *self = State::Idle(Some(io));
+                        return Poll::Ready(res);
+                    }
+                }
+            }
+        }
+
+        fn poll_close(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+            // Flush and then drop the I/O handle.
+            futures::ready!(Pin::new(&mut *self).poll_flush(cx))?;
+            *self = State::Idle(None);
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    let io = AllowStdIo::new(writer);
+    State::Idle(Some(io))
 }
 
 // ----- epoll (Linux, Android) -----
