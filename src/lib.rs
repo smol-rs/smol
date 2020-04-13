@@ -1,5 +1,23 @@
 //! A very small and fast async runtime.
 //!
+//! # Overview
+//!
+//! ### Executors (TODO)
+//! - thread-local executor (Thread::local())
+//! - work-stealing executor (Thread::spawn())
+//! - blocking executor (Thread::blocking(), blocking!(), iter(), reader(), writer())
+//!
+//! ### Reactor (TODO)
+//! - async I/O (Async<T>)
+//! - timers (Timer)
+//!
+//! ### Starting async code
+//! - block_on() (NOTE: does not drive the reactor)
+//! - run() (drives three executors and the reactor)
+//!     - the main future passed to run()
+//!     - the thread-local executor
+//!     - the work-stealing executor
+//!
 //! # Examples
 //!
 //! Connect to a HTTP website, make a GET request, and pipe the response to the standard output:
@@ -21,6 +39,10 @@
 //!     })
 //! }
 //! ```
+//!
+//! For examples, see the [`examples TODO`] module generated from the [examples] directory.
+//!
+//! [examples]: https://github.com/stjepang/smol/tree/master/examples
 
 #![warn(missing_docs, missing_debug_implementations, rust_2018_idioms)]
 
@@ -74,38 +96,100 @@ use slab::Slab;
 use socket2::{Domain, Protocol, Socket, Type};
 use std::sync::{Condvar, Mutex, MutexGuard};
 
-// ----- Global variables -----
+// ---------- Global variables ----------
 
-// Executes thread-local tasks.
+// An executor for thread-local tasks.
+//
+// Thread-local tasks are spawned by calling `Task::local()` and do not have to implement `Send`.
+// They can only be run by the same thread that created them.
 scoped_thread_local!(static LOCAL_EXECUTOR: LocalExecutor);
 
-// A flag that is set whenever a thread-local task is woken from another thread.
+// A boolean flag that is set whenever a thread-local task is woken by another thread.
+//
+// Every time this flag's value is changed, an I/O event is triggered.
+//
+// It's possible for a thread to wake a thread-local task that belongs to another thread, in which
+// case the owning thread needs to be notified that it can run the task again. This flag is used to
+// wake that owning thread in case it is sleeping.
+//
+// This flag will also wake the owning thread whenever the main future in `run()` is woken (from
+// any thread) because that future also counts as a thread-local task.
 scoped_thread_local!(static LOCAL_EVENT: Arc<SelfPipe>);
 
-// Holds a queue of some stealable global tasks.
+// A worker that executes global tasks.
 //
-// Each thread has its own queue in order to reduce contention on the global task queue.
+// Tasks created by `Task::spawn()` go into the work-stealing executor. It has a single global
+// queue called "injector". However, if all invocations of `run()` pop tasks from the injector
+// queue at the same time, that will cause contention that slows everything down.
+//
+// To reduce contention, each `run()` registers a "worker", which is its own queue containing a
+// handful of tasks taken from the injector queue. Then, each worker pops tasks from its own queue.
+// If a worker ends up with an empty queue, it will try to steal a batch of tasks from the injector
+// queue or from other workers.
+//
+// This thread-local variable is a handle to the current thread's worker. Other threads may steal
+// tasks from it through its associated stealer that was registered in the work-stealing executor.
 scoped_thread_local!(static WORKER: Worker);
 
-// Holds the global task queue.
+// The work-stealing executor.
+//
+// Tasks created by `Task::spawn()` go into this executor and can be executed by any thread that
+// calls `run()`. For that reason, such tasks must implement `Send`. Even if a task is polled once
+// on a certain executor thread, it may afterwards get stolen by a different thread and continue
+// execution there.
 static WORK_STEALING: Lazy<WorkStealing> = Lazy::new(|| WorkStealing::new());
 
-// TODO: contains sources of events
-// - a timer fires
-// - an I/O resource becomes ready
-// - a task is spawned using Task::spawn()
+// The reactor driving I/O events and timers.
+//
+// Every async I/O handle and timer is registered here. Invocations of `run()` poll the reactor to
+// check for new events every now and then. If there are no tasks to run, then we block until the
+// earliest timer fires or a task is scheduled.
+//
+// On Linux-based systems, we use epoll to register I/O handles. On BSD-based systems, we use
+// kqueue. On Windows, we use WSAPoll.
 static REACTOR: Lazy<Reactor> = Lazy::new(|| Reactor::create().unwrap());
 
+// A boolean flag that is set whenever a global task is scheduled or a new earliest timer appears.
+//
+// Every time this flag's value is changed, an I/O event is triggered.
+//
+// If a thread running `run()` is out of tasks, it will block on epoll/kqueue/WSAPoll until the
+// earliest timer fires. If another thread then calls `Task::spawn()`, wakes a global task, or
+// creates a new earliest timer, we need to interrupt the blocked thread. By setting this flag, an
+// I/O event gets triggered that wakes up the blocked thread.
 static GLOBAL_EVENT: Lazy<SelfPipe> = Lazy::new(|| SelfPipe::create().unwrap());
 
+// The executor that runs blocking tasks.
+//
+// Tasks created by `Task::blocking()`, `blocking!()`, `iter()`, `reader()`, or `writer()` are
+// allowed to block. Sometimes we really can't avoid blocking inside async programs - for example,
+// filesystem operations on many systems cannot be truly asynchronous or are difficult to model
+// with futures. Or, we may want to call a library that blocks and there simply isn't an option to
+// make it non-blocking.
+//
+// This executor essentially creates a thread whenever there's a blocking task to run, but is smart
+// about it. When idle, there will be just one thread sitting ready to accept a new task. When more
+// tasks come in, more threads get spawned. Whenever a thread runs out of tasks, it will keep
+// idling for a little longer and only shut down if no tasks arrive in that period.
 static BLOCKING_POOL: Lazy<BlockingPool> = Lazy::new(|| BlockingPool::new());
 
-// ----- The task system -----
+// ---------- The task system ----------
 
 /// A runnable future, ready for execution.
+///
+/// When a future is spawned using `async_task::spawn()` or `async_task::spawn_local()`, we get
+/// back two values:
+///
+/// 1. an `async_task::Task<()>`, which we refer to as `Runnable`
+/// 2. an `async_task::JoinHandle<T, ()>`, which is wrapped inside `Task<T>`
+///
+/// Once a `Runnable` is run, it "vanishes" and only reappears when its future is woken.
 type Runnable = async_task::Task<()>;
 
 /// A spawned future.
+///
+/// Tasks are also futures themselves that yield the output of the spawned future. When a [`Task`]
+/// handle is dropped, the future is canceled.
 #[must_use = "tasks are canceled when dropped, use `.detach()` to run in the background"]
 #[derive(Debug)]
 pub struct Task<T>(Option<async_task::JoinHandle<T, ()>>);
@@ -253,6 +337,7 @@ pub fn run<T>(future: impl Future<Output = T>) -> T {
     })
 }
 
+// Limits the number of I/O operations a task can perform in one go.
 scoped_thread_local!(static BUDGET: Cell<u32>);
 
 /// Runs a task and returns `true` if it was throttled.
@@ -268,7 +353,7 @@ fn poll_throttle(cx: &mut Context<'_>) -> Poll<()> {
     Poll::Ready(())
 }
 
-// ----- Thread-local executor -----
+// ---------- Thread-local executor ----------
 
 /// A queue of thread-local tasks.
 struct LocalExecutor {
@@ -347,7 +432,7 @@ fn thread_id() -> ThreadId {
     ID.with(|id| *id)
 }
 
-// ----- Global work-stealing executor -----
+// ---------- Global work-stealing executor ----------
 
 /// Holds the global task queue and registered workers.
 struct WorkStealing {
@@ -523,7 +608,7 @@ fn ws_retry<T>(mut f: impl FnMut() -> deque::Steal<T>) -> Option<T> {
     }
 }
 
-// ----- Reactor -----
+// ---------- Reactor ----------
 
 /// A source of I/O events.
 #[derive(Debug)]
@@ -669,7 +754,7 @@ impl ReactorGuard<'_> {
     }
 }
 
-// ----- Timer -----
+// ---------- Timer ----------
 
 /// Fires at a certain point in time.
 #[derive(Debug)]
@@ -739,7 +824,7 @@ impl Future for Timer {
     }
 }
 
-// ----- Async I/O -----
+// ---------- Async I/O ----------
 
 /// Async I/O.
 ///
@@ -1137,7 +1222,7 @@ impl Async<UnixDatagram> {
     }
 }
 
-// ----- The self-pipe trick -----
+// ---------- The self-pipe trick ----------
 
 /// A boolean flag that triggers I/O events whenever changed.
 ///
@@ -1240,7 +1325,7 @@ fn pipe() -> io::Result<(Socket, Socket)> {
     Ok((sock1, sock2))
 }
 
-// ----- Blocking executor -----
+// ---------- Blocking executor ----------
 
 /// A thread pool for blocking tasks.
 struct BlockingPool {
@@ -1507,7 +1592,7 @@ pub fn writer(writer: impl Write + Send + 'static) -> impl AsyncWrite + Send + U
     State::Idle(Some(io))
 }
 
-// ----- epoll (Linux, Android) -----
+// ---------- epoll (Linux, Android) ----------
 
 #[cfg(any(target_os = "linux", target_os = "android"))]
 mod sys {
@@ -1566,7 +1651,7 @@ mod sys {
     }
 }
 
-// ----- kqueue (macOS, iOS, FreeBSD, NetBSD, OpenBSD, DragonFly BSD) -----
+// ---------- kqueue (macOS, iOS, FreeBSD, NetBSD, OpenBSD, DragonFly BSD) ----------
 
 #[cfg(any(
     target_os = "macos",
@@ -1663,7 +1748,7 @@ mod sys {
     }
 }
 
-// ----- WSAPoll (Windows) -----
+// ---------- WSAPoll (Windows) ----------
 
 #[cfg(target_os = "windows")]
 mod sys {
