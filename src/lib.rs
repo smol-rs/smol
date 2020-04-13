@@ -1149,7 +1149,7 @@ struct SelfPipe {
 }
 
 impl SelfPipe {
-    /// Creates an I/O flag.
+    /// Creates a self-pipe.
     fn create() -> io::Result<SelfPipe> {
         let (writer, reader) = pipe()?;
         writer.set_send_buffer_size(1)?;
@@ -1199,16 +1199,13 @@ impl SelfPipe {
                 false => Err(io::Error::new(io::ErrorKind::WouldBlock, "")),
             })
             .await
-            .expect("failure while waiting on an I/O flag")
+            .expect("failure while waiting on a self-pipe");
     }
 }
 
 #[cfg(unix)]
 fn pipe() -> io::Result<(Socket, Socket)> {
-    let ty = Type::raw();
-    #[cfg(target_os = "linux")]
-    let ty = ty.cloexec();
-    let (sock1, sock2) = Socket::pair(Domain::unix(), ty, None)?;
+    let (sock1, sock2) = Socket::pair(Domain::unix(), Type::stream(), None)?;
     sock1.set_nonblocking(true)?;
     sock2.set_nonblocking(true)?;
     Ok((sock1, sock2))
