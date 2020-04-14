@@ -1,22 +1,35 @@
-//! A very small and fast async runtime.
+//! A small and fast async runtime.
 //!
-//! # Overview
+//! ## Executors
 //!
-//! ### Executors (TODO)
-//! - thread-local executor (Thread::local())
-//! - work-stealing executor (Thread::spawn())
-//! - blocking executor (Thread::blocking(), blocking!(), iter(), reader(), writer())
+//! There are three executors that poll futures:
 //!
-//! ### Reactor (TODO)
-//! - async I/O (Async<T>)
-//! - timers (Timer)
+//! 1. Thread-local executor for tasks created by [`Task::local()`].
+//! 2. Work-stealing executor for tasks created by [`Task::spawn()`].
+//! 3. Blocking executor for tasks created by [`Task::blocking()`], [`blocking!`], [`iter()`],
+//!    [`reader()`] and [`writer()`].
 //!
-//! ### Starting async code
-//! - block_on() (NOTE: does not drive the reactor)
-//! - run() (drives three executors and the reactor)
-//!     - the main future passed to run()
-//!     - the thread-local executor
-//!     - the work-stealing executor
+//! ## Reactor
+//!
+//! To wait for the next I/O event, the reactor calls [epoll] on Linux/Android, [kqueue] on
+//! macOS/iOS/BSD, and [WSAPoll] on Windows.
+//!
+//! The [`Async`] type registers an I/O handle in the reactor and is able to convert its blocking
+//! operations into async operations.
+//!
+//! The [`Timer`] type registers a timer in the reactor that will fire at a certain instant in
+//! time.
+//!
+//! ## Running
+//!
+//! Function [`run()`] simultaneously runs the thread-local executor, the work-stealing executor,
+//! and polls the reactor for I/O events and timers. At least one thread has to be calling
+//! [`run()`] in order for futures waiting on I/O and timers to get notified.
+//!
+//! There is also [`block_on()`], which simply blocks the thread until a future completes, but it
+//! doesn't do anything else besides that.
+//!
+//! Blocking tasks run in the background on a dedicated thread pool.
 //!
 //! # Examples
 //!
@@ -40,11 +53,18 @@
 //! }
 //! ```
 //!
-//! For examples, see the [`examples TODO`] module generated from the [examples] directory.
+//! For more examples, look inside the [`examples`] module or the [examples] directory.
 //!
+//! [epoll]: https://en.wikipedia.org/wiki/Epoll
+//! [kqueue]: https://en.wikipedia.org/wiki/Kqueue
+//! [WSAPoll]: https://docs.microsoft.com/en-us/windows/win32/api/winsock2/nf-winsock2-wsapoll
 //! [examples]: https://github.com/stjepang/smol/tree/master/examples
 
 #![warn(missing_docs, missing_debug_implementations, rust_2018_idioms)]
+// #![cfg_attr(docsrs, feature(doc_cfg, external_doc))]
+#![feature(external_doc)]
+// #[cfg(docsrs)]
+pub mod examples;
 
 #[cfg(not(any(
     target_os = "linux",     // epoll
@@ -98,15 +118,6 @@ use std::sync::{Condvar, Mutex, MutexGuard};
 
 // ---------- Global variables ----------
 
-// An executor for thread-local tasks.
-//
-// Thread-local tasks are spawned by calling `Task::local()` and do not have to implement `Send`.
-// They can only be run by the same thread that created them.
-scoped_thread_local!(static LOCAL_EXECUTOR: LocalExecutor);
-
-// A boolean flag that is set whenever a thread-local task is woken by another thread.
-//
-// Every time this flag's value is changed, an I/O event is triggered.
 //
 // It's possible for a thread to wake a thread-local task that belongs to another thread, in which
 // case the owning thread needs to be notified that it can run the task again. This flag is used to
@@ -114,40 +125,9 @@ scoped_thread_local!(static LOCAL_EXECUTOR: LocalExecutor);
 //
 // This flag will also wake the owning thread whenever the main future in `run()` is woken (from
 // any thread) because that future also counts as a thread-local task.
-scoped_thread_local!(static LOCAL_EVENT: Arc<SelfPipe>);
+// scoped_thread_local!(static LOCAL_EVENT: IoEvent);
 
-// A worker that executes global tasks.
-//
-// Tasks created by `Task::spawn()` go into the work-stealing executor. It has a single global
-// queue called "injector". However, if all invocations of `run()` pop tasks from the injector
-// queue at the same time, that will cause contention that slows everything down.
-//
-// To reduce contention, each `run()` registers a "worker", which is its own queue containing a
-// handful of tasks taken from the injector queue. Then, each worker pops tasks from its own queue.
-// If a worker ends up with an empty queue, it will try to steal a batch of tasks from the injector
-// queue or from other workers.
-//
-// This thread-local variable is a handle to the current thread's worker. Other threads may steal
-// tasks from it through its associated stealer that was registered in the work-stealing executor.
-scoped_thread_local!(static WORKER: Worker);
-
-// The work-stealing executor.
-//
-// Tasks created by `Task::spawn()` go into this executor and can be executed by any thread that
-// calls `run()`. For that reason, such tasks must implement `Send`. Even if a task is polled once
-// on a certain executor thread, it may afterwards get stolen by a different thread and continue
-// execution there.
-static WORK_STEALING: Lazy<WorkStealing> = Lazy::new(|| WorkStealing::new());
-
-// The reactor driving I/O events and timers.
-//
-// Every async I/O handle and timer is registered here. Invocations of `run()` poll the reactor to
-// check for new events every now and then. If there are no tasks to run, then we block until the
-// earliest timer fires or a task is scheduled.
-//
-// On Linux-based systems, we use epoll to register I/O handles. On BSD-based systems, we use
-// kqueue. On Windows, we use WSAPoll.
-static REACTOR: Lazy<Reactor> = Lazy::new(|| Reactor::create().unwrap());
+// static REACTOR: Lazy<Reactor> = Lazy::new(|| Reactor::create().unwrap());
 
 // A boolean flag that is set whenever a global task is scheduled or a new earliest timer appears.
 //
@@ -157,7 +137,13 @@ static REACTOR: Lazy<Reactor> = Lazy::new(|| Reactor::create().unwrap());
 // earliest timer fires. If another thread then calls `Task::spawn()`, wakes a global task, or
 // creates a new earliest timer, we need to interrupt the blocked thread. By setting this flag, an
 // I/O event gets triggered that wakes up the blocked thread.
-static GLOBAL_EVENT: Lazy<SelfPipe> = Lazy::new(|| SelfPipe::create().unwrap());
+//
+// TODO
+// static GLOBAL_EVENT: Lazy<IoEvent> = Lazy::new(|| IoEvent::create().unwrap());
+
+// TODO
+// TODO: can we move it into Reactor?
+// static TIMER_EVENT: Lazy<IoEvent> = Lazy::new(|| IoEvent::create().unwrap());
 
 // The executor that runs blocking tasks.
 //
@@ -168,43 +154,68 @@ static GLOBAL_EVENT: Lazy<SelfPipe> = Lazy::new(|| SelfPipe::create().unwrap());
 // make it non-blocking.
 //
 // This executor essentially creates a thread whenever there's a blocking task to run, but is smart
-// about it. When idle, there will be just one thread sitting ready to accept a new task. When more
+// about it. When idle, there will be just one thread sitting ready to accept a new task. TODO NOT
+// TRUE When more
 // tasks come in, more threads get spawned. Whenever a thread runs out of tasks, it will keep
 // idling for a little longer and only shut down if no tasks arrive in that period.
-static BLOCKING_POOL: Lazy<BlockingPool> = Lazy::new(|| BlockingPool::new());
+// static BLOCKING_POOL: Lazy<BlockingExecutor> = Lazy::new(|| BlockingExecutor::new());
 
 // ---------- The task system ----------
 
 /// A runnable future, ready for execution.
 ///
-/// When a future is spawned using `async_task::spawn()` or `async_task::spawn_local()`, we get
-/// back two values:
+/// When a future is internally spawned using `async_task::spawn()` or `async_task::spawn_local()`,
+/// we get back two values:
 ///
-/// 1. an `async_task::Task<()>`, which we refer to as `Runnable`
-/// 2. an `async_task::JoinHandle<T, ()>`, which is wrapped inside `Task<T>`
+/// 1. an `async_task::Task<()>`, which we refer to as a `Runnable`
+/// 2. an `async_task::JoinHandle<T, ()>`, which is wrapped inside a `Task<T>`
 ///
 /// Once a `Runnable` is run, it "vanishes" and only reappears when its future is woken.
 type Runnable = async_task::Task<()>;
 
 /// A spawned future.
 ///
-/// Tasks are also futures themselves that yield the output of the spawned future. When a [`Task`]
-/// handle is dropped, the future is canceled.
-#[must_use = "tasks are canceled when dropped, use `.detach()` to run in the background"]
+/// Tasks are also futures themselves and yield the output of the spawned future. When a [`Task`]
+/// is dropped, its future is canceled and won't be polled again.
+///
+/// To cancel a task a bit more gracefully and wait until it is destroyed completely, use the
+/// [`cancel`] method.
+///
+/// [`cancel`]: #method.cancel
+///
+/// # Examples
+///
+/// ```
+/// use smol::Task;
+///
+/// # smol::run(async {
+/// let task = Task::spawn(async {
+///     println!("Hello from a task!");
+///     1 + 2
+/// });
+///
+/// // Wait for the task to complete.
+/// assert_eq!(task.await, 3);
+/// # });
+/// ```
+#[must_use = "tasks get canceled when dropped, use `.detach()` to run them in the background"]
 #[derive(Debug)]
 pub struct Task<T>(Option<async_task::JoinHandle<T, ()>>);
 
 impl<T: Send + 'static> Task<T> {
-    /// Spawns a global future.
+    /// Spawns a future onto the work-stealing executor.
     ///
-    /// This future is allowed to be stolen by another executor.
+    /// This future may be polled by any thread calling [`run()`].
+    ///
+    /// # Examples
+    ///
     pub fn spawn(future: impl Future<Output = T> + Send + 'static) -> Task<T> {
-        WORK_STEALING.spawn(future)
+        WorkStealingExecutor::get().spawn(future)
     }
 
     /// Spawns a future onto a thread where blocking is allowed.
     pub fn blocking(future: impl Future<Output = T> + Send + 'static) -> Task<T> {
-        BLOCKING_POOL.spawn(future)
+        BlockingExecutor::get().spawn(future)
     }
 }
 
@@ -213,14 +224,7 @@ impl<T: 'static> Task<T> {
     ///
     /// Panics if not called within an executor.
     pub fn local(future: impl Future<Output = T> + 'static) -> Task<T> {
-        LOCAL_EXECUTOR.with(|ex| ex.spawn(future))
-    }
-}
-
-impl Task<()> {
-    /// Detaches the task to keep running in the background.
-    pub fn detach(mut self) {
-        self.0.take().unwrap();
+        THREAD_LOCAL_EXECUTOR.with(|ex| ex.spawn(future))
     }
 }
 
@@ -241,10 +245,26 @@ where
     }
 }
 
+impl Task<()> {
+    /// Detaches the task to keep running in the background.
+    pub fn detach(mut self) {
+        self.0.take().unwrap();
+    }
+}
+
+impl<T> Task<T> {
+    /// TODO
+    pub async fn cancel(mut self) -> Option<T> {
+        let handle = self.0.take().unwrap();
+        handle.cancel();
+        handle.await
+    }
+}
+
 impl<T> Drop for Task<T> {
     fn drop(&mut self) {
-        if let Some(t) = &self.0 {
-            t.cancel();
+        if let Some(handle) = &self.0 {
+            handle.cancel();
         }
     }
 }
@@ -289,50 +309,49 @@ pub fn block_on<T>(future: impl Future<Output = T>) -> T {
 
 /// Executes all futures until the main one completes.
 pub fn run<T>(future: impl Future<Output = T>) -> T {
-    if LOCAL_EXECUTOR.is_set() || WORKER.is_set() {
+    if THREAD_LOCAL_EXECUTOR.is_set() || WORKER.is_set() {
         panic!("recursive `run()`");
     }
 
-    let local = LocalExecutor::new();
-    let worker = WORK_STEALING.worker();
-    let local_event = Arc::new(SelfPipe::create().expect("cannot create a self-pipe"));
+    let local = ThreadLocalExecutor::new();
+    let worker = WorkStealingExecutor::get().worker();
 
     // TODO: Explain how this runs three executors (block_on, local, ws)
-    // -> it's like concurrent block_on(), LocalExecutor::execute(), Worker::execute()
+    // -> it's like concurrent block_on(), ThreadLocalExecutor::execute(), Worker::execute()
+    // we alternate between those three executors
 
-    let ev = local_event.clone();
+    let ev = local.event.clone();
     let waker = async_task::waker_fn(move || ev.set());
     let cx = &mut Context::from_waker(&waker);
     futures::pin_mut!(future);
 
     // Set up thread-locals.
-    LOCAL_EVENT.set(&local_event, || {
-        LOCAL_EXECUTOR.set(&local, || {
-            WORKER.set(&worker, || {
-                loop {
-                    if let Poll::Ready(val) = use_throttle(|| future.as_mut().poll(cx)) {
-                        return val;
-                    }
-                    let more_local = local.execute();
-                    let more_worker = worker.execute();
+    // TODO: can local_event be inside local_executor?
+    // TODO: also spawn_event inside workstealing?
+    // TODO: rename workstealing to workstealingexecutor?
+    THREAD_LOCAL_EXECUTOR.set(&local, || {
+        WORKER.set(&worker, || {
+            loop {
+                if let Poll::Ready(val) = use_throttle(|| future.as_mut().poll(cx)) {
+                    return val;
+                }
+                let more_local = local.execute();
+                let more_worker = worker.execute();
 
-                    if !local_event.clear() && !more_local && !more_worker {
-                        let lock = REACTOR.lock();
-                        let ready = local_event.ready();
-                        futures::pin_mut!(lock);
-                        futures::pin_mut!(ready);
+                if !local.event.clear() && !more_local && !more_worker {
+                    let lock = Reactor::get().lock();
+                    let ready = local.event.ready();
+                    futures::pin_mut!(lock);
+                    futures::pin_mut!(ready);
 
-                        // Block until either the reactor is locked or a local event occurs.
-                        if let Either::Left((mut reactor, _)) =
-                            block_on(future::select(lock, ready))
-                        {
-                            if !local_event.clear() && !GLOBAL_EVENT.clear() {
-                                reactor.wait().expect("failure while polling I/O");
-                            }
+                    // Block until either the reactor is locked or a local event occurs.
+                    if let Either::Left((mut reactor, _)) = block_on(future::select(lock, ready)) {
+                        if !local.event.clear() && !worker.event.clear() {
+                            reactor.wait().expect("failure while polling I/O");
                         }
                     }
                 }
-            })
+            }
         })
     })
 }
@@ -355,34 +374,42 @@ fn poll_throttle(cx: &mut Context<'_>) -> Poll<()> {
 
 // ---------- Thread-local executor ----------
 
+// An executor for thread-local tasks.
+//
+// Thread-local tasks are spawned by calling `Task::local()` and do not have to implement `Send`.
+// They can only be run by the same thread that created them.
+scoped_thread_local!(static THREAD_LOCAL_EXECUTOR: ThreadLocalExecutor);
+
 /// A queue of thread-local tasks.
-struct LocalExecutor {
+struct ThreadLocalExecutor {
     queue: RefCell<VecDeque<Runnable>>,
     injector: Arc<SegQueue<Runnable>>,
+    event: IoEvent,
 }
 
-impl LocalExecutor {
-    fn new() -> LocalExecutor {
-        LocalExecutor {
+impl ThreadLocalExecutor {
+    fn new() -> ThreadLocalExecutor {
+        ThreadLocalExecutor {
             queue: RefCell::new(VecDeque::new()),
             injector: Arc::new(SegQueue::new()),
+            event: IoEvent::create().expect("cannot create a self-pipe"), // TODO: Result
         }
     }
 
     fn spawn<T: 'static>(&self, future: impl Future<Output = T> + 'static) -> Task<T> {
         let id = thread_id();
         let injector = self.injector.clone();
-        let local_event = LOCAL_EVENT.with(Arc::clone);
+        let event = self.event.clone();
 
         let schedule = move |runnable| {
             if thread_id() == id {
                 // If scheduling from the original thread, push into the main queue.
-                LOCAL_EXECUTOR.with(|ex| ex.queue.borrow_mut().push_back(runnable));
+                THREAD_LOCAL_EXECUTOR.with(|ex| ex.queue.borrow_mut().push_back(runnable));
             } else {
                 // If scheduling from a remote thread, push into the injector queue.
                 injector.push(runnable);
                 // The original thread may be currently polling so let's interrupt it.
-                local_event.set();
+                event.set();
             }
         };
 
@@ -416,7 +443,7 @@ impl LocalExecutor {
 
     /// TODO Moves all tasks from the remote queue into the main queue.
     fn fetch(&self) {
-        REACTOR.poll().expect("failure while polling I/O");
+        Reactor::get().poll().expect("failure while polling I/O");
 
         let mut queue = self.queue.borrow_mut();
         while let Ok(r) = self.injector.pop() {
@@ -434,18 +461,28 @@ fn thread_id() -> ThreadId {
 
 // ---------- Global work-stealing executor ----------
 
-/// Holds the global task queue and registered workers.
-struct WorkStealing {
+/// The work-stealing executor.
+///
+/// Tasks created by `Task::spawn()` go into this executor and can be executed by any thread that
+/// calls `run()`. For that reason, such tasks must implement `Send`. Even if a task is polled once
+/// on a certain executor thread, it may afterwards get stolen by a different thread and continue
+/// execution there.
+struct WorkStealingExecutor {
     injector: deque::Injector<Runnable>,
     stealers: ShardedLock<Slab<deque::Stealer<Runnable>>>,
+    event: IoEvent,
 }
 
-impl WorkStealing {
-    fn new() -> WorkStealing {
-        WorkStealing {
-            injector: deque::Injector::new(),
-            stealers: ShardedLock::new(Slab::new()),
-        }
+impl WorkStealingExecutor {
+    fn get() -> &'static WorkStealingExecutor {
+        static EXECUTOR: Lazy<WorkStealingExecutor> = Lazy::new(|| {
+            WorkStealingExecutor {
+                injector: deque::Injector::new(),
+                stealers: ShardedLock::new(Slab::new()),
+                event: IoEvent::create().unwrap(), // TODO: Result
+            }
+        });
+        &EXECUTOR
     }
 
     fn spawn<T: Send + 'static>(
@@ -458,7 +495,7 @@ impl WorkStealing {
             } else {
                 self.injector.push(runnable);
                 // A task has been pushed into the global queue - we need to interrupt.
-                GLOBAL_EVENT.set();
+                self.event.set();
             }
         };
 
@@ -475,13 +512,28 @@ impl WorkStealing {
             id: vacant.key(),
             slot: Cell::new(None),
             worker: deque::Worker::new_fifo(),
+            executor: self,
+            event: self.event.clone(),
         };
         vacant.insert(worker.worker.stealer());
         worker
     }
 }
 
-// TODO: explain that whenever something is pushed into worker/injector, we need to interrupt
+// A worker that executes global tasks.
+//
+// Tasks created by `Task::spawn()` go into the work-stealing executor. It has a single global
+// queue called "injector". However, if all invocations of `run()` pop tasks from the injector
+// queue at the same time, that will cause contention that slows everything down.
+//
+// To reduce contention, each `run()` registers a "worker", which is its own queue containing a
+// handful of tasks taken from the injector queue. Then, each worker pops tasks from its own queue.
+// If a worker ends up with an empty queue, it will try to steal a batch of tasks from the injector
+// queue or from other workers.
+//
+// This thread-local variable is a handle to the current thread's worker. Other threads may steal
+// tasks from it through its associated stealer that was registered in the work-stealing executor.
+scoped_thread_local!(static WORKER: Worker);
 
 /// A queue of some stealable global tasks.
 ///
@@ -490,6 +542,8 @@ struct Worker {
     id: usize,
     slot: Cell<Option<Runnable>>,
     worker: deque::Worker<Runnable>,
+    executor: &'static WorkStealingExecutor,
+    event: IoEvent,
 }
 
 impl Worker {
@@ -518,7 +572,7 @@ impl Worker {
             Some(runnable) => {
                 self.worker.push(runnable);
                 // A task has been pushed into the local queue - we need to interrupt.
-                GLOBAL_EVENT.set();
+                self.event.set();
             }
         }
     }
@@ -534,14 +588,14 @@ impl Worker {
 
     fn fetch(&self) {
         // Try stealing from the global queue.
-        if let Some(r) = ws_retry(|| WORK_STEALING.injector.steal_batch_and_pop(&self.worker)) {
+        if let Some(r) = ws_retry(|| self.executor.injector.steal_batch_and_pop(&self.worker)) {
             self.push(r); // TODO: optimize interrupts
                           // A task has been pushed into the local queue - we need to interrupt.
-            GLOBAL_EVENT.set();
+            self.event.set();
         }
 
         // Poll the reactor.
-        REACTOR.poll().expect("failure while polling I/O");
+        Reactor::get().poll().expect("failure while polling I/O");
 
         if let Some(r) = self.slot.take() {
             self.slot.set(Some(r));
@@ -551,7 +605,7 @@ impl Worker {
             return;
         }
 
-        let stealers = WORK_STEALING.stealers.read().unwrap();
+        let stealers = self.executor.stealers.read().unwrap();
         let mid = fast_random(stealers.len());
         if let Some(r) = ws_retry(|| {
             stealers
@@ -559,12 +613,13 @@ impl Worker {
                 .chain(stealers.iter())
                 .skip(mid)
                 .take(stealers.len())
+                .filter(|(i, _)| *i != self.id)
                 .map(|(_, s)| s.steal_batch_and_pop(&self.worker))
                 .collect()
         }) {
             self.slot.set(Some(r));
             // A task may have been pushed into the local queue - we need to interrupt.
-            GLOBAL_EVENT.set();
+            self.event.set();
         }
     }
 }
@@ -591,9 +646,9 @@ fn fast_random(n: usize) -> usize {
 
 impl Drop for Worker {
     fn drop(&mut self) {
-        WORK_STEALING.stealers.write().unwrap().remove(self.id);
+        self.executor.stealers.write().unwrap().remove(self.id);
         while let Some(r) = self.worker.pop() {
-            WORK_STEALING.injector.push(r);
+            self.executor.injector.push(r);
         }
     }
 }
@@ -625,7 +680,14 @@ struct Source {
     tick: AtomicU64,
 }
 
-/// The async I/O and timers driver.
+/// The reactor driving I/O events and timers.
+///
+/// Every async I/O handle and timer is registered here. Invocations of `run()` poll the reactor to
+/// check for new events every now and then. If there are no tasks to run, then we block until the
+/// earliest timer fires or a task is scheduled.
+///
+/// On Linux-based systems, we use epoll to register I/O handles. On BSD-based systems, we use
+/// kqueue. On Windows, we use WSAPoll.
 struct Reactor {
     sys: sys::Reactor,
     sources: piper::Lock<Slab<Arc<Source>>>,
@@ -634,14 +696,22 @@ struct Reactor {
 }
 
 impl Reactor {
-    /// Creates a new reactor.
-    fn create() -> io::Result<Reactor> {
-        Ok(Reactor {
-            sys: sys::Reactor::create()?,
-            sources: piper::Lock::new(Slab::new()),
-            events: piper::Mutex::new(sys::Events::new()),
-            timers: piper::Lock::new(BTreeMap::new()),
-        })
+    fn get() -> &'static Reactor {
+        static REACTOR: Lazy<Reactor> = Lazy::new(|| {
+            Reactor {
+                sys: sys::Reactor::create().unwrap(), // TODO: result
+                sources: piper::Lock::new(Slab::new()),
+                events: piper::Mutex::new(sys::Events::new()),
+                timers: piper::Lock::new(BTreeMap::new()),
+            }
+        });
+        &REACTOR
+    }
+
+    fn event() -> &'static IoEvent {
+        static EVENT: Lazy<IoEvent> = Lazy::new(|| IoEvent::create().unwrap()); // TODO: result
+        Reactor::get(); // Make sure the reactor is initialized before the event.
+        &EVENT
     }
 
     /// Registers an I/O source in the reactor.
@@ -675,34 +745,36 @@ impl Reactor {
     fn poll(&self) -> io::Result<()> {
         if let Some(events) = self.events.try_lock() {
             let reactor = self;
-            let mut guard = ReactorGuard { reactor, events };
+            let mut lock = ReactorLock { reactor, events };
             // React to events without blocking.
-            guard.react(false)?;
+            lock.react(false)?;
         }
         Ok(())
     }
 
     /// Locks the reactor for polling.
-    async fn lock(&self) -> ReactorGuard<'_> {
+    async fn lock(&self) -> ReactorLock<'_> {
         let reactor = self;
         let events = self.events.lock().await;
-        ReactorGuard { reactor, events }
+        ReactorLock { reactor, events }
     }
 }
 
 /// Polls the reactor for I/O events and wakes up tasks.
-struct ReactorGuard<'a> {
+struct ReactorLock<'a> {
     reactor: &'a Reactor,
     events: piper::MutexGuard<'a, sys::Events>,
 }
 
-impl ReactorGuard<'_> {
+impl ReactorLock<'_> {
     /// Blocks until at least one event is processed.
     fn wait(&mut self) -> io::Result<()> {
         self.react(true)
     }
 
     fn react(&mut self, block: bool) -> io::Result<()> {
+        Reactor::event().clear();
+
         let next_timer = {
             // Split timers into ready and pending timers.
             let mut timers = self.reactor.timers.lock();
@@ -777,12 +849,12 @@ impl Timer {
 
     fn register(&mut self, cx: &mut Context<'_>) {
         if self.id.is_none() {
-            let mut timers = REACTOR.timers.lock();
+            let mut timers = Reactor::get().timers.lock();
 
             // If this timer is going to be the earliest one, interrupt the reactor.
             if let Some((first, _)) = timers.keys().next() {
                 if self.when < *first {
-                    GLOBAL_EVENT.set();
+                    Reactor::event().set();
                 }
             }
 
@@ -798,7 +870,7 @@ impl Timer {
 
     fn deregister(&mut self) {
         if let Some(id) = self.id {
-            REACTOR.timers.lock().remove(&(self.when, id));
+            Reactor::get().timers.lock().remove(&(self.when, id));
         }
     }
 }
@@ -848,7 +920,7 @@ impl<T: AsRawFd> Async<T> {
 
         // Register the I/O handle in the reactor.
         Ok(Async {
-            source: REACTOR.register(io.as_raw_fd())?,
+            source: Reactor::get().register(io.as_raw_fd())?,
             io: Some(Box::new(io)),
         })
     }
@@ -880,7 +952,7 @@ impl<T: AsRawSocket> Async<T> {
 
         // Register the I/O handle in the reactor.
         Ok(Async {
-            source: REACTOR.register(io.as_raw_socket())?,
+            source: Reactor::get().register(io.as_raw_socket())?,
             io: Some(Box::new(io)),
         })
     }
@@ -907,7 +979,7 @@ impl<T> Async<T> {
     /// Extracts the inner non-blocking I/O handle.
     pub fn into_inner(mut self) -> io::Result<T> {
         let io = *self.io.take().unwrap();
-        REACTOR.deregister(&self.source)?;
+        Reactor::get().deregister(&self.source)?;
         Ok(io)
     }
 
@@ -958,7 +1030,7 @@ impl<T> Drop for Async<T> {
     fn drop(&mut self) {
         if self.io.is_some() {
             // Destructors should not panic.
-            let _ = REACTOR.deregister(&self.source);
+            let _ = Reactor::get().deregister(&self.source);
             // Drop the I/O handle to close it.
             self.io.take();
         }
@@ -1224,6 +1296,34 @@ impl Async<UnixDatagram> {
 
 // ---------- The self-pipe trick ----------
 
+/// A boolean flag that is set whenever a thread-local task is woken by another thread.
+///
+/// Every time this flag's value is changed, an I/O event is triggered.
+#[derive(Clone)]
+struct IoEvent {
+    pipe: Arc<SelfPipe>,
+}
+
+impl IoEvent {
+    fn create() -> io::Result<IoEvent> {
+        Ok(IoEvent {
+            pipe: Arc::new(SelfPipe::create()?),
+        })
+    }
+
+    fn set(&self) {
+        self.pipe.set();
+    }
+
+    fn clear(&self) -> bool {
+        self.pipe.clear()
+    }
+
+    async fn ready(&self) {
+        self.pipe.ready().await;
+    }
+}
+
 /// A boolean flag that triggers I/O events whenever changed.
 ///
 /// https://cr.yp.to/docs/selfpipe.html
@@ -1328,7 +1428,7 @@ fn pipe() -> io::Result<(Socket, Socket)> {
 // ---------- Blocking executor ----------
 
 /// A thread pool for blocking tasks.
-struct BlockingPool {
+struct BlockingExecutor {
     state: Mutex<State>,
     cvar: Condvar,
 }
@@ -1342,16 +1442,17 @@ struct State {
     queue: VecDeque<Runnable>,
 }
 
-impl BlockingPool {
-    fn new() -> BlockingPool {
-        BlockingPool {
+impl BlockingExecutor {
+    fn get() -> &'static BlockingExecutor {
+        static EXECUTOR: Lazy<BlockingExecutor> = Lazy::new(|| BlockingExecutor {
             state: Mutex::new(State {
                 idle_count: 0,
                 thread_count: 0,
                 queue: VecDeque::new(),
             }),
             cvar: Condvar::new(),
-        }
+        });
+        &EXECUTOR
     }
 
     /// Spawns a blocking task onto the thread pool.
