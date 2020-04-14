@@ -116,50 +116,6 @@ use slab::Slab;
 use socket2::{Domain, Protocol, Socket, Type};
 use std::sync::{Condvar, Mutex, MutexGuard};
 
-// ---------- Global variables ----------
-
-//
-// It's possible for a thread to wake a thread-local task that belongs to another thread, in which
-// case the owning thread needs to be notified that it can run the task again. This flag is used to
-// wake that owning thread in case it is sleeping.
-//
-// This flag will also wake the owning thread whenever the main future in `run()` is woken (from
-// any thread) because that future also counts as a thread-local task.
-// scoped_thread_local!(static LOCAL_EVENT: IoEvent);
-
-// static REACTOR: Lazy<Reactor> = Lazy::new(|| Reactor::create().unwrap());
-
-// A boolean flag that is set whenever a global task is scheduled or a new earliest timer appears.
-//
-// Every time this flag's value is changed, an I/O event is triggered.
-//
-// If a thread running `run()` is out of tasks, it will block on epoll/kqueue/WSAPoll until the
-// earliest timer fires. If another thread then calls `Task::spawn()`, wakes a global task, or
-// creates a new earliest timer, we need to interrupt the blocked thread. By setting this flag, an
-// I/O event gets triggered that wakes up the blocked thread.
-//
-// TODO
-// static GLOBAL_EVENT: Lazy<IoEvent> = Lazy::new(|| IoEvent::create().unwrap());
-
-// TODO
-// TODO: can we move it into Reactor?
-// static TIMER_EVENT: Lazy<IoEvent> = Lazy::new(|| IoEvent::create().unwrap());
-
-// The executor that runs blocking tasks.
-//
-// Tasks created by `Task::blocking()`, `blocking!()`, `iter()`, `reader()`, or `writer()` are
-// allowed to block. Sometimes we really can't avoid blocking inside async programs - for example,
-// filesystem operations on many systems cannot be truly asynchronous or are difficult to model
-// with futures. Or, we may want to call a library that blocks and there simply isn't an option to
-// make it non-blocking.
-//
-// This executor essentially creates a thread whenever there's a blocking task to run, but is smart
-// about it. When idle, there will be just one thread sitting ready to accept a new task. TODO NOT
-// TRUE When more
-// tasks come in, more threads get spawned. Whenever a thread runs out of tasks, it will keep
-// idling for a little longer and only shut down if no tasks arrive in that period.
-// static BLOCKING_POOL: Lazy<BlockingExecutor> = Lazy::new(|| BlockingExecutor::new());
-
 // ---------- The task system ----------
 
 /// A runnable future, ready for execution.
