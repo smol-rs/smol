@@ -53,7 +53,7 @@
 //! }
 //! ```
 //!
-//! For more examples, look inside the [`examples`] module or the [examples] directory.
+//! For more examples, look inside the [examples] directory.
 //!
 //! [epoll]: https://en.wikipedia.org/wiki/Epoll
 //! [kqueue]: https://en.wikipedia.org/wiki/Kqueue
@@ -61,10 +61,6 @@
 //! [examples]: https://github.com/stjepang/smol/tree/master/examples
 
 #![warn(missing_docs, missing_debug_implementations, rust_2018_idioms)]
-// #![cfg_attr(docsrs, feature(doc_cfg, external_doc))]
-#![feature(external_doc)]
-// #[cfg(docsrs)]
-pub mod examples;
 
 #[cfg(not(any(
     target_os = "linux",     // epoll
@@ -131,13 +127,17 @@ type Runnable = async_task::Task<()>;
 
 /// A spawned future.
 ///
-/// Tasks are also futures themselves and yield the output of the spawned future. When a [`Task`]
-/// is dropped, its future is canceled and won't be polled again.
+/// Tasks are also futures themselves and yield the output of the spawned future.
 ///
-/// To cancel a task a bit more gracefully and wait until it is destroyed completely, use the
-/// [`cancel`] method.
+/// When a task is dropped, its gets canceled and won't be polled again. To cancel a task a bit
+/// more gracefully and wait until it is destroyed completely, use the [`cancel()`][Task::cancel()]
+/// method.
 ///
-/// [`cancel`]: #method.cancel
+/// Tasks that panic get immediately canceled. Awaiting a canceled task also causes a panic.
+///
+/// If the future panics, the panic will be unwound into the [`run()`] invocation that polled it.
+/// However, this does not apply to the blocking executor - it will simply ignore panics and
+/// continue running.
 ///
 /// # Examples
 ///
@@ -145,6 +145,7 @@ type Runnable = async_task::Task<()>;
 /// use smol::Task;
 ///
 /// # smol::run(async {
+/// // Spawn a task onto the work-stealing executor.
 /// let task = Task::spawn(async {
 ///     println!("Hello from a task!");
 ///     1 + 2
@@ -158,29 +159,69 @@ type Runnable = async_task::Task<()>;
 #[derive(Debug)]
 pub struct Task<T>(Option<async_task::JoinHandle<T, ()>>);
 
-impl<T: Send + 'static> Task<T> {
-    /// Spawns a future onto the work-stealing executor.
+impl<T: 'static> Task<T> {
+    /// Spawns a future onto the thread-local executor.
     ///
-    /// This future may be polled by any thread calling [`run()`].
+    /// Panics if the current thread is not inside an invocation [`run()`].
     ///
     /// # Examples
     ///
+    /// ```
+    /// use smol::Task;
+    ///
+    /// smol::run(async {
+    ///     let task = Task::local(async { 1 + 2 });
+    ///     assert_eq!(task.await, 3);
+    /// })
+    /// ```
+    pub fn local(future: impl Future<Output = T> + 'static) -> Task<T> {
+        THREAD_LOCAL_EXECUTOR.with(|ex| ex.spawn(future))
+    }
+}
+
+impl<T: Send + 'static> Task<T> {
+    /// Spawns a future onto the work-stealing executor.
+    ///
+    /// This future may be stolen and polled by any thread calling [`run()`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use smol::Task;
+    ///
+    /// # smol::run(async {
+    /// let task = Task::spawn(async { 1 + 2 });
+    /// assert_eq!(task.await, 3);
+    /// # });
+    /// ```
     pub fn spawn(future: impl Future<Output = T> + Send + 'static) -> Task<T> {
         WorkStealingExecutor::get().spawn(future)
     }
 
-    /// Spawns a future onto a thread where blocking is allowed.
+    /// Spawns a future onto the blocking executor.
+    ///
+    /// This future is allowed to block for an indefinite length of time.
+    ///
+    /// For convenience, there is also the [`blocking!`] macro that spawns a blocking tasks and
+    /// immediately awaits it.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use smol::Task;
+    /// use std::io::stdin;
+    ///
+    /// # smol::block_on(async {
+    /// let line = Task::blocking(async {
+    ///     let mut line = String::new();
+    ///     std::io::stdin().read_line(&mut line).unwrap();
+    ///     line
+    /// })
+    /// .await;
+    /// # });
+    /// ```
     pub fn blocking(future: impl Future<Output = T> + Send + 'static) -> Task<T> {
         BlockingExecutor::get().spawn(future)
-    }
-}
-
-impl<T: 'static> Task<T> {
-    /// Spawns a future onto the current executor. TODO
-    ///
-    /// Panics if not called within an executor.
-    pub fn local(future: impl Future<Output = T> + 'static) -> Task<T> {
-        THREAD_LOCAL_EXECUTOR.with(|ex| ex.spawn(future))
     }
 }
 
@@ -189,12 +230,26 @@ where
     T: Send + 'static,
     E: Debug + Send + 'static,
 {
-    /// Spawns another task that unwraps the result on the same thread.
+    /// Spawns a new task that awaits and unwraps the result.
+    ///
+    /// The new task will panic if the original task results in an error.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use smol::Task;
+    ///
+    /// TODO
+    /// ```
     pub fn unwrap(self) -> Task<T> {
         Task::spawn(async { self.await.unwrap() })
     }
 
-    /// Spawns another task that unwraps the result on the same thread.
+    /// Spawns a new task that awaits and unwraps the result.
+    ///
+    /// The new task will panic with the provided message if the original task results in an error.
+    ///
+    /// TODO
     pub fn expect(self, msg: &str) -> Task<T> {
         let msg = msg.to_owned();
         Task::spawn(async move { self.await.expect(&msg) })
@@ -203,6 +258,8 @@ where
 
 impl Task<()> {
     /// Detaches the task to keep running in the background.
+    ///
+    /// TODO
     pub fn detach(mut self) {
         self.0.take().unwrap();
     }
@@ -231,7 +288,7 @@ impl<T> Future for Task<T> {
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         match Pin::new(&mut self.0.as_mut().unwrap()).poll(cx) {
             Poll::Pending => Poll::Pending,
-            Poll::Ready(output) => Poll::Ready(output.expect("task failed")),
+            Poll::Ready(output) => Poll::Ready(output.expect("task has failed")),
         }
     }
 }
@@ -1429,7 +1486,7 @@ impl BlockingExecutor {
 
             // Run tasks in the queue.
             while let Some(runnable) = state.queue.pop_front() {
-                self.spawn_more(state);
+                self.grow_pool(state);
                 let _ = panic::catch_unwind(|| runnable.run());
                 state = self.state.lock().unwrap();
             }
@@ -1455,11 +1512,11 @@ impl BlockingExecutor {
         state.queue.push_back(runnable);
         // Notify a sleeping thread and spawn more threads if needed.
         self.cvar.notify_one();
-        self.spawn_more(state);
+        self.grow_pool(state);
     }
 
     /// Spawns more blocking threads if the pool is overloaded with work.
-    fn spawn_more(&'static self, mut state: MutexGuard<'static, State>) {
+    fn grow_pool(&'static self, mut state: MutexGuard<'static, State>) {
         // If runnable tasks greatly outnumber idle threads and there aren't too many threads
         // already, then be aggressive: wake all idle threads and spawn one more thread.
         while state.queue.len() > state.idle_count * 5 && state.thread_count < 500 {
