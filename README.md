@@ -22,13 +22,38 @@ A small and fast async runtime.
 * Stdio - Asynchronous stdin, stdout, and stderr.
 * Timer - Efficient userspace timers.
 
-## Examples (TODO: turn these into links)
+## Examples
 
-* Hello world
-* HTTP request
-* Hyper server
-* Timer
-* More...
+* [Async-h1 client](./examples/async-h1-client.rs)
+* [Async-h1 server](./examples/async-h1-server.rs)
+* [Chat Client](./examples/chat-client.rs)
+* [Chat Server](./examples/chat-server.rs)
+* [Compat reqwest](./examples/compat-reqwest.rs)
+* [Compat tokio](./examples/compat-tokio.rs)
+* [Ctrl-c](./examples/ctrl-c.rs)
+* [Hyper Client](./examples/hyper-client.rs)
+* [Hyper Server](./examples/hyper-server.rs)
+* [Linux Inotify](./examples/linux-inotify.rs)
+* [Linux Timefd](./examples/linux-timerfd.rs)
+* [Process Output](./examples/process-output.rs)
+* [Process Run](./examples/process-run.rs)
+* [Read Dir](./examples/read-dir.rs)
+* [Read File](./examples/read-file.rs)
+* [Simple Client](./examples/simple-client.rs)
+* [Simple Server](./examples/simple-server.rs)
+* [Stdin to Stdout](./examples/stdin-to-stdout.rs)
+* [Tcp Client](./examples/tcp-client.rs)
+* [Tcp Server](./examples/tcp-server.rs)
+* [Thread Pool](./examples/thread-pool.rs)
+* [Timer Sleep](./examples/timer-sleep.rs)
+* [Timer Timeout](./examples/timer-timeout.rs)
+* [TLS Client](./examples/tls-client.rs)
+* [TLS Server](./examples/tls-server.rs)
+* [Unix Signal](./examples/unix-signal.rs)
+* [Web Crawler](./examples/web-crawler.rs)
+* [Websocket Client](./examples/websocket-client.rs)
+* [WebSocket Server](./examples/websocket-server.rs)
+* [Windows Uds](./examples/windows-uds.rs)
 
 ## License
 
