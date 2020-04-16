@@ -1,6 +1,6 @@
 //! A small and fast async runtime.
 //!
-//! ## Executors
+//! # Executors
 //!
 //! There are three executors that poll futures:
 //!
@@ -11,7 +11,7 @@
 //!
 //! Blocking executor is the only one that spawns threads.
 //!
-//! ## Reactor
+//! # Reactor
 //!
 //! To wait for the next I/O event, the reactor calls [epoll] on Linux/Android, [kqueue] on
 //! macOS/iOS/BSD, and [WSAPoll] on Windows.
@@ -22,7 +22,7 @@
 //! The [`Timer`] type registers a timer in the reactor that will fire at the chosen point in
 //! time.
 //!
-//! ## Running
+//! # Running
 //!
 //! Function [`run()`] simultaneously runs the thread-local executor, runs the work-stealing
 //! executor, and polls the reactor for I/O events and timers. At least one thread has to be
@@ -31,8 +31,8 @@
 //! If you want a multithreaded runtime, just call [`run()`] from multiple threads. See [here TODO
 //! link to example] for an example.
 //!
-//! There is also [`block_on()`], which simply blocks the thread until a future completes, but it
-//! doesn't do anything else besides that.
+//! There is also [`block_on()`], which blocks the thread until a future completes, but it doesn't
+//! do anything else besides that.
 //!
 //! Blocking tasks run in the background on a dedicated thread pool.
 //!
@@ -60,23 +60,25 @@
 //!
 //! Look inside the [examples] directory for more.
 //!
-//! You can use this runtime to read a [file][read-file] or
+//! Those examples show how to read a [file][read-file] or
 //! [directory][read-directory], [spawn][process-run] a process or read its
-//! [output][process-output], use a timer to [sleep][timer-sleep] or set a
-//! [timeout][timer-timeout], catch the [Ctrl-C][ctrl-c] signal and [gracefully shut down] TODO.
+//! [output][process-output], use timers to [sleep][timer-sleep] or set a
+//! [timeout][timer-timeout], catch the [Ctrl-C][ctrl-c] signal and [gracefully shut down] TODO,
+//! redirect standard [input to output][stdin-to-stdout].
 //!
-//! You can also implement a simple TCP [client][tcp-client]/[server][tcp-server], a chat
+//! They include a simple TCP [client][tcp-client]/[server][tcp-server], a chat
 //! [client][chat-client]/[server][chat-server] over TCP, a [web crawler][web-crawler], a simple
-//! HTTP/TLS [client][simple-client]/[server][simple-server], a hyper
-//! [client][hyper-client]/[server][hyper-server], an async-h1
-//! [client][async-h1-client]/[server][async-h1-server], a WebSocket/TLS
+//! TLS [client][tls-client]/[server][tls-server], a simple
+//! HTTP+TLS [client][simple-client]/[server][simple-server], a [hyper]
+//! [client][hyper-client]/[server][hyper-server], an [async-h1]
+//! [client][async-h1-client]/[server][async-h1-server], a WebSocket+TLS
 //! [client][websocket-client]/[server][websocket-server].
 //!
-//! You can use libraries like [inotify], [timerfd], [signal-hook], and [uds_windows] in async
-//! manner.
+//! Even non-async libraries can be plugged into this runtime. See examples for [inotify],
+//! [timerfd], [signal-hook], and [uds_windows].
 //!
-//! You can also mix `smol` with [async-std] and [tokio], or use runtime-specific libraries like
-//! [reqwest].
+//! You can also mix this runtime with [async-std] and [tokio], or use runtime-specific
+//! libraries like [reqwest].
 //!
 //! [epoll]: https://en.wikipedia.org/wiki/Epoll
 //! [kqueue]: https://en.wikipedia.org/wiki/Kqueue
@@ -88,6 +90,7 @@
 //! [www.rust-lang.org]: https://www.rust-lang.org/
 //! [cat]: https://en.wikipedia.org/wiki/Cat_(Unix)
 //!
+//! [stdin-to-stdout]: https://github.com/stjepang/smol/blob/master/examples/stdin-to-stdout.rs
 //! [ctrl-c]: https://github.com/stjepang/smol/blob/master/examples/ctrl-c.rs
 //! [read-file]: https://github.com/stjepang/smol/blob/master/examples/read-file.rs
 //! [read-directory]: https://github.com/stjepang/smol/blob/master/examples/read-directory.rs
@@ -97,6 +100,8 @@
 //! [process-output]: https://github.com/stjepang/smol/blob/master/examples/process-output.rs
 //! [tcp-client]: https://github.com/stjepang/smol/blob/master/examples/tcp-client.rs
 //! [tcp-server]: https://github.com/stjepang/smol/blob/master/examples/tcp-server.rs
+//! [tls-client]: https://github.com/stjepang/smol/blob/master/examples/tls-client.rs
+//! [tls-server]: https://github.com/stjepang/smol/blob/master/examples/tls-server.rs
 //! [simple-client]: https://github.com/stjepang/smol/blob/master/examples/simple-client.rs
 //! [simple-server]: https://github.com/stjepang/smol/blob/master/examples/simple-server.rs
 //! [async-h1-client]: https://github.com/stjepang/smol/blob/master/examples/async-h1-client.rs
@@ -389,9 +394,10 @@ pub fn block_on<T>(future: impl Future<Output = T>) -> T {
     })
 }
 
-/// Executes all futures until the main one completes.
+/// Runs executors and the reactor.
 ///
 /// TODO a thread-pool example with num_cpus::get().max(1)
+/// TODO a stoppable thread-pool with channels
 pub fn run<T>(future: impl Future<Output = T>) -> T {
     // If this thread is already inside an executor, panic.
     if WORKER.is_set() {
@@ -546,7 +552,9 @@ impl ThreadLocalExecutor {
         }
     }
 
-    /// Spawns a task onto this executor.
+    /// Spawns a future onto this executor.
+    ///
+    /// Returns a `Task` handle for the spawned task.
     fn spawn<T: 'static>(&self, future: impl Future<Output = T> + 'static) -> Task<T> {
         let id = thread_id();
         let injector = self.injector.clone();
@@ -579,25 +587,33 @@ impl ThreadLocalExecutor {
             for _ in 0..50 {
                 // Find the next task to run.
                 match self.pop() {
-                    None => return false,
+                    None => {
+                        // There are no more tasks to run.
+                        return false;
+                    }
                     Some(r) => {
+                        // Run the task.
                         use_throttle(|| r.run());
                     }
                 }
             }
-            // Poll the reactor and drain the injector queue every now and then.
+
+            // Poll the reactor and drain the injector queue. We do this occasionally to make
+            // execution more fair to all tasks involved.
             self.fetch();
         }
+
+        // There are likely more tasks to run.
         true
     }
 
-    /// Pops the next task to run.
+    /// Finds the next task to run.
     fn pop(&self) -> Option<Runnable> {
         // Check if there is a task in the main queue.
         if let Some(r) = self.queue.borrow_mut().pop_front() {
             return Some(r);
         }
-        // Otherwise, fetch more tasks from the reactor or the injector queue.
+        // If not, fetch more tasks from the reactor or the injector queue.
         self.fetch();
         // Check the main queue again.
         self.queue.borrow_mut().pop_front()
@@ -644,6 +660,8 @@ scoped_thread_local!(static WORKER: Worker);
 /// Since tasks can be stolen by any worker and thus move from thread to thread, their futures must
 /// implement `Send`.
 ///
+/// There is only one global instance of this type, accessible by `Reactor::get()`.
+///
 /// Work stealing is a strategy that reduces contention in a multi-threaded environment. If all
 /// invocations of `run()` used the same global task queue all the time, they would constantly
 /// "step on each other's toes", causing a lot of CPU cache traffic and too often waste time
@@ -652,7 +670,7 @@ scoped_thread_local!(static WORKER: Worker);
 /// The solution is to have a separate queue in each invocation of `run()`, called a "worker".
 /// Each thread is primarily using its own worker. Once there are no more tasks in the worker, we
 /// either grab a batch of tasks from the main global queue, or steal tasks from other workers.
-/// Of course, work-stealing also causes some contention, but much less so.
+/// Of course, work-stealing still causes contention in some cases, but much less often.
 ///
 /// More about work stealing: https://en.wikipedia.org/wiki/Work_stealing
 struct WorkStealingExecutor {
@@ -677,7 +695,9 @@ impl WorkStealingExecutor {
         &EXECUTOR
     }
 
-    /// Spawns a task onto this executor.
+    /// Spawns a future onto this executor.
+    ///
+    /// Returns a `Task` handle for the spawned task.
     fn spawn<T: Send + 'static>(
         &'static self,
         future: impl Future<Output = T> + Send + 'static,
@@ -710,27 +730,36 @@ impl WorkStealingExecutor {
 
         // Create a worker and put its stealer handle into the executor.
         let worker = Worker {
-            id: vacant.key(),
+            key: vacant.key(),
             slot: Cell::new(None),
-            worker: deque::Worker::new_fifo(),
+            queue: deque::Worker::new_fifo(),
             executor: self,
         };
-        vacant.insert(worker.worker.stealer());
+        vacant.insert(worker.queue.stealer());
 
         worker
     }
 }
 
-// A worker that executes global tasks.
-// TODO
-
-/// A queue of some stealable global tasks.
+/// A worker that participates in the work-stealing executor.
 ///
-/// Each thread has its own worker in order to reduce contention on the global task queue.
+/// Each invocation of `run()` creates its own worker.
 struct Worker {
-    id: usize,
+    /// The ID of this worker obtained during registration.
+    key: usize,
+
+    /// A slot into which tasks go before entering the actual queue.
     slot: Cell<Option<Runnable>>,
-    worker: deque::Worker<Runnable>,
+
+    /// A queue of tasks.
+    ///
+    /// Other workers are able to steal tasks from this queue.
+    queue: deque::Worker<Runnable>,
+
+    /// The parent work-stealing executor.
+    ///
+    /// This is the same thing as `WorkStealingExecutor::get()`, but we keep a reference here for
+    /// convenience.
     executor: &'static WorkStealingExecutor,
 }
 
@@ -741,100 +770,121 @@ impl Worker {
             for _ in 0..50 {
                 // Find the next task to run.
                 match self.pop() {
-                    None => return false,
+                    None => {
+                        // There are no more tasks to run.
+                        return false;
+                    }
                     Some(r) => {
                         // Notify other workers that there may be more tasks.
                         self.executor.event.set();
 
                         // Run the task.
                         if use_throttle(|| r.run()) {
-                            // If the budget was used up TODO
+                            // The task was scheduled while it was running, which means it got
+                            // pushed into this worker. It is now inside the slot and would be the
+                            // next task to run.
+                            //
+                            // Let's flush the slot in order to give other tasks a chance to run.
                             self.push(None);
                         }
                     }
                 }
             }
 
-            // TODO Poll the reactor and drain the injector queue every now and then.
+            // Flush the slot, grab some tasks from the global queue, and poll the reactor. We do
+            // this occasionally to make execution more fair to all tasks involved.
             self.push(None);
             self.fetch();
         }
+
+        // There are likely more tasks to run.
         true
     }
 
+    /// Pushes a task into this worker.
+    ///
+    /// If the given task is `None`, the slot's contents gets replaced with `None`, moving its
+    /// previously held task into the queue (if there was one).
     fn push(&self, runnable: impl Into<Option<Runnable>>) {
-        match self.slot.replace(runnable.into()) {
-            None => {}
-            Some(runnable) => {
-                self.worker.push(runnable);
-                // A task has been pushed into the local queue - we need to interrupt.
-                // self.executor.event.set();
-            }
+        // Put the task into the slot.
+        if let Some(r) = self.slot.replace(runnable.into()) {
+            // If the slot had a task, push it into the queue.
+            self.queue.push(r);
         }
     }
 
+    /// Finds the next task to run.
     fn pop(&self) -> Option<Runnable> {
-        // Take a task from the slot or the local queue.
-        if let Some(r) = self.slot.take().or_else(|| self.worker.pop()) {
+        // Check if there is a task in the slot or in the queue.
+        if let Some(r) = self.slot.take().or_else(|| self.queue.pop()) {
             return Some(r);
         }
+        // If not, fetch more tasks from the injector queue, the reactor, or other workers.
         self.fetch();
-        self.slot.take().or_else(|| self.worker.pop())
+        // Check the slot and the queue again.
+        self.slot.take().or_else(|| self.queue.pop())
     }
 
+    /// Steals from the injector and polls the reactor, or steals from other workers if that fails.
     fn fetch(&self) {
         // Try stealing from the global queue.
-        if let Some(r) = ws_retry(|| self.executor.injector.steal_batch_and_pop(&self.worker)) {
-            self.push(r); // TODO: optimize interrupts
-                          // A task has been pushed into the local queue - we need to interrupt.
-                          // self.executor.event.set();
+        if let Some(r) = retry_steal(|| self.executor.injector.steal_batch_and_pop(&self.queue)) {
+            // Push the task, but don't return -- let's not forget to poll the reactor.
+            self.push(r);
         }
 
         // Poll the reactor.
         Reactor::get().poll().expect("failure while polling I/O");
 
+        // If there is at least one task in the slot, return.
         if let Some(r) = self.slot.take() {
             self.slot.set(Some(r));
             return;
         }
-        if !self.worker.is_empty() {
+        // If there is at least one task in the queue, return.
+        if !self.queue.is_empty() {
             return;
         }
 
+        // Still no tasks found - our last hope is to steal from other workers.
         let stealers = self.executor.stealers.read().unwrap();
-        let mid = fast_random(stealers.len());
-        if let Some(r) = ws_retry(|| {
-            stealers
-                .iter()
-                .chain(stealers.iter())
-                .skip(mid)
-                .take(stealers.len())
-                .filter(|(i, _)| *i != self.id)
-                .map(|(_, s)| s.steal_batch_and_pop(&self.worker))
+
+        if let Some(r) = retry_steal(|| {
+            // Pick a random starting point in the iterator list and rotate the list.
+            let n = stealers.len();
+            let start = fast_random(n);
+            let iter = stealers.iter().chain(stealers.iter()).skip(start).take(n);
+
+            // Remove this worker's stealer handle.
+            let iter = iter.filter(|(k, _)| *k != self.key);
+
+            // Try stealing from each worker in the list. Collecting stops as soon as we get a
+            // `Steal::Success`. Otherwise, if any steal attempt resulted in a `Steal::Retry`,
+            // that's the collected result and we'll retry from the beginning.
+            iter.map(|(_, s)| s.steal_batch_and_pop(&self.queue))
                 .collect()
         }) {
-            self.slot.set(Some(r));
-            // A task may have been pushed into the local queue - we need to interrupt.
-            // self.event.set();
+            // Push the stolen task.
+            self.push(r);
         }
     }
 }
 
+/// Returns a random number in the interval `0..n`.
 fn fast_random(n: usize) -> usize {
     thread_local! {
         static RNG: Cell<Wrapping<u32>> = Cell::new(Wrapping(1));
     }
 
     RNG.with(|rng| {
-        // This is the 32-bit variant of Xorshift.
-        // https://en.wikipedia.org/wiki/Xorshift
+        // This is the 32-bit variant of Xorshift: https://en.wikipedia.org/wiki/Xorshift
         let mut x = rng.get();
         x ^= x << 13;
         x ^= x >> 17;
         x ^= x << 5;
         rng.set(x);
 
-        // This is a fast alternative to `x % n`.
+        // This is a fast alternative to `x % n`:
         // https://lemire.me/blog/2016/06/27/a-fast-alternative-to-the-modulo-reduction/
         ((x.0 as u64).wrapping_mul(n as u64) >> 32) as usize
     })
@@ -842,16 +892,23 @@ fn fast_random(n: usize) -> usize {
 
 impl Drop for Worker {
     fn drop(&mut self) {
-        self.executor.stealers.write().unwrap().remove(self.id);
-        while let Some(r) = self.worker.pop() {
+        // Unregister the worker.
+        self.executor.stealers.write().unwrap().remove(self.key);
+
+        // Flush the slot.
+        self.push(None);
+
+        // Move all tasks in this worker's queue into the injector queue.
+        while let Some(r) = self.queue.pop() {
             self.executor.injector.push(r);
         }
     }
 }
 
-fn ws_retry<T>(mut f: impl FnMut() -> deque::Steal<T>) -> Option<T> {
+/// Retries a steal operation for as long as it returns `Steal::Retry`.
+fn retry_steal<T>(mut steal_op: impl FnMut() -> deque::Steal<T>) -> Option<T> {
     loop {
-        match f() {
+        match steal_op() {
             deque::Steal::Success(t) => return Some(t),
             deque::Steal::Empty => return None,
             deque::Steal::Retry => {}
@@ -861,47 +918,69 @@ fn ws_retry<T>(mut f: impl FnMut() -> deque::Steal<T>) -> Option<T> {
 
 // ---------- Reactor ----------
 
-/// A source of I/O events.
+/// A registered source of I/O events.
 #[derive(Debug)]
 struct Source {
+    /// Raw file descriptor on Unix platforms.
     #[cfg(unix)]
     raw: RawFd,
 
+    /// Raw socket handle on Windows.
     #[cfg(windows)]
     raw: RawSocket,
 
-    index: usize,
+    /// The ID of this source obtain during registration.
+    key: usize,
 
+    /// A list of wakers representing tasks interested in events on this source.
     wakers: piper::Lock<Vec<Waker>>,
+
+    /// Incremented on every I/O notification - this is only used for synchronization.
     tick: AtomicU64,
 }
 
 /// The reactor driving I/O events and timers.
 ///
-/// Every async I/O handle and timer is registered here. Invocations of `run()` poll the reactor to
-/// check for new events every now and then. If there are no tasks to run, then we block until the
-/// earliest timer fires or a task is scheduled.
+/// Every async I/O handle ("source") and every timer is registered here. Invocations of `run()`
+/// poll the reactor to check for new events every now and then.
 ///
-/// On Linux-based systems, we use epoll to register I/O handles. On BSD-based systems, we use
-/// kqueue. On Windows, we use WSAPoll.
+/// There is only one global instance of this type, accessible by `Reactor::get()`.
 struct Reactor {
+    /// Raw bindings to epoll/kqueue/WSAPoll.
     sys: sys::Reactor,
+
+    /// Registered sources.
     sources: piper::Lock<Slab<Arc<Source>>>,
+
+    /// Temporary storage for I/O events when polling the reactor.
     events: piper::Mutex<sys::Events>,
+
+    /// An ordered map of registered timers.
+    ///
+    /// Timers are in the order in which they fire. The `u64` in this type is a unique timer ID
+    /// used to distinguish timers that fire at the same time. The `Waker` represents the task
+    /// awaiting the timer.
     timers: piper::Lock<BTreeMap<(Instant, u64), Waker>>,
+
+    /// An I/O event that is triggered when a new earliest timer is registered.
+    ///
+    /// This is used to wake up the thread waiting on the reactor, which would otherwise wait until
+    /// the previously earliest timer.
+    ///
+    /// The reason why this field is lazily created is because `IoEvent`s can be created only after
+    /// the reactor is fully initialized.
     event: Lazy<IoEvent>,
 }
 
 impl Reactor {
+    /// Returns a reference to the reactor.
     fn get() -> &'static Reactor {
-        static REACTOR: Lazy<Reactor> = Lazy::new(|| {
-            Reactor {
-                sys: sys::Reactor::create().unwrap(), // TODO: result
-                sources: piper::Lock::new(Slab::new()),
-                events: piper::Mutex::new(sys::Events::new()),
-                timers: piper::Lock::new(BTreeMap::new()),
-                event: Lazy::new(|| IoEvent::create().expect("cannot create an `IoEvent`")),
-            }
+        static REACTOR: Lazy<Reactor> = Lazy::new(|| Reactor {
+            sys: sys::Reactor::create().expect("cannot initialize I/O event notification"),
+            sources: piper::Lock::new(Slab::new()),
+            events: piper::Mutex::new(sys::Events::new()),
+            timers: piper::Lock::new(BTreeMap::new()),
+            event: Lazy::new(|| IoEvent::create().expect("cannot create an `IoEvent`")),
         });
         &REACTOR
     }
@@ -914,26 +993,30 @@ impl Reactor {
     ) -> io::Result<Arc<Source>> {
         let mut sources = self.sources.lock();
         let vacant = sources.vacant_entry();
+
+        // Create a source and register it.
         let source = Arc::new(Source {
             raw,
-            index: vacant.key(),
+            key: vacant.key(),
             wakers: piper::Lock::new(Vec::new()),
             tick: AtomicU64::new(0),
         });
-        self.sys.register(raw, source.index)?;
+        self.sys.register(raw, source.key)?;
+
         Ok(vacant.insert(source).clone())
     }
 
     /// Deregisters an I/O source from the reactor.
     fn deregister(&self, source: &Source) -> io::Result<()> {
         let mut sources = self.sources.lock();
-        sources.remove(source.index);
+        sources.remove(source.key);
         self.sys.deregister(source.raw)
     }
 
     /// Processes ready events without blocking.
     ///
-    /// This call provides no guarantees and should only be used for the purpose of optimization.
+    /// This doesn't have strong guarantees. If there are ready events, they may or may not be
+    /// processed depending on whether the reactor is locked.
     fn poll(&self) -> io::Result<()> {
         if let Some(events) = self.events.try_lock() {
             let reactor = self;
@@ -944,7 +1027,7 @@ impl Reactor {
         Ok(())
     }
 
-    /// Locks the reactor for polling.
+    /// Locks the reactor.
     async fn lock(&self) -> ReactorLock<'_> {
         let reactor = self;
         let events = self.events.lock().await;
@@ -965,6 +1048,7 @@ impl ReactorLock<'_> {
     }
 
     fn react(&mut self, block: bool) -> io::Result<()> {
+        // TODO: document this function.......................
         self.reactor.event.clear();
 
         let next_timer = {
@@ -1003,7 +1087,7 @@ impl ReactorLock<'_> {
         let sources = self.reactor.sources.lock();
         for source in self.events.iter().filter_map(|i| sources.get(i)) {
             // I/O events may deregister sources, so we need to re-register.
-            self.reactor.sys.reregister(source.raw, source.index)?;
+            self.reactor.sys.reregister(source.raw, source.key)?;
 
             let mut wakers = source.wakers.lock();
             let tick = source.tick.load(Ordering::Acquire);
@@ -1021,24 +1105,38 @@ impl ReactorLock<'_> {
 // ---------- Timer ----------
 
 /// Fires at the chosen point in time.
+///
+/// TODO
 #[derive(Debug)]
 pub struct Timer {
+    /// A unique ID for this timer.
+    ///
+    /// When this field is set to `None`, this timer is not registered in the reactor.
     id: Option<u64>,
+
+    /// When this timer fires.
     when: Instant,
 }
 
 impl Timer {
     /// Fires after the specified duration of time.
+    ///
+    /// TODO
     pub fn after(dur: Duration) -> Timer {
         Timer::at(Instant::now() + dur)
     }
 
     /// Fires at the specified instant in time.
+    ///
+    /// TODO
     pub fn at(when: Instant) -> Timer {
         let id = None;
         Timer { id, when }
     }
 
+    /// Registers this timer in the reactor, if not already registered.
+    ///
+    /// A waker associated with the current context will be stored and woken when the timer fires.
     fn register(&mut self, cx: &mut Context<'_>) {
         if self.id.is_none() {
             let mut timers = Reactor::get().timers.lock();
@@ -1060,6 +1158,7 @@ impl Timer {
         }
     }
 
+    /// Deregisters this timer from the reactor, if it was registered.
     fn deregister(&mut self) {
         if let Some(id) = self.id {
             Reactor::get().timers.lock().remove(&(self.when, id));
@@ -1080,11 +1179,11 @@ impl Future for Timer {
         // Check if this timer has already fired.
         if Instant::now() >= self.when {
             self.deregister();
-            return Poll::Ready(self.when);
+            Poll::Ready(self.when)
+        } else {
+            self.register(cx);
+            Poll::Pending
         }
-
-        self.register(cx);
-        Poll::Pending
     }
 }
 
@@ -1092,16 +1191,22 @@ impl Future for Timer {
 
 /// Async I/O.
 ///
-/// TODO: does not work with files!
+/// TODO
 #[derive(Debug)]
 pub struct Async<T> {
+    /// A source registered in the reactor.
     source: Arc<Source>,
+
+    /// The inner I/O handle.
     io: Option<Box<T>>,
 }
 
 #[cfg(unix)]
 impl<T: AsRawFd> Async<T> {
     /// Converts a non-blocking I/O handle into an async I/O handle.
+    ///
+    /// TODO: **warning** for unix users: the I/O handle must be compatible with epoll/kqueue!
+    /// Most notably, `File`, `Stdin`, `Stdout`, `Stderr` will **not** work.
     pub fn new(io: T) -> io::Result<Async<T>> {
         use nix::fcntl::{fcntl, FcntlArg, OFlag};
 
@@ -1159,16 +1264,22 @@ impl<T: AsRawSocket> AsRawSocket for Async<T> {
 
 impl<T> Async<T> {
     /// Gets a reference to the inner I/O handle.
+    ///
+    /// TODO
     pub fn get_ref(&self) -> &T {
         self.io.as_ref().unwrap()
     }
 
     /// Gets a mutable reference to the inner I/O handle.
+    ///
+    /// TODO
     pub fn get_mut(&mut self) -> &mut T {
         self.io.as_mut().unwrap()
     }
 
     /// Extracts the inner non-blocking I/O handle.
+    ///
+    /// TODO
     pub fn into_inner(mut self) -> io::Result<T> {
         let io = *self.io.take().unwrap();
         Reactor::get().deregister(&self.source)?;
@@ -1191,15 +1302,18 @@ impl<T> Async<T> {
         future::poll_fn(|cx| Self::poll_io(cx, || op(&mut io), source)).await
     }
 
+    /// Attempts a non-blocking I/O operation and registers a waker if it errors with `WouldBlock`.
     fn poll_io<R>(
         cx: &mut Context<'_>,
         mut op: impl FnMut() -> io::Result<R>,
         source: &Source,
     ) -> Poll<io::Result<R>> {
+        // Throttle if the current task has done too many I/O operations without yielding.
         futures::ready!(poll_throttle(cx));
 
         loop {
             let tick = source.tick.load(Ordering::Acquire);
+
             // Attempt the non-blocking operation.
             match op() {
                 Err(err) if err.kind() == io::ErrorKind::WouldBlock => {}
@@ -1649,7 +1763,9 @@ impl BlockingExecutor {
         &EXECUTOR
     }
 
-    /// Spawns a task onto this executor.
+    /// Spawns a future onto this executor.
+    ///
+    /// Returns a `Task` handle for the spawned task.
     fn spawn<T: Send + 'static>(
         &'static self,
         future: impl Future<Output = T> + Send + 'static,
@@ -1733,6 +1849,7 @@ pub fn iter<T: Send + 'static>(
         type Item = T;
 
         fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<T>> {
+            // Throttle if the current task has done too many I/O operations without yielding.
             futures::ready!(poll_throttle(cx));
 
             match &mut *self {
@@ -1777,6 +1894,7 @@ pub fn reader(reader: impl Read + Send + 'static) -> impl AsyncRead + Send + Unp
             cx: &mut Context<'_>,
             buf: &mut [u8],
         ) -> Poll<io::Result<usize>> {
+            // Throttle if the current task has done too many I/O operations without yielding.
             futures::ready!(poll_throttle(cx));
 
             match &mut *self {
@@ -1841,6 +1959,7 @@ pub fn writer(writer: impl Write + Send + 'static) -> impl AsyncWrite + Send + U
             cx: &mut Context<'_>,
             buf: &[u8],
         ) -> Poll<io::Result<usize>> {
+            // Throttle if the current task has done too many I/O operations without yielding.
             futures::ready!(poll_throttle(cx));
 
             loop {
@@ -1859,6 +1978,7 @@ pub fn writer(writer: impl Write + Send + 'static) -> impl AsyncWrite + Send + U
         }
 
         fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+            // Throttle if the current task has done too many I/O operations without yielding.
             futures::ready!(poll_throttle(cx));
 
             loop {
@@ -1909,11 +2029,11 @@ mod sys {
             let epoll_fd = epoll_create1(EpollCreateFlags::EPOLL_CLOEXEC).map_err(io_err)?;
             Ok(Reactor(epoll_fd))
         }
-        pub fn register(&self, fd: RawFd, index: usize) -> io::Result<()> {
-            let ev = &mut EpollEvent::new(flags(), index as u64);
+        pub fn register(&self, fd: RawFd, key: usize) -> io::Result<()> {
+            let ev = &mut EpollEvent::new(flags(), key as u64);
             epoll_ctl(self.0, EpollOp::EpollCtlAdd, fd, Some(ev)).map_err(io_err)
         }
-        pub fn reregister(&self, _raw: RawFd, _index: usize) -> io::Result<()> {
+        pub fn reregister(&self, _raw: RawFd, _key: usize) -> io::Result<()> {
             Ok(())
         }
         pub fn deregister(&self, fd: RawFd) -> io::Result<()> {
@@ -1977,9 +2097,9 @@ mod sys {
             fcntl(fd, FcntlArg::F_SETFD(FdFlag::FD_CLOEXEC)).map_err(io_err)?;
             Ok(Reactor(fd))
         }
-        pub fn register(&self, fd: RawFd, index: usize) -> io::Result<()> {
+        pub fn register(&self, fd: RawFd, key: usize) -> io::Result<()> {
             let flags = EventFlag::EV_CLEAR | EventFlag::EV_RECEIPT | EventFlag::EV_ADD;
-            let udata = index as _;
+            let udata = key as _;
             let changelist = [
                 KEvent::new(fd as _, EventFilter::EVFILT_WRITE, flags, FFLAGS, 0, udata),
                 KEvent::new(fd as _, EventFilter::EVFILT_READ, flags, FFLAGS, 0, udata),
@@ -1995,7 +2115,7 @@ mod sys {
             }
             Ok(())
         }
-        pub fn reregister(&self, _fd: RawFd, _index: usize) -> io::Result<()> {
+        pub fn reregister(&self, _fd: RawFd, _key: usize) -> io::Result<()> {
             Ok(())
         }
         pub fn deregister(&self, fd: RawFd) -> io::Result<()> {
@@ -2059,12 +2179,12 @@ mod sys {
         pub fn create() -> io::Result<Reactor> {
             Ok(Reactor(Epoll::new()?))
         }
-        pub fn register(&self, sock: RawSocket, index: usize) -> io::Result<()> {
-            self.0.register(&As(sock), flags(), index as u64)
+        pub fn register(&self, sock: RawSocket, key: usize) -> io::Result<()> {
+            self.0.register(&As(sock), flags(), key as u64)
         }
-        pub fn reregister(&self, sock: RawSocket, index: usize) -> io::Result<()> {
+        pub fn reregister(&self, sock: RawSocket, key: usize) -> io::Result<()> {
             // Ignore errors because a concurrent poll can reregister the handle at any point.
-            let _ = self.0.reregister(&As(sock), flags(), index as u64);
+            let _ = self.0.reregister(&As(sock), flags(), key as u64);
             Ok(())
         }
         pub fn deregister(&self, sock: RawSocket) -> io::Result<()> {
