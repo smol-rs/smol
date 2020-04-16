@@ -1,3 +1,7 @@
+# smol
+
+A small and fast async runtime.
+
 ## Goals
 
 * Small - Fits into a single source file.
