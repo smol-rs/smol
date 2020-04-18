@@ -5,12 +5,11 @@ fn main() -> std::io::Result<()> {
 
     use futures::io;
     use futures::prelude::*;
-    use smol::{blocking, Async, Task};
+    use smol::{Async, Task};
     use uds_windows::{UnixListener, UnixStream};
 
     async fn client(addr: PathBuf) -> io::Result<()> {
-        // Connect accesses the filesystem, so it's a blocking operation.
-        let stream = Async::new(blocking!(UnixStream::connect(addr))?)?;
+        let stream = Async::new(UnixStream::connect(addr)?)?;
         println!("Connected to {:?}", stream.get_ref().peer_addr()?);
 
         let mut stdout = smol::writer(std::io::stdout());
