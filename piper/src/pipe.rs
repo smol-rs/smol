@@ -46,6 +46,7 @@ pub fn pipe(cap: usize) -> (Reader, Writer) {
 // NOTE: Reader and Writer are !Clone + !Sync
 
 /// The reading side of a pipe.
+#[derive(Debug)]
 pub struct Reader {
     inner: Arc<Inner>,
     head: Cell<usize>,
@@ -53,6 +54,7 @@ pub struct Reader {
 }
 
 /// The writing side of a pipe.
+#[derive(Debug)]
 pub struct Writer {
     inner: Arc<Inner>,
     head: Cell<usize>,
@@ -62,6 +64,7 @@ pub struct Writer {
 unsafe impl Send for Reader {}
 unsafe impl Send for Writer {}
 
+#[derive(Debug)]
 struct Inner {
     head: AtomicUsize,
     tail: AtomicUsize,
