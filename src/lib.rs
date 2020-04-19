@@ -14,7 +14,7 @@
 //! # Reactor
 //!
 //! To wait for the next I/O event, the reactor calls [epoll] on Linux/Android, [kqueue] on
-//! macOS/iOS/BSD, and [WSAPoll] on Windows.
+//! macOS/iOS/BSD, and [wepoll] on Windows.
 //!
 //! The [`Async`] type registers I/O handles in the reactor and is able to convert their blocking
 //! operations into async operations.
@@ -65,58 +65,59 @@
 //! [sleep][timer-sleep] or set a [timeout][timer-timeout], or catch the [Ctrl-C][ctrl-c] signal
 //! for graceful shutdown.
 //!
-//! They also include a [web crawler][web-crawler], a simple TCP
-//! [client][tcp-client]/[server][tcp-server], a TCP chat
-//! [client][chat-client]/[server][chat-server], a simple
-//! TLS [client][tls-client]/[server][tls-server], a simple
-//! HTTP+TLS [client][simple-client]/[server][simple-server], a [hyper]
-//! [client][hyper-client]/[server][hyper-server], an [async-h1]
-//! [client][async-h1-client]/[server][async-h1-server], and a WebSocket+TLS
-//! [client][websocket-client]/[server][websocket-server].
+//! They also include a [web crawler][web-crawler],
+//! a simple TCP [client][tcp-client]/[server][tcp-server],
+//! a TCP chat [client][chat-client]/[server][chat-server],
+//! a simple TLS [client][tls-client]/[server][tls-server],
+//! a simple HTTP+TLS [client][simple-client]/[server][simple-server],
+//! a [hyper] [client][hyper-client]/[server][hyper-server],
+//! an [async-h1] [client][async-h1-client]/[server][async-h1-server],
+//! and a WebSocket+TLS [client][websocket-client]/[server][websocket-server].
 //!
-//! Many non-async libraries can be plugged into the runtime: see how to use [inotify],
-//! [timerfd], [signal-hook], and [uds_windows].
+//! Many non-async libraries can be plugged into the runtime: see how to use [inotify], [timerfd],
+//! [signal-hook], and [uds_windows].
 //!
-//! Finally, you can mix this runtime with [async-std](TODO) and [tokio](TODO), or use runtime-specific
-//! libraries like [reqwest](TODO).
+//! Finally, you can mix this runtime with [async-std][compat-async-std] and [tokio][compat-tokio]
+//! to use runtime-dependent libraries like [surf][compat-surf] and [reqwest][compat-reqwest].
 //!
 //! [epoll]: https://en.wikipedia.org/wiki/Epoll
 //! [kqueue]: https://en.wikipedia.org/wiki/Kqueue
-//! [WSAPoll]: https://docs.microsoft.com/en-us/windows/win32/api/winsock2/nf-winsock2-wsapoll
+//! [wepoll]: https://github.com/piscisaureus/wepoll
 //!
 //! [examples]: https://github.com/stjepang/smol/tree/master/examples
 //! [async-h1]: https://docs.rs/async-h1
 //! [hyper]: https://docs.rs/hyper
-//! [www.rust-lang.org]: https://www.rust-lang.org/
-//! [cat]: https://en.wikipedia.org/wiki/Cat_(Unix)
 //!
-//! [stdin-to-stdout]: https://github.com/stjepang/smol/blob/master/examples/stdin-to-stdout.rs
-//! [ctrl-c]: https://github.com/stjepang/smol/blob/master/examples/ctrl-c.rs
-//! [read-file]: https://github.com/stjepang/smol/blob/master/examples/read-file.rs
-//! [read-directory]: https://github.com/stjepang/smol/blob/master/examples/read-directory.rs
-//! [timer-sleep]: https://github.com/stjepang/smol/blob/master/examples/timer-sleep.rs
-//! [timer-timeout]: https://github.com/stjepang/smol/blob/master/examples/timer-timeout.rs
-//! [process-run]: https://github.com/stjepang/smol/blob/master/examples/process-run.rs
-//! [process-output]: https://github.com/stjepang/smol/blob/master/examples/process-output.rs
-//! [tcp-client]: https://github.com/stjepang/smol/blob/master/examples/tcp-client.rs
-//! [tcp-server]: https://github.com/stjepang/smol/blob/master/examples/tcp-server.rs
-//! [tls-client]: https://github.com/stjepang/smol/blob/master/examples/tls-client.rs
-//! [tls-server]: https://github.com/stjepang/smol/blob/master/examples/tls-server.rs
-//! [simple-client]: https://github.com/stjepang/smol/blob/master/examples/simple-client.rs
-//! [simple-server]: https://github.com/stjepang/smol/blob/master/examples/simple-server.rs
 //! [async-h1-client]: https://github.com/stjepang/smol/blob/master/examples/async-h1-client.rs
 //! [async-h1-server]: https://github.com/stjepang/smol/blob/master/examples/async-h1-server.rs
-//! [hyper-client]: https://github.com/stjepang/smol/blob/master/examples/hyper-client.rs
-//! [hyper-server]: https://github.com/stjepang/smol/blob/master/examples/hyper-server.rs
-//! [websocket-client]: https://github.com/stjepang/smol/blob/master/examples/websocket-client.rs
-//! [websocket-server]: https://github.com/stjepang/smol/blob/master/examples/websocket-server.rs
 //! [chat-client]: https://github.com/stjepang/smol/blob/master/examples/chat-client.rs
 //! [chat-server]: https://github.com/stjepang/smol/blob/master/examples/chat-server.rs
-//! [web-crawler]: https://github.com/stjepang/smol/blob/master/examples/web-crawler.rs
+//! [compat-async-std]: https://github.com/stjepang/smol/blob/master/examples/compat-async-std.rs
+//! [compat-reqwest]: https://github.com/stjepang/smol/blob/master/examples/compat-reqwest.rs
+//! [compat-surf]: https://github.com/stjepang/smol/blob/master/examples/compat-surf.rs
+//! [compat-tokio]: https://github.com/stjepang/smol/blob/master/examples/compat-tokio.rs
+//! [ctrl-c]: https://github.com/stjepang/smol/blob/master/examples/ctrl-c.rs
+//! [hyper-client]: https://github.com/stjepang/smol/blob/master/examples/hyper-client.rs
+//! [hyper-server]: https://github.com/stjepang/smol/blob/master/examples/hyper-server.rs
 //! [inotify]: https://github.com/stjepang/smol/blob/master/examples/linux-inotify.rs
-//! [timerfd]: https://github.com/stjepang/smol/blob/master/examples/linux-timerfd.rs
+//! [process-output]: https://github.com/stjepang/smol/blob/master/examples/process-output.rs
+//! [process-run]: https://github.com/stjepang/smol/blob/master/examples/process-run.rs
+//! [read-directory]: https://github.com/stjepang/smol/blob/master/examples/read-directory.rs
+//! [read-file]: https://github.com/stjepang/smol/blob/master/examples/read-file.rs
 //! [signal-hook]: https://github.com/stjepang/smol/blob/master/examples/unix-signal.rs
+//! [simple-client]: https://github.com/stjepang/smol/blob/master/examples/simple-client.rs
+//! [simple-server]: https://github.com/stjepang/smol/blob/master/examples/simple-server.rs
+//! [tcp-client]: https://github.com/stjepang/smol/blob/master/examples/tcp-client.rs
+//! [tcp-server]: https://github.com/stjepang/smol/blob/master/examples/tcp-server.rs
+//! [timer-sleep]: https://github.com/stjepang/smol/blob/master/examples/timer-sleep.rs
+//! [timer-timeout]: https://github.com/stjepang/smol/blob/master/examples/timer-timeout.rs
+//! [timerfd]: https://github.com/stjepang/smol/blob/master/examples/linux-timerfd.rs
+//! [tls-client]: https://github.com/stjepang/smol/blob/master/examples/tls-client.rs
+//! [tls-server]: https://github.com/stjepang/smol/blob/master/examples/tls-server.rs
 //! [uds_windows]: https://github.com/stjepang/smol/blob/master/examples/windows-uds.rs
+//! [web-crawler]: https://github.com/stjepang/smol/blob/master/examples/web-crawler.rs
+//! [websocket-client]: https://github.com/stjepang/smol/blob/master/examples/websocket-client.rs
+//! [websocket-server]: https://github.com/stjepang/smol/blob/master/examples/websocket-server.rs
 
 #![warn(missing_docs, missing_debug_implementations, rust_2018_idioms)]
 
@@ -129,7 +130,7 @@
     target_os = "netbsd",    // kqueue
     target_os = "openbsd",   // kqueue
     target_os = "dragonfly", // kqueue
-    target_os = "windows",   // WSAPoll
+    target_os = "windows",   // wepoll
 )))]
 compile_error!("smol does not support this target OS");
 
@@ -165,7 +166,7 @@ use futures::future::Either;
 use futures::io::AllowStdIo;
 use futures::prelude::*;
 use once_cell::sync::Lazy;
-use scoped_tls::scoped_thread_local;
+use scoped_tls_hkt::scoped_thread_local;
 use slab::Slab;
 use socket2::{Domain, Protocol, Socket, Type};
 use std::sync::{Condvar, Mutex, MutexGuard};
@@ -174,11 +175,11 @@ use std::sync::{Condvar, Mutex, MutexGuard};
 // - the Task struct
 // - thread-local executor
 // - work-stealing executor
+// - blocking executor
 // - reactor
 // - Timer
 // - Async
 // - the IoEvent
-// - blocking executor
 // - sys module
 
 // ---------- The task system ----------
@@ -492,6 +493,15 @@ pub fn block_on<T>(future: impl Future<Output = T>) -> T {
 /// # Examples
 /// TODO a thread-pool example with num_cpus::get().max(1)
 /// TODO a stoppable thread-pool with channels
+///
+/// ```no_run
+/// use futures::future;
+/// use std::thread;
+///
+/// for _ in 0..num_cpus::get().max(1) {
+///     thread::spawn(|| smol::run(future::pending::<()>()));
+/// }
+/// ```
 pub fn run<T>(future: impl Future<Output = T>) -> T {
     // If this thread is already inside an executor, panic.
     if WORKER.is_set() {
@@ -520,9 +530,9 @@ pub fn run<T>(future: impl Future<Output = T>) -> T {
         // 4. `Reactor::get()` - the reactor.
         //
         // When all four components are out of work, we block the current thread on
-        // epoll/kevent/WSAPoll. If new work comes in that isn't naturally triggered by an I/O
-        // event registered with `Async` handles, we use `IoEvent`s to simulate an I/O event that
-        // will unblock the thread:
+        // epoll/kevent/wepoll. If new work comes in that isn't naturally triggered by an I/O event
+        // registered with `Async` handles, we use `IoEvent`s to simulate an I/O event that will
+        // unblock the thread:
         //
         // - When the main future is woken, `local.event` is triggered.
         // - When thread-local executor gets new work, `local.event` is triggered.
@@ -530,7 +540,7 @@ pub fn run<T>(future: impl Future<Output = T>) -> T {
         // - When a new earliest timer is registered, `Reactor::get().event` is triggered.
         //
         // This way we make sure that if any changes happen that might give us new work will
-        // unblock epoll/kevent/WSAPoll and let us continue the loop.
+        // unblock epoll/kevent/wepoll and let us continue the loop.
         loop {
             // 1. Poll the main future.
             if let Poll::Ready(val) = use_throttle(|| future.as_mut().poll(cx)) {
@@ -581,18 +591,17 @@ pub fn run<T>(future: impl Future<Output = T>) -> T {
     })
 }
 
-/// TODO
-#[cfg(not(feature = "tokio"))]
+/// Enters the tokio context if the `tokio` feature is enabled.
 fn enter<T>(f: impl FnOnce() -> T) -> T {
-    f()
-}
+    #[cfg(not(feature = "tokio"))]
+    return f();
 
-/// TODO
-#[cfg(feature = "tokio")]
-fn enter<T>(f: impl FnOnce() -> T) -> T {
-    use tokio::runtime::Runtime;
-    static RT: Lazy<Runtime> = Lazy::new(|| Runtime::new().expect("cannot initialize tokio"));
-    RT.enter(f)
+    #[cfg(feature = "tokio")]
+    {
+        use tokio::runtime::Runtime;
+        static RT: Lazy<Runtime> = Lazy::new(|| Runtime::new().expect("cannot initialize tokio"));
+        RT.enter(f)
+    }
 }
 
 // Number of times the current task is allowed to poll I/O operations.
@@ -664,7 +673,7 @@ impl ThreadLocalExecutor {
     /// Returns a `Task` handle for the spawned task.
     fn spawn<T: 'static>(&self, future: impl Future<Output = T> + 'static) -> Task<T> {
         let id = thread_id();
-        let injector = self.injector.clone();
+        let injector = Arc::downgrade(&self.injector);
         let event = self.event.clone();
 
         // The function that schedules a runnable task.
@@ -672,11 +681,11 @@ impl ThreadLocalExecutor {
             if thread_id() == id {
                 // If scheduling from the original thread, push into the main queue.
                 THREAD_LOCAL_EXECUTOR.with(|ex| ex.queue.borrow_mut().push_back(runnable));
-            } else {
+            } else if let Some(injector) = injector.upgrade() {
                 // If scheduling from a different thread, push into the injector queue.
                 injector.push(runnable);
                 // Trigger an I/O event to let the original thread know that a task has been
-                // scheduled. If that thread is inside epoll/kqueue/WSAPoll, an I/O event will wake
+                // scheduled. If that thread is inside epoll/kqueue/wepoll, an I/O event will wake
                 // it up.
                 event.set();
             }
@@ -757,7 +766,7 @@ fn thread_id() -> ThreadId {
 // registered in the work-stealing executor.
 //
 // This thread-local is only set while inside `run()`.
-scoped_thread_local!(static WORKER: Worker);
+scoped_thread_local!(static WORKER: for<'a> &'a Worker<'a>);
 
 /// The global work-stealing executor.
 ///
@@ -768,7 +777,7 @@ scoped_thread_local!(static WORKER: Worker);
 /// Since tasks can be stolen by any worker and thus move from thread to thread, their futures must
 /// implement `Send`.
 ///
-/// There is only one global instance of this type, accessible by `Reactor::get()`.
+/// There is only one global instance of this type, accessible by `WorkStealingExecutor::get()`.
 ///
 /// Work stealing is a strategy that reduces contention in a multi-threaded environment. If all
 /// invocations of `run()` used the same global task queue all the time, they would constantly
@@ -832,7 +841,7 @@ impl WorkStealingExecutor {
     /// Registers a new worker.
     ///
     /// The worker will automatically deregister itself when dropped.
-    fn worker(&'static self) -> Worker {
+    fn worker(&self) -> Worker<'_> {
         let mut stealers = self.stealers.write().unwrap();
         let vacant = stealers.vacant_entry();
 
@@ -852,7 +861,7 @@ impl WorkStealingExecutor {
 /// A worker that participates in the work-stealing executor.
 ///
 /// Each invocation of `run()` creates its own worker.
-struct Worker {
+struct Worker<'a> {
     /// The ID of this worker obtained during registration.
     key: usize,
 
@@ -865,13 +874,10 @@ struct Worker {
     queue: deque::Worker<Runnable>,
 
     /// The parent work-stealing executor.
-    ///
-    /// This is the same thing as `WorkStealingExecutor::get()`, but we keep a reference here for
-    /// convenience.
-    executor: &'static WorkStealingExecutor,
+    executor: &'a WorkStealingExecutor,
 }
 
-impl Worker {
+impl Worker<'_> {
     /// Executes a batch of tasks and returns `true` if there are more tasks to run.
     fn execute(&self) -> bool {
         // Execute 4 series of 50 tasks.
@@ -999,7 +1005,7 @@ fn fast_random(n: usize) -> usize {
     })
 }
 
-impl Drop for Worker {
+impl Drop for Worker<'_> {
     fn drop(&mut self) {
         // Unregister the worker.
         self.executor.stealers.write().unwrap().remove(self.key);
@@ -1023,6 +1029,397 @@ fn retry_steal<T>(mut steal_op: impl FnMut() -> deque::Steal<T>) -> Option<T> {
             deque::Steal::Retry => {}
         }
     }
+}
+
+// ---------- Blocking executor ----------
+
+/// TODO: docs
+
+/// A thread pool for blocking tasks.
+struct BlockingExecutor {
+    state: Mutex<State>,
+    cvar: Condvar,
+}
+
+struct State {
+    /// Number of sleeping threads in the pool.
+    idle_count: usize,
+    /// Total number of thread in the pool.
+    thread_count: usize,
+    /// Runnable blocking tasks.
+    queue: VecDeque<Runnable>,
+}
+
+impl BlockingExecutor {
+    /// Returns a reference to the blocking executor.
+    fn get() -> &'static BlockingExecutor {
+        static EXECUTOR: Lazy<BlockingExecutor> = Lazy::new(|| BlockingExecutor {
+            state: Mutex::new(State {
+                idle_count: 0,
+                thread_count: 0,
+                queue: VecDeque::new(),
+            }),
+            cvar: Condvar::new(),
+        });
+        &EXECUTOR
+    }
+
+    /// Spawns a future onto this executor.
+    ///
+    /// Returns a `Task` handle for the spawned task.
+    fn spawn<T: Send + 'static>(
+        &'static self,
+        future: impl Future<Output = T> + Send + 'static,
+    ) -> Task<T> {
+        // Create a task, schedule it, and return its `Task` handle.
+        let (runnable, handle) = async_task::spawn(future, move |r| self.schedule(r), ());
+        runnable.schedule();
+        Task(Some(handle))
+    }
+
+    /// Runs the main loop on the current thread.
+    fn main_loop(&'static self) {
+        let mut state = self.state.lock().unwrap();
+        loop {
+            state.idle_count -= 1;
+
+            // Run tasks in the queue.
+            while let Some(runnable) = state.queue.pop_front() {
+                self.grow_pool(state);
+                let _ = panic::catch_unwind(|| runnable.run());
+                state = self.state.lock().unwrap();
+            }
+
+            // Put the thread to sleep until another task is scheduled.
+            state.idle_count += 1;
+            let timeout = Duration::from_millis(500);
+            let (s, res) = self.cvar.wait_timeout(state, timeout).unwrap();
+            state = s;
+
+            if res.timed_out() && state.queue.is_empty() {
+                // If there are no tasks after a while, stop this thread.
+                state.idle_count -= 1;
+                state.thread_count -= 1;
+                break;
+            }
+        }
+    }
+
+    /// Schedules a runnable task for execution.
+    fn schedule(&'static self, runnable: Runnable) {
+        let mut state = self.state.lock().unwrap();
+        state.queue.push_back(runnable);
+        // Notify a sleeping thread and spawn more threads if needed.
+        self.cvar.notify_one();
+        self.grow_pool(state);
+    }
+
+    /// Spawns more blocking threads if the pool is overloaded with work.
+    fn grow_pool(&'static self, mut state: MutexGuard<'static, State>) {
+        // If runnable tasks greatly outnumber idle threads and there aren't too many threads
+        // already, then be aggressive: wake all idle threads and spawn one more thread.
+        while state.queue.len() > state.idle_count * 5 && state.thread_count < 500 {
+            state.idle_count += 1;
+            state.thread_count += 1;
+            self.cvar.notify_all();
+
+            thread::spawn(move || {
+                // If enabled, set up tokio before the main loop begins.
+                enter(|| self.main_loop())
+            });
+        }
+    }
+}
+
+/// Spawns blocking code onto a thread.
+///
+/// TODO
+///
+/// # Examples
+///
+/// ```no_run
+/// use smol::blocking;
+/// use std::fs;
+///
+/// # smol::run(async {
+/// let contents = blocking!(fs::read_to_string("file.txt"))?;
+/// # std::io::Result::Ok(()) });
+/// ```
+#[macro_export]
+macro_rules! blocking {
+    ($($expr:tt)*) => {
+        $crate::Task::blocking(async move { $($expr)* }).await
+    };
+}
+
+/// Creates a stream that iterates on a thread.
+///
+/// TODO
+///
+/// # Examples
+///
+/// List files in the current directory:
+///
+/// ```no_run
+/// use smol::blocking;
+/// use std::fs;
+///
+/// # smol::run(async {
+/// let mut dir = smol::iter(blocking!(fs::read_dir("."))?);
+///
+/// while let Some(res) = dir.next().await {
+///     println!("{}", res?.file_name().to_string_lossy());
+/// }
+/// # std::io::Result::Ok(()) });
+/// ```
+pub fn iter<T: Send + 'static>(
+    iter: impl Iterator<Item = T> + Send + 'static,
+) -> impl Stream<Item = T> + Send + Unpin + 'static {
+    /// Current state of the iterator.
+    enum State<T, I> {
+        /// The iterator is idle.
+        Idle(Option<I>),
+        /// The iterator is running in a blocking task and sending items into a channel.
+        Busy(piper::Receiver<T>, Task<I>),
+    }
+
+    impl<T, I> Unpin for State<T, I> {}
+
+    impl<T: Send + 'static, I: Iterator<Item = T> + Send + 'static> Stream for State<T, I> {
+        type Item = T;
+
+        fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<T>> {
+            // Throttle if the current task has done too many I/O operations without yielding.
+            futures::ready!(poll_throttle(cx));
+
+            match &mut *self {
+                State::Idle(iter) => {
+                    // If idle, take the iterator out to run it on a blocking task.
+                    let mut iter = iter.take().unwrap();
+
+                    // This channel capacity seems to work well in practice. If it's too low, there
+                    // will be too much synchronization between tasks. If too high, memory
+                    // consumption increases.
+                    let (sender, receiver) = piper::chan(8 * 1024); // 8192 items
+
+                    // Spawn a blocking task that runs the iterator and returns it when done.
+                    let task = Task::blocking(async move {
+                        for item in &mut iter {
+                            sender.send(item).await;
+                        }
+                        iter
+                    });
+
+                    // Move into the busy state and poll again.
+                    *self = State::Busy(receiver, task);
+                    self.poll_next(cx)
+                }
+                State::Busy(receiver, task) => {
+                    // Poll the channel.
+                    let opt = futures::ready!(Pin::new(receiver).poll_next(cx));
+
+                    // If the channel is closed, retrieve the iterator back from the blocking task.
+                    // This is not really a required step, but it's cleaner to drop the iterator on
+                    // the same thread that created it.
+                    if opt.is_none() {
+                        // Poll the task to retrieve the iterator.
+                        let iter = futures::ready!(Pin::new(task).poll(cx));
+                        *self = State::Idle(Some(iter));
+                    }
+
+                    Poll::Ready(opt)
+                }
+            }
+        }
+    }
+
+    State::Idle(Some(iter))
+}
+
+/// Creates an async reader that runs on a thread.
+pub fn reader(reader: impl Read + Send + 'static) -> impl AsyncRead + Send + Unpin + 'static {
+    /// Current state of the reader.
+    enum State<T> {
+        /// The reader is idle.
+        Idle(Option<T>),
+        /// The reader is running in a blocking task and sending bytes into a pipe.
+        Busy(piper::Reader, Task<(io::Result<()>, T)>),
+    }
+
+    impl<T: AsyncRead + Send + Unpin + 'static> AsyncRead for State<T> {
+        fn poll_read(
+            mut self: Pin<&mut Self>,
+            cx: &mut Context<'_>,
+            buf: &mut [u8],
+        ) -> Poll<io::Result<usize>> {
+            // Throttle if the current task has done too many I/O operations without yielding.
+            futures::ready!(poll_throttle(cx));
+
+            match &mut *self {
+                State::Idle(io) => {
+                    // If idle, take the I/O handle out to read it on a blocking task.
+                    let mut io = io.take().unwrap();
+
+                    // This pipe capacity seems to work well in practice. If it's too low, there
+                    // will be too much synchronization between tasks. If too high, memory
+                    // consumption increases.
+                    let (reader, mut writer) = piper::pipe(8 * 1024 * 1024); // 8 MB
+
+                    // Spawn a blocking task that reads and returns the I/O handle when done.
+                    let task = Task::blocking(async move {
+                        // Copy bytes from the I/O handle into the pipe until the pipe is closed or
+                        // an error occurs.
+                        let res = futures::io::copy(&mut io, &mut writer).await;
+                        (res.map(drop), io)
+                    });
+
+                    // Move into the busy state and poll again.
+                    *self = State::Busy(reader, task);
+                    self.poll_read(cx, buf)
+                }
+                State::Busy(reader, task) => {
+                    // Poll the pipe.
+                    let n = futures::ready!(Pin::new(reader).poll_read(cx, buf))?;
+
+                    // If the pipe is closed, retrieve the I/O handle back from the blocking task.
+                    // This is not really a required step, but it's cleaner to drop the handle on
+                    // the same thread that created it.
+                    if n == 0 {
+                        // Poll the task to retrieve the I/O handle.
+                        let (res, io) = futures::ready!(Pin::new(task).poll(cx));
+                        // Make sure to move into the idle state before reporting errors.
+                        *self = State::Idle(Some(io));
+                        res?;
+                    }
+
+                    Poll::Ready(Ok(n))
+                }
+            }
+        }
+    }
+
+    // It's okay to treat the `Read` type as `AsyncRead` because it's only read from inside a
+    // blocking task.
+    let io = Box::pin(AllowStdIo::new(reader));
+    State::Idle(Some(io))
+}
+
+/// Creates an async writer that runs on a thread.
+///
+/// Make sure to flush at the end.
+///
+/// TODO
+pub fn writer(writer: impl Write + Send + 'static) -> impl AsyncWrite + Send + Unpin + 'static {
+    /// Current state of the writer.
+    enum State<T> {
+        /// The writer is idle.
+        Idle(Option<T>),
+        /// The writer is running in a blocking task and receiving bytes from a pipe.
+        Busy(Option<piper::Writer>, Task<(io::Result<()>, T)>),
+    }
+
+    impl<T: AsyncWrite + Send + Unpin + 'static> State<T> {
+        /// Starts a blocking task.
+        fn start(&mut self) {
+            if let State::Idle(io) = self {
+                // If idle, take the I/O handle out to write on a blocking task.
+                let mut io = io.take().unwrap();
+
+                // This pipe capacity seems to work well in practice. If it's too low, there will
+                // be too much synchronization between tasks. If too high, memory consumption
+                // increases.
+                let (reader, writer) = piper::pipe(8 * 1024 * 1024); // 8 MB
+
+                // Spawn a blocking task that writes and returns the I/O handle when done.
+                let task = Task::blocking(async move {
+                    // Copy bytes from the pipe into the I/O handle until the pipe is closed or an
+                    // error occurs. Flush the I/O handle at the end.
+                    match futures::io::copy(reader, &mut io).await {
+                        Ok(_) => (io.flush().await, io),
+                        Err(err) => (Err(err), io),
+                    }
+                });
+                // Move into the busy state.
+                *self = State::Busy(Some(writer), task);
+            }
+        }
+    }
+
+    impl<T: AsyncWrite + Send + Unpin + 'static> AsyncWrite for State<T> {
+        fn poll_write(
+            mut self: Pin<&mut Self>,
+            cx: &mut Context<'_>,
+            buf: &[u8],
+        ) -> Poll<io::Result<usize>> {
+            // Throttle if the current task has done too many I/O operations without yielding.
+            futures::ready!(poll_throttle(cx));
+
+            loop {
+                match &mut *self {
+                    // The writer is idle and closed.
+                    State::Idle(None) => return Poll::Ready(Ok(0)),
+
+                    // The writer is idle and open - start a blocking task.
+                    State::Idle(Some(_)) => self.start(),
+
+                    // The task is flushing and in process of stopping.
+                    State::Busy(None, task) => {
+                        // Poll the task to retrieve the I/O handle.
+                        let (res, io) = futures::ready!(Pin::new(task).poll(cx));
+                        // Make sure to move into the idle state before reporting errors.
+                        *self = State::Idle(Some(io));
+                        res?;
+                    }
+
+                    // The writer is busy - write more bytes into the pipe.
+                    State::Busy(Some(writer), _) => return Pin::new(writer).poll_write(cx, buf),
+                }
+            }
+        }
+
+        fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+            // Throttle if the current task has done too many I/O operations without yielding.
+            futures::ready!(poll_throttle(cx));
+
+            loop {
+                match &mut *self {
+                    // The writer is idle and closed.
+                    State::Idle(None) => return Poll::Ready(Ok(())),
+
+                    // The writer is idle and open - start a blocking task.
+                    State::Idle(Some(_)) => self.start(),
+
+                    // The task is busy.
+                    State::Busy(writer, task) => {
+                        // Drop the writer to close the pipe. This stops the `futures::io::copy`
+                        // operation in the task, after which the task flushes the I/O handle and
+                        // returns it back.
+                        writer.take();
+
+                        // Poll the task to retrieve the I/O handle.
+                        let (res, io) = futures::ready!(Pin::new(task).poll(cx));
+                        // Make sure to move into the idle state before reporting errors.
+                        *self = State::Idle(Some(io));
+                        return Poll::Ready(res);
+                    }
+                }
+            }
+        }
+
+        fn poll_close(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+            // First, make sure the I/O handle is flushed.
+            futures::ready!(Pin::new(&mut *self).poll_flush(cx))?;
+
+            // Then move into the idle state with no I/O handle, thus dropping it.
+            *self = State::Idle(None);
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    // It's okay to treat the `Write` type as `AsyncWrite` because it's only written to inside a
+    // blocking task.
+    let io = AllowStdIo::new(writer);
+    State::Idle(Some(io))
 }
 
 // ---------- Reactor ----------
@@ -1055,7 +1452,7 @@ struct Source {
 ///
 /// There is only one global instance of this type, accessible by `Reactor::get()`.
 struct Reactor {
-    /// Raw bindings to epoll/kqueue/WSAPoll.
+    /// Raw bindings to epoll/kqueue/wepoll.
     sys: sys::Reactor,
 
     /// Registered sources.
@@ -1316,6 +1713,7 @@ pub struct Async<T> {
 impl<T: AsRawFd> Async<T> {
     /// Converts a non-blocking I/O handle into an async I/O handle.
     ///
+    /// TODO: explain AsRawFd and AsRawSocket
     /// TODO: **warning** for unix users: the I/O handle must be compatible with epoll/kqueue!
     /// Most notably, `File`, `Stdin`, `Stdout`, `Stderr` will **not** work.
     pub fn new(io: T) -> io::Result<Async<T>> {
@@ -1376,21 +1774,51 @@ impl<T: AsRawSocket> AsRawSocket for Async<T> {
 impl<T> Async<T> {
     /// Gets a reference to the inner I/O handle.
     ///
-    /// TODO
+    /// # Examples
+    ///
+    /// ```
+    /// use smol::Async;
+    /// use std::net::TcpListener;
+    ///
+    /// # smol::run(async {
+    /// let listener = Async::<TcpListener>::bind("127.0.0.1:80")?;
+    /// let inner = listener.get_ref();
+    /// # std::io::Result::Ok(()) });
+    /// ```
     pub fn get_ref(&self) -> &T {
         self.io.as_ref().unwrap()
     }
 
     /// Gets a mutable reference to the inner I/O handle.
     ///
-    /// TODO
+    /// # Examples
+    ///
+    /// ```
+    /// use smol::Async;
+    /// use std::net::TcpListener;
+    ///
+    /// # smol::run(async {
+    /// let mut listener = Async::<TcpListener>::bind("127.0.0.1:80")?;
+    /// let inner = listener.get_mut();
+    /// # std::io::Result::Ok(()) });
+    /// ```
     pub fn get_mut(&mut self) -> &mut T {
         self.io.as_mut().unwrap()
     }
 
-    /// Extracts the inner non-blocking I/O handle.
+    /// Unwraps the inner non-blocking I/O handle.
     ///
-    /// TODO
+    /// # Examples
+    ///
+    /// ```
+    /// use smol::Async;
+    /// use std::net::TcpListener;
+    ///
+    /// # smol::run(async {
+    /// let listener = Async::<TcpListener>::bind("127.0.0.1:80")?;
+    /// let inner = listener.into_inner()?;
+    /// # std::io::Result::Ok(()) });
+    /// ```
     pub fn into_inner(mut self) -> io::Result<T> {
         let io = *self.io.take().unwrap();
         Reactor::get().deregister(&self.source)?;
@@ -1530,9 +1958,21 @@ where
 }
 
 impl Async<TcpListener> {
-    /// Creates a listener bound to the specified address.
+    /// Creates a TCP listener bound to the specified address.
     ///
-    /// TODO
+    /// Binding with port number 0 will request an available port from the OS.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use smol::Async;
+    /// use std::net::TcpListener;
+    ///
+    /// # smol::run(async {
+    /// let listener = Async::<TcpListener>::bind("127.0.0.1:80")?;
+    /// println!("Listening on {}", listener.get_ref().local_addr()?);
+    /// # std::io::Result::Ok(()) });
+    /// ```
     pub fn bind<A: ToString>(addr: A) -> io::Result<Async<TcpListener>> {
         let addr = addr
             .to_string()
@@ -1541,17 +1981,49 @@ impl Async<TcpListener> {
         Ok(Async::new(TcpListener::bind(addr)?)?)
     }
 
-    /// Accepts a new incoming connection.
+    /// Accepts a new incoming TCP connection.
     ///
-    /// TODO
+    /// When a connection is established, it will be returned as a TCP stream together with its
+    /// remote address.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use smol::Async;
+    /// use std::net::TcpListener;
+    ///
+    /// # smol::run(async {
+    /// let listener = Async::<TcpListener>::bind("127.0.0.1:80")?;
+    /// let (stream, addr) = listener.accept().await?;
+    /// println!("Accepted client: {}", addr);
+    /// # std::io::Result::Ok(()) });
+    /// ```
     pub async fn accept(&self) -> io::Result<(Async<TcpStream>, SocketAddr)> {
         let (stream, addr) = self.with(|io| io.accept()).await?;
         Ok((Async::new(stream)?, addr))
     }
 
-    /// Returns a stream over incoming connections.
+    /// Returns a stream of incoming TCP connections.
     ///
-    /// TODO
+    /// The stream is infinite, i.e. it never stops with a [`None`] item.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use futures::prelude::*;
+    /// use smol::Async;
+    /// use std::net::TcpListener;
+    ///
+    /// # smol::run(async {
+    /// let listener = Async::<TcpListener>::bind("127.0.0.1:80")?;
+    /// let mut incoming = listener.incoming();
+    ///
+    /// while let Some(stream) = incoming.next().await {
+    ///     let stream = stream?;
+    ///     println!("Accepted client: {}", stream.get_ref().peer_addr()?);
+    /// }
+    /// # std::io::Result::Ok(()) });
+    /// ```
     pub fn incoming(&self) -> impl Stream<Item = io::Result<Async<TcpStream>>> + Send + Unpin + '_ {
         Box::pin(stream::unfold(self, |listener| async move {
             let res = listener.accept().await.map(|(stream, _)| stream);
@@ -1561,9 +2033,18 @@ impl Async<TcpListener> {
 }
 
 impl Async<TcpStream> {
-    /// Connects to the specified address.
+    /// Creates a TCP connection to the specified address.
     ///
-    /// TODO
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use smol::Async;
+    /// use std::net::TcpStream;
+    ///
+    /// # smol::run(async {
+    /// let stream = Async::<TcpStream>::connect("example.com:80").await?;
+    /// # std::io::Result::Ok(()) });
+    /// ```
     pub async fn connect<A: ToString>(addr: A) -> io::Result<Async<TcpStream>> {
         let addr = addr.to_string();
         let addr = Task::blocking(async move {
@@ -1599,18 +2080,44 @@ impl Async<TcpStream> {
         Ok(stream)
     }
 
-    /// Receives data from the stream without removing it from the buffer.
+    /// Reads data from the stream without removing it from the buffer.
     ///
-    /// TODO
+    /// Returns the number of bytes read. Successive calls of this method read the same data.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use smol::Async;
+    /// use std::net::TcpStream;
+    ///
+    /// # smol::run(async {
+    /// let stream = Async::<TcpStream>::connect("127.0.0.1:8080").await?;
+    ///
+    /// let mut buf = [0u8; 1024];
+    /// let len = stream.peek(&mut buf).await?;
+    /// # std::io::Result::Ok(()) });
+    /// ```
     pub async fn peek(&self, buf: &mut [u8]) -> io::Result<usize> {
         self.with(|io| io.peek(buf)).await
     }
 }
 
 impl Async<UdpSocket> {
-    /// Creates a socket bound to the specified address.
+    /// Creates a UDP socket bound to the specified address.
     ///
-    /// TODO
+    /// Binding with port number 0 will request an available port from the OS.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use smol::Async;
+    /// use std::net::UdpSocket;
+    ///
+    /// # smol::run(async {
+    /// let socket = Async::<UdpSocket>::bind("127.0.0.1:9000")?;
+    /// println!("Bound to {}", socket.get_ref().local_addr()?);
+    /// # std::io::Result::Ok(()) });
+    /// ```
     pub fn bind<A: ToString>(addr: A) -> io::Result<Async<UdpSocket>> {
         let addr = addr
             .to_string()
@@ -1619,71 +2126,223 @@ impl Async<UdpSocket> {
         Ok(Async::new(UdpSocket::bind(addr)?)?)
     }
 
+    /// Receives a single datagram message.
+    ///
+    /// Returns the number of bytes read and the address the message came from.
+    ///
+    /// This method must be called with a valid byte slice of sufficient size to hold the message.
+    /// If the message is too long to fit, excess bytes may get discarded.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use smol::Async;
+    /// use std::net::UdpSocket;
+    ///
+    /// # smol::run(async {
+    /// let socket = Async::<UdpSocket>::bind("127.0.0.1:9000")?;
+    ///
+    /// let mut buf = [0u8; 1024];
+    /// let (len, addr) = socket.recv_from(&mut buf).await?;
+    /// # std::io::Result::Ok(()) });
+    /// ```
+    pub async fn recv_from(&self, buf: &mut [u8]) -> io::Result<(usize, SocketAddr)> {
+        self.with(|io| io.recv_from(buf)).await
+    }
+
+    /// Receives a single datagram message without removing it from the queue.
+    ///
+    /// Returns the number of bytes read and the address the message came from.
+    ///
+    /// This method must be called with a valid byte slice of sufficient size to hold the message.
+    /// If the message is too long to fit, excess bytes may get discarded.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use smol::Async;
+    /// use std::net::UdpSocket;
+    ///
+    /// # smol::run(async {
+    /// let socket = Async::<UdpSocket>::bind("127.0.0.1:9000")?;
+    ///
+    /// let mut buf = [0u8; 1024];
+    /// let (len, addr) = socket.peek_from(&mut buf).await?;
+    /// # std::io::Result::Ok(()) });
+    /// ```
+    pub async fn peek_from(&self, buf: &mut [u8]) -> io::Result<(usize, SocketAddr)> {
+        self.with(|io| io.peek_from(buf)).await
+    }
+
     /// Sends data to the specified address.
     ///
-    /// TODO
+    /// Returns the number of bytes writen.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use smol::Async;
+    /// use std::net::UdpSocket;
+    ///
+    /// # smol::run(async {
+    /// let socket = Async::<UdpSocket>::bind("127.0.0.1:9000")?;
+    ///
+    /// let msg = b"hello";
+    /// let addr = ([127, 0, 0, 1], 8000);
+    /// let len = socket.send_to(msg, addr).await?;
+    /// # std::io::Result::Ok(()) });
+    /// ```
     pub async fn send_to<A: Into<SocketAddr>>(&self, buf: &[u8], addr: A) -> io::Result<usize> {
         let addr = addr.into();
         self.with(|io| io.send_to(buf, addr)).await
     }
 
-    /// Sends data to the socket's peer.
+    /// Receives a single datagram message from the connected peer.
     ///
-    /// TODO
-    pub async fn send(&self, buf: &[u8]) -> io::Result<usize> {
-        self.with(|io| io.send(buf)).await
-    }
-
-    /// Receives data from the socket.
+    /// Returns the number of bytes read.
     ///
-    /// TODO
-    pub async fn recv_from(&self, buf: &mut [u8]) -> io::Result<(usize, SocketAddr)> {
-        self.with(|io| io.recv_from(buf)).await
-    }
-
-    /// Receives data from the socket's peer.
+    /// This method must be called with a valid byte slice of sufficient size to hold the message.
+    /// If the message is too long to fit, excess bytes may get discarded.
     ///
-    /// TODO
+    /// The [`connect`][`UdpSocket::connect()`] method connects this socket to a remote address.
+    /// This method will fail if the socket is not connected.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use smol::Async;
+    /// use std::net::UdpSocket;
+    ///
+    /// # smol::run(async {
+    /// let socket = Async::<UdpSocket>::bind("127.0.0.1:9000")?;
+    /// socket.get_ref().connect("127.0.0.1:8000")?;
+    ///
+    /// let mut buf = [0u8; 1024];
+    /// let len = socket.recv(&mut buf).await?;
+    /// # std::io::Result::Ok(()) });
+    /// ```
     pub async fn recv(&self, buf: &mut [u8]) -> io::Result<usize> {
         self.with(|io| io.recv(buf)).await
     }
 
-    /// Receives data without removing it from the buffer.
+    /// Receives a single datagram message from the connected peer without removing it from the
+    /// queue.
     ///
-    /// TODO
-    pub async fn peek_from(&self, buf: &mut [u8]) -> io::Result<(usize, SocketAddr)> {
-        self.with(|io| io.peek_from(buf)).await
-    }
-
-    /// Receives data from the socket's peer without removing it from the buffer.
+    /// Returns the number of bytes read and the address the message came from.
     ///
-    /// TODO
+    /// This method must be called with a valid byte slice of sufficient size to hold the message.
+    /// If the message is too long to fit, excess bytes may get discarded.
+    ///
+    /// The [`connect`][`UdpSocket::connect()`] method connects this socket to a remote address.
+    /// This method will fail if the socket is not connected.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use smol::Async;
+    /// use std::net::UdpSocket;
+    ///
+    /// # smol::run(async {
+    /// let socket = Async::<UdpSocket>::bind("127.0.0.1:9000")?;
+    /// socket.get_ref().connect("127.0.0.1:8000")?;
+    ///
+    /// let mut buf = [0u8; 1024];
+    /// let len = socket.peek(&mut buf).await?;
+    /// # std::io::Result::Ok(()) });
+    /// ```
     pub async fn peek(&self, buf: &mut [u8]) -> io::Result<usize> {
         self.with(|io| io.peek(buf)).await
+    }
+
+    /// Sends data to the connected peer.
+    ///
+    /// Returns the number of bytes written.
+    ///
+    /// The [`connect`][`UdpSocket::connect()`] method connects this socket to a remote address.
+    /// This method will fail if the socket is not connected.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use smol::Async;
+    /// use std::net::UdpSocket;
+    ///
+    /// # smol::run(async {
+    /// let socket = Async::<UdpSocket>::bind("127.0.0.1:9000")?;
+    /// socket.get_ref().connect("127.0.0.1:8000")?;
+    ///
+    /// let msg = b"hello";
+    /// let len = socket.send(msg).await?;
+    /// # std::io::Result::Ok(()) });
+    /// ```
+    pub async fn send(&self, buf: &[u8]) -> io::Result<usize> {
+        self.with(|io| io.send(buf)).await
     }
 }
 
 #[cfg(unix)]
 impl Async<UnixListener> {
-    /// Creates a listener bound to the specified path.
+    /// Creates a UDS listener bound to the specified path.
     ///
-    /// TODO
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use smol::Async;
+    /// use std::os::unix::net::UnixListener;
+    ///
+    /// # smol::run(async {
+    /// let listener = Async::<UnixListener>::bind("/tmp/socket")?;
+    /// println!("Listening on {:?}", listener.get_ref().local_addr()?);
+    /// # std::io::Result::Ok(()) });
+    /// ```
     pub fn bind<P: AsRef<Path>>(path: P) -> io::Result<Async<UnixListener>> {
         let path = path.as_ref().to_owned();
         Ok(Async::new(UnixListener::bind(path)?)?)
     }
 
-    /// Accepts a new incoming connection.
+    /// Accepts a new incoming UDS stream connection.
     ///
-    /// TODO
+    /// When a connection is established, it will be returned as a stream together with its remote
+    /// address.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use smol::Async;
+    /// use std::os::unix::net::UnixListener;
+    ///
+    /// # smol::run(async {
+    /// let listener = Async::<UnixListener>::bind("/tmp/socket")?;
+    /// let (stream, addr) = listener.accept().await?;
+    /// println!("Accepted client: {:?}", addr);
+    /// # std::io::Result::Ok(()) });
+    /// ```
     pub async fn accept(&self) -> io::Result<(Async<UnixStream>, UnixSocketAddr)> {
         let (stream, addr) = self.with(|io| io.accept()).await?;
         Ok((Async::new(stream)?, addr))
     }
 
-    /// Returns a stream over incoming connections.
+    /// Returns a stream of incoming UDS connections.
     ///
-    /// TODO
+    /// The stream is infinite, i.e. it never stops with a [`None`] item.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use futures::prelude::*;
+    /// use smol::Async;
+    /// use std::os::unix::net::UnixListener;
+    ///
+    /// # smol::run(async {
+    /// let listener = Async::<UnixListener>::bind("127.0.0.1:80")?;
+    /// let mut incoming = listener.incoming();
+    ///
+    /// while let Some(stream) = incoming.next().await {
+    ///     let stream = stream?;
+    ///     println!("Accepted client: {:?}", stream.get_ref().peer_addr()?);
+    /// }
+    /// # std::io::Result::Ok(()) });
+    /// ```
     pub fn incoming(
         &self,
     ) -> impl Stream<Item = io::Result<Async<UnixStream>>> + Send + Unpin + '_ {
@@ -1696,17 +2355,52 @@ impl Async<UnixListener> {
 
 #[cfg(unix)]
 impl Async<UnixStream> {
-    /// Connects to the specified path.
+    /// Creates a UDS stream connected to the specified path.
     ///
-    /// TODO
-    pub fn connect<P: AsRef<Path>>(path: P) -> io::Result<Async<UnixStream>> {
-        let path = path.as_ref().to_owned();
-        Ok(Async::new(UnixStream::connect(path)?)?)
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use smol::Async;
+    /// use std::os::unix::net::UnixStream;
+    ///
+    /// # smol::run(async {
+    /// let stream = Async::<UnixStream>::connect("/tmp/socket").await?;
+    /// # std::io::Result::Ok(()) });
+    /// ```
+    pub async fn connect<P: AsRef<Path>>(path: P) -> io::Result<Async<UnixStream>> {
+        // Create a socket.
+        let socket = Socket::new(Domain::unix(), Type::stream(), None)?;
+
+        // Begin async connect and ignore the inevitable "not yet connected" error.
+        socket.set_nonblocking(true)?;
+        let _ = socket.connect(&socket2::SockAddr::unix(path)?);
+        let stream = Async::new(socket.into_unix_stream())?;
+
+        // Waits until the stream becomes writable.
+        let wait_writable = |mut stream: &UnixStream| match stream.write(&[]) {
+            Err(err) if err.kind() == io::ErrorKind::NotConnected => {
+                Err(io::Error::new(io::ErrorKind::WouldBlock, ""))
+            }
+            res => res.map(|_| ()),
+        };
+        // The stream becomes writable when connected.
+        stream.with(|io| wait_writable(io)).await?;
+
+        Ok(stream)
     }
 
-    /// Creates an unnamed pair of connected streams.
+    /// Creates an unnamed pair of connected UDS stream sockets.
     ///
-    /// TODO
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use smol::Async;
+    /// use std::os::unix::net::UnixStream;
+    ///
+    /// # smol::run(async {
+    /// let (stream1, stream2) = Async::<UnixStream>::pair()?;
+    /// # std::io::Result::Ok(()) });
+    /// ```
     pub fn pair() -> io::Result<(Async<UnixStream>, Async<UnixStream>)> {
         let (stream1, stream2) = UnixStream::pair()?;
         Ok((Async::new(stream1)?, Async::new(stream2)?))
@@ -1715,55 +2409,147 @@ impl Async<UnixStream> {
 
 #[cfg(unix)]
 impl Async<UnixDatagram> {
-    /// Creates a socket bound to the specified path.
+    /// Creates a UDS datagram socket bound to the specified path.
     ///
-    /// TODO
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use smol::Async;
+    /// use std::os::unix::net::UnixDatagram;
+    ///
+    /// # smol::run(async {
+    /// let socket = Async::<UnixDatagram>::bind("/tmp/socket")?;
+    /// # std::io::Result::Ok(()) });
+    /// ```
     pub fn bind<P: AsRef<Path>>(path: P) -> io::Result<Async<UnixDatagram>> {
         let path = path.as_ref().to_owned();
         Ok(Async::new(UnixDatagram::bind(path)?)?)
     }
 
-    /// Creates a socket not bound to any address.
+    /// Creates a UDS datagram socket not bound to any address.
     ///
-    /// TODO
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use smol::Async;
+    /// use std::os::unix::net::UnixDatagram;
+    ///
+    /// # smol::run(async {
+    /// let socket = Async::<UnixDatagram>::unbound()?;
+    /// # std::io::Result::Ok(()) });
+    /// ```
     pub fn unbound() -> io::Result<Async<UnixDatagram>> {
         Ok(Async::new(UnixDatagram::unbound()?)?)
     }
 
-    /// Creates an unnamed pair of connected sockets.
+    /// Creates an unnamed pair of connected Unix datagram sockets.
     ///
-    /// TODO
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use smol::Async;
+    /// use std::os::unix::net::UnixDatagram;
+    ///
+    /// # smol::run(async {
+    /// let (socket1, socket2) = Async::<UnixDatagram>::pair()?;
+    /// # std::io::Result::Ok(()) });
+    /// ```
     pub fn pair() -> io::Result<(Async<UnixDatagram>, Async<UnixDatagram>)> {
         let (socket1, socket2) = UnixDatagram::pair()?;
         Ok((Async::new(socket1)?, Async::new(socket2)?))
     }
 
-    /// Sends data to the specified address.
-    ///
-    /// TODO
-    pub async fn send_to<P: AsRef<Path>>(&self, buf: &[u8], path: P) -> io::Result<usize> {
-        self.with(|io| io.send_to(buf, &path)).await
-    }
-
-    /// Sends data to the socket's peer.
-    ///
-    /// TODO
-    pub async fn send(&self, buf: &[u8]) -> io::Result<usize> {
-        self.with(|io| io.send(buf)).await
-    }
-
     /// Receives data from the socket.
     ///
-    /// TODO
+    /// Returns the number of bytes read and the address the message came from.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use smol::Async;
+    /// use std::os::unix::net::UnixDatagram;
+    ///
+    /// # smol::run(async {
+    /// let socket = Async::<UnixDatagram>::bind("/tmp/socket")?;
+    ///
+    /// let mut buf = [0u8; 1024];
+    /// let (len, addr) = socket.recv_from(&mut buf).await?;
+    /// # std::io::Result::Ok(()) });
+    /// ```
     pub async fn recv_from(&self, buf: &mut [u8]) -> io::Result<(usize, UnixSocketAddr)> {
         self.with(|io| io.recv_from(buf)).await
     }
 
-    /// Receives data from the socket's peer.
+    /// Sends data to the specified address.
     ///
-    /// TODO
+    /// Returns the number of bytes written.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use smol::Async;
+    /// use std::os::unix::net::UnixDatagram;
+    ///
+    /// # smol::run(async {
+    /// let socket = Async::<UnixDatagram>::unbound()?;
+    ///
+    /// let msg = b"hello";
+    /// let addr = "/tmp/socket";
+    /// let len = socket.send_to(msg, addr).await?;
+    /// # std::io::Result::Ok(()) });
+    /// ```
+    pub async fn send_to<P: AsRef<Path>>(&self, buf: &[u8], path: P) -> io::Result<usize> {
+        self.with(|io| io.send_to(buf, &path)).await
+    }
+
+    /// Receives data from the connected peer.
+    ///
+    /// Returns the number of bytes read and the address the message came from.
+    ///
+    /// The [`connect`][`UnixDatagram::connect()`] method connects this socket to a remote address.
+    /// This method will fail if the socket is not connected.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use smol::Async;
+    /// use std::os::unix::net::UnixDatagram;
+    ///
+    /// # smol::run(async {
+    /// let socket = Async::<UnixDatagram>::bind("/tmp/socket1")?;
+    /// socket.get_ref().connect("/tmp/socket2")?;
+    ///
+    /// let mut buf = [0u8; 1024];
+    /// let len = socket.recv(&mut buf).await?;
+    /// # std::io::Result::Ok(()) });
+    /// ```
     pub async fn recv(&self, buf: &mut [u8]) -> io::Result<usize> {
         self.with(|io| io.recv(buf)).await
+    }
+
+    /// Sends data to the connected peer.
+    ///
+    /// Returns the number of bytes written.
+    ///
+    /// The [`connect`][`UnixDatagram::connect()`] method connects this socket to a remote address.
+    /// This method will fail if the socket is not connected.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use smol::Async;
+    /// use std::os::unix::net::UnixDatagram;
+    ///
+    /// # smol::run(async {
+    /// let socket = Async::<UnixDatagram>::bind("/tmp/socket1")?;
+    /// socket.get_ref().connect("/tmp/socket2")?;
+    ///
+    /// let msg = b"hello";
+    /// let len = socket.send(msg).await?;
+    /// # std::io::Result::Ok(()) });
+    /// ```
+    pub async fn send(&self, buf: &[u8]) -> io::Result<usize> {
+        self.with(|io| io.send(buf)).await
     }
 }
 
@@ -1904,368 +2690,6 @@ fn pipe() -> io::Result<(Socket, Socket)> {
     let _ = sock2.set_nodelay(true)?;
 
     Ok((sock1, sock2))
-}
-
-// ---------- Blocking executor ----------
-
-/// TODO: docs
-
-/// A thread pool for blocking tasks.
-struct BlockingExecutor {
-    state: Mutex<State>,
-    cvar: Condvar,
-}
-
-struct State {
-    /// Number of sleeping threads in the pool.
-    idle_count: usize,
-    /// Total number of thread in the pool.
-    thread_count: usize,
-    /// Runnable blocking tasks.
-    queue: VecDeque<Runnable>,
-}
-
-impl BlockingExecutor {
-    fn get() -> &'static BlockingExecutor {
-        static EXECUTOR: Lazy<BlockingExecutor> = Lazy::new(|| BlockingExecutor {
-            state: Mutex::new(State {
-                idle_count: 0,
-                thread_count: 0,
-                queue: VecDeque::new(),
-            }),
-            cvar: Condvar::new(),
-        });
-        &EXECUTOR
-    }
-
-    /// Spawns a future onto this executor.
-    ///
-    /// Returns a `Task` handle for the spawned task.
-    fn spawn<T: Send + 'static>(
-        &'static self,
-        future: impl Future<Output = T> + Send + 'static,
-    ) -> Task<T> {
-        // Create a task, schedule it, and return its `Task` handle.
-        let (runnable, handle) = async_task::spawn(future, move |r| self.schedule(r), ());
-        runnable.schedule();
-        Task(Some(handle))
-    }
-
-    /// Runs the main loop on the current thread.
-    fn main_loop(&'static self) {
-        let mut state = self.state.lock().unwrap();
-        loop {
-            state.idle_count -= 1;
-
-            // Run tasks in the queue.
-            while let Some(runnable) = state.queue.pop_front() {
-                self.grow_pool(state);
-                let _ = panic::catch_unwind(|| runnable.run());
-                state = self.state.lock().unwrap();
-            }
-
-            // Put the thread to sleep until another task is scheduled.
-            state.idle_count += 1;
-            let timeout = Duration::from_millis(500);
-            let (s, res) = self.cvar.wait_timeout(state, timeout).unwrap();
-            state = s;
-
-            if res.timed_out() && state.queue.is_empty() {
-                // If there are no tasks after a while, stop this thread.
-                state.idle_count -= 1;
-                state.thread_count -= 1;
-                break;
-            }
-        }
-    }
-
-    /// Schedules a runnable task for execution.
-    fn schedule(&'static self, runnable: Runnable) {
-        let mut state = self.state.lock().unwrap();
-        state.queue.push_back(runnable);
-        // Notify a sleeping thread and spawn more threads if needed.
-        self.cvar.notify_one();
-        self.grow_pool(state);
-    }
-
-    /// Spawns more blocking threads if the pool is overloaded with work.
-    fn grow_pool(&'static self, mut state: MutexGuard<'static, State>) {
-        // If runnable tasks greatly outnumber idle threads and there aren't too many threads
-        // already, then be aggressive: wake all idle threads and spawn one more thread.
-        while state.queue.len() > state.idle_count * 5 && state.thread_count < 500 {
-            state.idle_count += 1;
-            state.thread_count += 1;
-            self.cvar.notify_all();
-
-            thread::spawn(move || {
-                // If enabled, set up tokio before the main loop begins.
-                enter(|| self.main_loop())
-            });
-        }
-    }
-}
-
-/// Spawns blocking code onto a thread.
-///
-/// TODO
-#[macro_export]
-macro_rules! blocking {
-    ($($expr:tt)*) => {
-        $crate::Task::blocking(async move { $($expr)* }).await
-    };
-}
-
-/// Creates a stream that iterates on a thread.
-///
-/// TODO
-pub fn iter<T: Send + 'static>(
-    iter: impl Iterator<Item = T> + Send + 'static,
-) -> impl Stream<Item = T> + Send + Unpin + 'static {
-    /// Current state of the iterator.
-    enum State<T, I> {
-        /// The iterator is idle.
-        Idle(Option<I>),
-        /// The iterator is running in a blocking task and sending items into a channel.
-        Busy(piper::Receiver<T>, Task<I>),
-    }
-
-    impl<T, I> Unpin for State<T, I> {}
-
-    impl<T: Send + 'static, I: Iterator<Item = T> + Send + 'static> Stream for State<T, I> {
-        type Item = T;
-
-        fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<T>> {
-            // Throttle if the current task has done too many I/O operations without yielding.
-            futures::ready!(poll_throttle(cx));
-
-            match &mut *self {
-                State::Idle(iter) => {
-                    // If idle, take the iterator out to run it on a blocking task.
-                    let mut iter = iter.take().unwrap();
-
-                    // This channel capacity seems to work well in practice. If it's too low, there
-                    // will be too much synchronization between tasks. If too high, memory
-                    // consumption increases.
-                    let (sender, receiver) = piper::chan(8 * 1024); // 8192 items
-
-                    // Spawn a blocking task that runs the iterator and returns it when done.
-                    let task = Task::blocking(async move {
-                        for item in &mut iter {
-                            sender.send(item).await;
-                        }
-                        iter
-                    });
-
-                    // Move into the busy state and poll again.
-                    *self = State::Busy(receiver, task);
-                    self.poll_next(cx)
-                }
-                State::Busy(receiver, task) => {
-                    // Poll the channel.
-                    let opt = futures::ready!(Pin::new(receiver).poll_next(cx));
-
-                    // If the channel is closed, retrieve the iterator back from the blocking task.
-                    // This is not really a required step, but it's cleaner to drop the iterator on
-                    // the same thread that created it.
-                    if opt.is_none() {
-                        // Poll the task to retrieve the iterator.
-                        let iter = futures::ready!(Pin::new(task).poll(cx));
-                        *self = State::Idle(Some(iter));
-                    }
-
-                    Poll::Ready(opt)
-                }
-            }
-        }
-    }
-
-    State::Idle(Some(iter))
-}
-
-/// Creates an async reader that runs on a thread.
-pub fn reader(reader: impl Read + Send + 'static) -> impl AsyncRead + Send + Unpin + 'static {
-    /// Current state of the reader.
-    enum State<T> {
-        /// The reader is idle.
-        Idle(Option<T>),
-        /// The reader is running in a blocking task and sending bytes into a pipe.
-        Busy(piper::Reader, Task<(io::Result<()>, T)>),
-    }
-
-    impl<T: AsyncRead + Send + Unpin + 'static> AsyncRead for State<T> {
-        fn poll_read(
-            mut self: Pin<&mut Self>,
-            cx: &mut Context<'_>,
-            buf: &mut [u8],
-        ) -> Poll<io::Result<usize>> {
-            // Throttle if the current task has done too many I/O operations without yielding.
-            futures::ready!(poll_throttle(cx));
-
-            match &mut *self {
-                State::Idle(io) => {
-                    // If idle, take the I/O handle out to read it on a blocking task.
-                    let mut io = io.take().unwrap();
-
-                    // This pipe capacity seems to work well in practice. If it's too low, there
-                    // will be too much synchronization between tasks. If too high, memory
-                    // consumption increases.
-                    let (reader, mut writer) = piper::pipe(8 * 1024 * 1024); // 8 MB
-
-                    // Spawn a blocking task that reads and returns the I/O handle when done.
-                    let task = Task::blocking(async move {
-                        // Copy bytes from the I/O handle into the pipe until the pipe is closed or
-                        // an error occurs.
-                        let res = futures::io::copy(&mut io, &mut writer).await;
-                        (res.map(drop), io)
-                    });
-
-                    // Move into the busy state and poll again.
-                    *self = State::Busy(reader, task);
-                    self.poll_read(cx, buf)
-                }
-                State::Busy(reader, task) => {
-                    // Poll the pipe.
-                    let n = futures::ready!(Pin::new(reader).poll_read(cx, buf))?;
-
-                    // If the pipe is closed, retrieve the I/O handle back from the blocking task.
-                    // This is not really a required step, but it's cleaner to drop the handle on
-                    // the same thread that created it.
-                    if n == 0 {
-                        // Poll the task to retrieve the I/O handle.
-                        let (res, io) = futures::ready!(Pin::new(task).poll(cx));
-                        // Make sure to move into the idle state before reporting errors.
-                        *self = State::Idle(Some(io));
-                        res?;
-                    }
-
-                    Poll::Ready(Ok(n))
-                }
-            }
-        }
-    }
-
-    // It's okay to treat the `Read` type as `AsyncRead` because it's only read from inside a
-    // blocking task.
-    let io = Box::pin(AllowStdIo::new(reader));
-    State::Idle(Some(io))
-}
-
-/// Creates an async writer that runs on a thread.
-///
-/// Make sure to flush before dropping the writer.
-///
-/// TODO
-pub fn writer(writer: impl Write + Send + 'static) -> impl AsyncWrite + Send + Unpin + 'static {
-    /// Current state of the writer.
-    enum State<T> {
-        /// The writer is idle.
-        Idle(Option<T>),
-        /// The writer is running in a blocking task and receiving bytes from a pipe.
-        Busy(Option<piper::Writer>, Task<(io::Result<()>, T)>),
-    }
-
-    impl<T: AsyncWrite + Send + Unpin + 'static> State<T> {
-        /// Starts a blocking task.
-        fn start(&mut self) {
-            if let State::Idle(io) = self {
-                // If idle, take the I/O handle out to write on a blocking task.
-                let mut io = io.take().unwrap();
-
-                // This pipe capacity seems to work well in practice. If it's too low, there will
-                // be too much synchronization between tasks. If too high, memory consumption
-                // increases.
-                let (reader, writer) = piper::pipe(8 * 1024 * 1024); // 8 MB
-
-                // Spawn a blocking task that writes and returns the I/O handle when done.
-                let task = Task::blocking(async move {
-                    // Copy bytes from the pipe into the I/O handle until the pipe is closed or an
-                    // error occurs. Flush the I/O handle at the end.
-                    match futures::io::copy(reader, &mut io).await {
-                        Ok(_) => (io.flush().await, io),
-                        Err(err) => (Err(err), io),
-                    }
-                });
-                // Move into the busy state.
-                *self = State::Busy(Some(writer), task);
-            }
-        }
-    }
-
-    impl<T: AsyncWrite + Send + Unpin + 'static> AsyncWrite for State<T> {
-        fn poll_write(
-            mut self: Pin<&mut Self>,
-            cx: &mut Context<'_>,
-            buf: &[u8],
-        ) -> Poll<io::Result<usize>> {
-            // Throttle if the current task has done too many I/O operations without yielding.
-            futures::ready!(poll_throttle(cx));
-
-            loop {
-                match &mut *self {
-                    // The writer is idle and closed.
-                    State::Idle(None) => return Poll::Ready(Ok(0)),
-
-                    // The writer is idle and open - start a blocking task.
-                    State::Idle(Some(_)) => self.start(),
-
-                    // The task is flushing and in process of stopping.
-                    State::Busy(None, task) => {
-                        // Poll the task to retrieve the I/O handle.
-                        let (res, io) = futures::ready!(Pin::new(task).poll(cx));
-                        // Make sure to move into the idle state before reporting errors.
-                        *self = State::Idle(Some(io));
-                        res?;
-                    }
-
-                    // The writer is busy - write more bytes into the pipe.
-                    State::Busy(Some(writer), _) => return Pin::new(writer).poll_write(cx, buf),
-                }
-            }
-        }
-
-        fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-            // Throttle if the current task has done too many I/O operations without yielding.
-            futures::ready!(poll_throttle(cx));
-
-            loop {
-                match &mut *self {
-                    // The writer is idle and closed.
-                    State::Idle(None) => return Poll::Ready(Ok(())),
-
-                    // The writer is idle and open - start a blocking task.
-                    State::Idle(Some(_)) => self.start(),
-
-                    // The task is busy.
-                    State::Busy(writer, task) => {
-                        // Drop the writer to close the pipe. This stops the `futures::io::copy`
-                        // operation in the task, after which the task flushes the I/O handle and
-                        // returns it back.
-                        writer.take();
-
-                        // Poll the task to retrieve the I/O handle.
-                        let (res, io) = futures::ready!(Pin::new(task).poll(cx));
-                        // Make sure to move into the idle state before reporting errors.
-                        *self = State::Idle(Some(io));
-                        return Poll::Ready(res);
-                    }
-                }
-            }
-        }
-
-        fn poll_close(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-            // First, make sure the I/O handle is flushed.
-            futures::ready!(Pin::new(&mut *self).poll_flush(cx))?;
-
-            // Then move into the idle state with no I/O handle, thus dropping it.
-            *self = State::Idle(None);
-            Poll::Ready(Ok(()))
-        }
-    }
-
-    // It's okay to treat the `Write` type as `AsyncWrite` because it's only written to inside a
-    // blocking task.
-    let io = AllowStdIo::new(writer);
-    State::Idle(Some(io))
 }
 
 // ---------- epoll (Linux, Android) ----------
@@ -2424,7 +2848,7 @@ mod sys {
     }
 }
 
-// ---------- WSAPoll (Windows) ----------
+// ---------- wepoll (Windows) ----------
 
 #[cfg(target_os = "windows")]
 mod sys {

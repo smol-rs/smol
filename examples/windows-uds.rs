@@ -1,11 +1,11 @@
 #[cfg(windows)]
 fn main() -> std::io::Result<()> {
-    use std::fs;
-    use std::path::{Path, PathBuf};
+    use std::path::PathBuf;
 
     use futures::io;
     use futures::prelude::*;
     use smol::{Async, Task};
+    use tempfile::tempdir;
     use uds_windows::{UnixListener, UnixStream};
 
     async fn client(addr: PathBuf) -> io::Result<()> {
@@ -17,16 +17,16 @@ fn main() -> std::io::Result<()> {
         Ok(())
     }
 
-    let path = "socket";
-    let _ = fs::remove_file(path);
+    let dir = tempdir()?;
+    let path = dir.path().join("socket");
 
     smol::run(async {
         // Create a listener.
-        let listener = Async::new(UnixListener::bind(path)?)?;
+        let listener = Async::new(UnixListener::bind(&path)?)?;
         println!("Listening on {:?}", listener.get_ref().local_addr()?);
 
         // Spawn a client task.
-        let task = Task::spawn(client(path.into()));
+        let task = Task::spawn(client(path));
 
         // Accept the client.
         let (stream, _) = listener.with(|l| l.accept()).await?;

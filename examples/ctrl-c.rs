@@ -1,3 +1,6 @@
+// Uses the `ctrlc` crate to set a handler that sends a message
+// through an async channel.
+
 use futures::prelude::*;
 
 fn main() {

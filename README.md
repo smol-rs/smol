@@ -9,7 +9,7 @@ A small and fast async runtime.
 * Safe - Written in 100% safe Rust.
 * Complete - Fully featured and ready for production.
 * Documented - Simple code, easy to understand and modify.
-* Lightweight - Small dependencies, relies on epoll/kqueue/WSAPoll.
+* Lightweight - Small dependencies, relies on epoll/kqueue/wepoll.
 * Portable - Linux, Android, macOS, iOS, Windows, FreeBSD, OpenBSD, NetBSD, DragonFly BSD.
 
 ## Features

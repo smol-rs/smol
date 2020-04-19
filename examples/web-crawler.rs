@@ -36,16 +36,10 @@ fn main() -> Result<()> {
         let mut tasks = 0;
 
         while queue.len() + tasks > 0 {
-            // Limit the number of concurrent requests.
-            while tasks < 200 {
-                match queue.pop_front() {
-                    None => break,
-                    Some(url) => {
-                        println!("{}", url);
-                        tasks += 1;
-                        Task::spawn(fetch(url, s.clone())).detach();
-                    }
-                }
+            while let Some(url) = queue.pop_front() {
+                println!("{}", url);
+                tasks += 1;
+                Task::spawn(fetch(url, s.clone())).detach();
             }
 
             let body = match r.try_recv() {
