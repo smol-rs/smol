@@ -121,19 +121,22 @@
 
 #![warn(missing_docs, missing_debug_implementations, rust_2018_idioms)]
 
+mod async_io;
 mod block_on;
 mod blocking;
 mod context;
-mod net;
+mod io_event;
 mod reactor;
 mod run;
 mod task;
 mod thread_local;
 mod throttle;
+mod timer;
 mod work_stealing;
 
+pub use async_io::Async;
 pub use block_on::block_on;
 pub use blocking::{iter, reader, writer};
-pub use reactor::{Async, Timer};
 pub use run::run;
 pub use task::Task;
+pub use timer::Timer;

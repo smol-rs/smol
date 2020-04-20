@@ -1,4 +1,6 @@
 //! Task context common to all executors.
+//!
+//! Before executor, we "enter" it by setting up some necessary thread-locals.
 
 /// Enters the tokio context if the `tokio` feature is enabled.
 pub(crate) fn enter<T>(f: impl FnOnce() -> T) -> T {

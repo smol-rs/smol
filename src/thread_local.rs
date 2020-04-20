@@ -9,7 +9,8 @@ use std::thread::{self, ThreadId};
 use crossbeam::queue::SegQueue;
 use scoped_tls_hkt::scoped_thread_local;
 
-use crate::reactor::{IoEvent, Reactor};
+use crate::io_event::IoEvent;
+use crate::reactor::Reactor;
 use crate::task::{Runnable, Task};
 use crate::throttle;
 

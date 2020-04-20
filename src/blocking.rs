@@ -1,4 +1,11 @@
 //! The blocking executor.
+//!
+//! This module also implements convenient adapters:
+//!
+//! - [`blocking!`] as syntax sugar around [`Task::blocking()`]
+//! - [`iter()`] converts an [`Iterator`] into a [`Stream`]
+//! - [`reader()`] converts a [`Read`] into an [`AsyncRead`]
+//! - [`writer()`] converts a [`Write`] into an [`AsyncWrite`]
 
 use std::collections::VecDeque;
 use std::future::Future;
@@ -110,7 +117,7 @@ impl BlockingExecutor {
 
             thread::spawn(move || {
                 // If enabled, set up tokio before the main loop begins.
-                context::enter(|| self.main_loop()) // TODO
+                context::enter(|| self.main_loop())
             });
         }
     }

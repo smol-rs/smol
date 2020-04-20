@@ -11,7 +11,8 @@ use once_cell::sync::Lazy;
 use scoped_tls_hkt::scoped_thread_local;
 use slab::Slab;
 
-use crate::reactor::{IoEvent, Reactor};
+use crate::io_event::IoEvent;
+use crate::reactor::Reactor;
 use crate::task::{Runnable, Task};
 use crate::throttle;
 

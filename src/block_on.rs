@@ -1,3 +1,5 @@
+//! Implementation of [`block_on()`].
+
 use std::cell::RefCell;
 use std::future::Future;
 use std::task::{Context, Poll, Waker};

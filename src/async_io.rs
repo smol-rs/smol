@@ -1,13 +1,15 @@
-//! Async methods for networking types.
+//! Async I/O.
 
 use std::future::Future;
 use std::io::{self, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream, ToSocketAddrs, UdpSocket};
 use std::pin::Pin;
+use std::sync::Arc;
 use std::task::{Context, Poll};
 
 #[cfg(unix)]
 use std::{
+    os::unix::io::AsRawFd,
     os::unix::net::{SocketAddr as UnixSocketAddr, UnixDatagram, UnixListener, UnixStream},
     path::Path,
 };
@@ -15,12 +17,138 @@ use std::{
 #[cfg(windows)]
 use std::os::windows::io::{AsRawSocket, FromRawSocket, RawSocket};
 
+use futures::future;
 use futures::io::{AsyncRead, AsyncWrite};
 use futures::stream::{self, Stream};
 use socket2::{Domain, Protocol, Socket, Type};
 
-use crate::reactor::Async;
+use crate::reactor::{Reactor, Source};
 use crate::task::Task;
+
+/// Async I/O.
+///
+/// TODO
+/// TODO: suggest using Shared to split
+/// TODO: suggest using Lock if Async<T> is not splittable
+#[derive(Debug)]
+pub struct Async<T> {
+    /// A source registered in the reactor.
+    source: Arc<Source>,
+
+    /// The inner I/O handle.
+    io: Option<Box<T>>,
+}
+
+#[cfg(unix)]
+impl<T: AsRawFd> Async<T> {
+    /// Converts a non-blocking I/O handle into an async I/O handle.
+    ///
+    /// TODO: explain AsRawFd and AsRawSocket
+    /// TODO: **warning** for unix users: the I/O handle must be compatible with epoll/kqueue!
+    /// Most notably, `File`, `Stdin`, `Stdout`, `Stderr` will **not** work.
+    pub fn new(io: T) -> io::Result<Async<T>> {
+        Ok(Async {
+            source: Reactor::get().insert_io(io.as_raw_fd())?,
+            io: Some(Box::new(io)),
+        })
+    }
+}
+
+#[cfg(windows)]
+impl<T: AsRawSocket> Async<T> {
+    /// Converts a non-blocking I/O handle into an async I/O handle.
+    ///
+    /// TODO
+    pub fn new(io: T) -> io::Result<Async<T>> {
+        Ok(Async {
+            source: Reactor::get().insert_io(io.as_raw_socket())?,
+            io: Some(Box::new(io)),
+        })
+    }
+}
+
+impl<T> Async<T> {
+    /// Gets a reference to the inner I/O handle.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use smol::Async;
+    /// use std::net::TcpListener;
+    ///
+    /// # smol::run(async {
+    /// let listener = Async::<TcpListener>::bind("127.0.0.1:80")?;
+    /// let inner = listener.get_ref();
+    /// # std::io::Result::Ok(()) });
+    /// ```
+    pub fn get_ref(&self) -> &T {
+        self.io.as_ref().unwrap()
+    }
+
+    /// Gets a mutable reference to the inner I/O handle.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use smol::Async;
+    /// use std::net::TcpListener;
+    ///
+    /// # smol::run(async {
+    /// let mut listener = Async::<TcpListener>::bind("127.0.0.1:80")?;
+    /// let inner = listener.get_mut();
+    /// # std::io::Result::Ok(()) });
+    /// ```
+    pub fn get_mut(&mut self) -> &mut T {
+        self.io.as_mut().unwrap()
+    }
+
+    /// Unwraps the inner non-blocking I/O handle.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use smol::Async;
+    /// use std::net::TcpListener;
+    ///
+    /// # smol::run(async {
+    /// let listener = Async::<TcpListener>::bind("127.0.0.1:80")?;
+    /// let inner = listener.into_inner()?;
+    /// # std::io::Result::Ok(()) });
+    /// ```
+    pub fn into_inner(mut self) -> io::Result<T> {
+        let io = *self.io.take().unwrap();
+        Reactor::get().remove_io(&self.source)?;
+        Ok(io)
+    }
+
+    /// TODO
+    pub async fn with<R>(&self, op: impl FnMut(&T) -> io::Result<R>) -> io::Result<R> {
+        let mut op = op;
+        let mut io = self.io.as_ref().unwrap();
+        let source = &self.source;
+        future::poll_fn(|cx| source.poll_io(cx, || op(&mut io))).await
+    }
+
+    /// TODO
+    pub async fn with_mut<R>(&mut self, op: impl FnMut(&mut T) -> io::Result<R>) -> io::Result<R> {
+        let mut op = op;
+        let mut io = self.io.as_mut().unwrap();
+        let source = &self.source;
+        future::poll_fn(|cx| source.poll_io(cx, || op(&mut io))).await
+    }
+}
+
+impl<T> Drop for Async<T> {
+    fn drop(&mut self) {
+        if self.io.is_some() {
+            // Deregister and ignore errors because destructors should not panic.
+            let _ = Reactor::get().remove_io(&self.source);
+
+            // Drop the I/O handle to close it.
+            self.io.take();
+        }
+    }
+}
 
 /// Pins a future and then polls it.
 fn poll_future<T>(cx: &mut Context<'_>, fut: impl Future<Output = T>) -> Poll<T> {
