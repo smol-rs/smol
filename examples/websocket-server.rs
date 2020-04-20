@@ -48,7 +48,7 @@ fn main() -> Result<()> {
     let identity = Identity::from_pkcs12(include_bytes!("../identity.pfx"), "password")?;
     let tls = TlsAcceptor::from(native_tls::TlsAcceptor::new(identity)?);
 
-    // Create a thread pool.
+    // Create an executor thread pool.
     for _ in 0..num_cpus::get().max(1) {
         thread::spawn(|| smol::run(future::pending::<()>()));
     }

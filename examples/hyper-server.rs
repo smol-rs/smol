@@ -1,5 +1,20 @@
+//! An HTTP+TLS server based on `hyper` and `async-native-tls`.
+//!
+//! Run with:
+//!
+//! ```
+//! cargo run --example hyper-server
+//! ```
+//!
+//! Open in the browser any of these addresses:
+//!
+//! - http://localhost:8000/
+//! - https://localhost:8001/ (you'll need to import the TLS certificate first!)
+//!
+//! Refer to `README.md` to see how to import or generate the TLS certificate.
+
 use std::io;
-use std::net::{TcpListener, TcpStream};
+use std::net::{Shutdown, TcpListener, TcpStream};
 use std::pin::Pin;
 use std::task::{Context, Poll};
 use std::thread;
@@ -11,18 +26,22 @@ use hyper::service::{make_service_fn, service_fn};
 use hyper::{Body, Request, Response, Server};
 use smol::{Async, Task};
 
+/// Serves a request and returns a response.
 async fn serve(req: Request<Body>, host: String) -> Result<Response<Body>> {
     println!("Serving {}{}", host, req.uri());
-    Ok(Response::new(Body::from("Hello from hyper!")))
+    Ok(Response::new(Body::from("Hello World!")))
 }
 
+/// Listens for incoming connections and serves them.
 async fn listen(listener: Async<TcpListener>, tls: Option<TlsAcceptor>) -> Result<()> {
+    // Format the full host address.
     let host = &match tls {
         None => format!("http://{}", listener.get_ref().local_addr()?),
         Some(_) => format!("https://{}", listener.get_ref().local_addr()?),
     };
     println!("Listening on {}", host);
 
+    // Start a hyper server.
     Server::builder(SmolListener::new(listener, tls))
         .executor(SmolExecutor)
         .serve(make_service_fn(move |_| {
@@ -35,20 +54,22 @@ async fn listen(listener: Async<TcpListener>, tls: Option<TlsAcceptor>) -> Resul
 }
 
 fn main() -> Result<()> {
+    // Initialize TLS with the local certificate, private key, and password.
     let identity = Identity::from_pkcs12(include_bytes!("../identity.pfx"), "password")?;
     let tls = TlsAcceptor::from(native_tls::TlsAcceptor::new(identity)?);
 
-    // Create a thread pool.
+    // Create an executor thread pool.
     for _ in 0..num_cpus::get().max(1) {
         thread::spawn(|| smol::run(future::pending::<()>()));
     }
 
-    smol::block_on(async {
+    // Start HTTP and HTTPS servers.
+    smol::run(Task::spawn(async {
         let http = listen(Async::<TcpListener>::bind("127.0.0.1:8000")?, None);
         let https = listen(Async::<TcpListener>::bind("127.0.0.1:8001")?, Some(tls));
         future::try_join(http, https).await?;
         Ok(())
-    })
+    }))
 }
 
 #[derive(Clone)]
@@ -81,9 +102,11 @@ impl hyper::server::accept::Accept for SmolListener {
     ) -> Poll<Option<Result<Self::Conn, Self::Error>>> {
         let poll = Pin::new(&mut self.listener.incoming()).poll_next(cx);
         let stream = futures::ready!(poll).unwrap()?;
+
         let stream = match &self.tls {
             None => SmolStream::Plain(stream),
             Some(tls) => {
+                // In case of HTTPS, start establishing a secure TLS connection.
                 let tls = tls.clone();
                 SmolStream::Handshake(Box::pin(async move {
                     tls.accept(stream)
@@ -92,6 +115,7 @@ impl hyper::server::accept::Accept for SmolListener {
                 }))
             }
         };
+
         Poll::Ready(Some(Ok(stream)))
     }
 }
@@ -99,7 +123,7 @@ impl hyper::server::accept::Accept for SmolListener {
 enum SmolStream {
     Plain(Async<TcpStream>),
     Tls(TlsStream<Async<TcpStream>>),
-    Handshake(Pin<Box<dyn Future<Output = io::Result<TlsStream<Async<TcpStream>>>> + Send>>),
+    Handshake(future::BoxFuture<'static, io::Result<TlsStream<Async<TcpStream>>>>),
 }
 
 impl hyper::client::connect::Connection for SmolStream {
@@ -156,7 +180,7 @@ impl tokio::io::AsyncWrite for SmolStream {
     fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         match &mut *self {
             SmolStream::Plain(s) => {
-                s.get_ref().shutdown(std::net::Shutdown::Write)?;
+                s.get_ref().shutdown(Shutdown::Write)?;
                 Poll::Ready(Ok(()))
             }
             SmolStream::Tls(s) => Pin::new(s).poll_close(cx),

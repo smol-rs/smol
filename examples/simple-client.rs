@@ -1,4 +1,10 @@
-//! Prints the HTML contents of http://www.example.com
+//! A simple HTTP+TLS client based on `async-native-tls`.
+//!
+//! Run with:
+//!
+//! ```
+//! cargo run --example simple-client
+//! ```
 
 use std::net::TcpStream;
 
@@ -7,6 +13,7 @@ use futures::prelude::*;
 use smol::Async;
 use url::Url;
 
+/// Sends a GET request and fetches the response.
 async fn fetch(addr: &str) -> Result<Vec<u8>> {
     // Parse the URL.
     let url = Url::parse(addr)?;
@@ -26,16 +33,16 @@ async fn fetch(addr: &str) -> Result<Vec<u8>> {
 
     // Connect to the host.
     let mut stream = Async::<TcpStream>::connect(format!("{}:{}", host, port)).await?;
-    let mut resp = Vec::new();
 
     // Send the request and wait for the response.
+    let mut resp = Vec::new();
     match url.scheme() {
         "http" => {
             stream.write_all(req.as_bytes()).await?;
             stream.read_to_end(&mut resp).await?;
         }
         "https" => {
-            // In case of HTTPS, establish secure TLS connection first.
+            // In case of HTTPS, establish a secure TLS connection first.
             let mut stream = async_native_tls::connect(&host, stream).await?;
             stream.write_all(req.as_bytes()).await?;
             stream.read_to_end(&mut resp).await?;

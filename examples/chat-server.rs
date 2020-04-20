@@ -1,3 +1,17 @@
+//! A TCP chat server.
+//!
+//! First start a server:
+//!
+//! ```
+//! cargo run --example chat-server
+//! ```
+//!
+//! Then start clients:
+//!
+//! ```
+//! cargo run --example chat-client
+//! ```
+
 use std::collections::HashMap;
 use std::net::{SocketAddr, TcpListener, TcpStream};
 
@@ -6,29 +20,38 @@ use futures::prelude::*;
 use piper::{Receiver, Sender, Shared};
 use smol::{Async, Task};
 
-enum Update {
-    Join(SocketAddr, Shared<Async<TcpStream>>),
+type Client = Shared<Async<TcpStream>>;
+
+enum Event {
+    Join(SocketAddr, Client),
     Leave(SocketAddr),
     Message(SocketAddr, String),
 }
 
-async fn dispatch(receiver: Receiver<Update>) -> io::Result<()> {
-    let mut map = HashMap::new();
+/// Dispatches events to clients.
+async fn dispatch(receiver: Receiver<Event>) -> io::Result<()> {
+    // Currently active clients.
+    let mut map = HashMap::<SocketAddr, Client>::new();
 
-    while let Some(update) = receiver.recv().await {
-        let output = match update {
-            Update::Join(addr, stream) => {
+    // Receive incoming events.
+    while let Some(event) = receiver.recv().await {
+        // Process the event and format a message to send to clients.
+        let output = match event {
+            Event::Join(addr, stream) => {
                 map.insert(addr, stream);
                 format!("{} has joined\n", addr)
             }
-            Update::Leave(addr) => {
+            Event::Leave(addr) => {
                 map.remove(&addr);
                 format!("{} has left\n", addr)
             }
-            Update::Message(addr, msg) => format!("{} says: {}\n", addr, msg),
+            Event::Message(addr, msg) => format!("{} says: {}\n", addr, msg),
         };
 
+        // Display the event in the server process.
         print!("{}", output);
+
+        // Send the event to all active clients.
         for stream in map.values_mut() {
             stream.write_all(output.as_bytes()).await?;
         }
@@ -36,33 +59,47 @@ async fn dispatch(receiver: Receiver<Update>) -> io::Result<()> {
     Ok(())
 }
 
-async fn client(sender: Sender<Update>, stream: Shared<Async<TcpStream>>) -> io::Result<()> {
-    let addr = stream.get_ref().peer_addr()?;
-    let mut lines = BufReader::new(stream).lines();
+/// Reads messages from the client and forwards them to the dispatcher task.
+async fn read_messages(sender: Sender<Event>, client: Client) -> io::Result<()> {
+    let addr = client.get_ref().peer_addr()?;
+    let mut lines = BufReader::new(client).lines();
 
     while let Some(line) = lines.next().await {
-        sender.send(Update::Message(addr, line?)).await;
+        let line = line?;
+        sender.send(Event::Message(addr, line)).await;
     }
     Ok(())
 }
 
 fn main() -> io::Result<()> {
     smol::run(async {
+        // Create a listener for incoming client connections.
         let listener = Async::<TcpListener>::bind("127.0.0.1:6000")?;
-        println!("Listening on {}", listener.get_ref().local_addr()?);
 
+        // Intro messages.
+        println!("Listening on {}", listener.get_ref().local_addr()?);
+        println!("Start a chat client now!\n");
+
+        // Spawn a background task that dispatches events to clients.
         let (sender, receiver) = piper::chan(100);
         Task::spawn(dispatch(receiver)).unwrap().detach();
 
         loop {
+            // Accept the next connection.
             let (stream, addr) = listener.accept().await?;
-            let stream = Shared::new(stream);
+            let client = Shared::new(stream);
             let sender = sender.clone();
 
+            // Spawn a background task reading messages from the client.
             Task::spawn(async move {
-                sender.send(Update::Join(addr, stream.clone())).await;
-                let _ = client(sender.clone(), stream).await;
-                sender.send(Update::Leave(addr)).await;
+                // Client starts with a `Join` event.
+                sender.send(Event::Join(addr, client.clone())).await;
+
+                // Read messages from the client and ignore I/O errors when the client quits.
+                let _ = read_messages(sender.clone(), client).await;
+
+                // Client ends with a `Leave` event.
+                sender.send(Event::Leave(addr)).await;
             })
             .detach();
         }

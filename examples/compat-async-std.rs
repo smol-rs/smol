@@ -1,4 +1,4 @@
-use std::time::{Instant, Duration};
+use std::time::{Duration, Instant};
 
 use async_std::task::sleep;
 

@@ -1,14 +1,20 @@
-// To access the HTTPS version, import the certificate into Chrome/Firefox:
-// 1. Open settings and go to the certificate 'Authorities' list
-// 2. Click 'Import' and select certificate.pem
-// 3. Enable 'Trust this CA to identify websites' and click OK
-// 4. Restart the browser and go to https://127.0.0.1:8001
-//
-// The certificate was generated using minica and openssl:
-// 1. minica --domains localhost -ip-addresses 127.0.0.1 -ca-cert certificate.pem
-// 2. openssl pkcs12 -export -out identity.pfx -inkey localhost/key.pem -in localhost/cert.pem
+//! A simple HTTP+TLS server based on `async-native-tls`.
+//!
+//! Run with:
+//!
+//! ```
+//! cargo run --example simple-server
+//! ```
+//!
+//! Open in the browser any of these addresses:
+//!
+//! - http://localhost:8000/
+//! - https://localhost:8001/ (you'll need to import the TLS certificate first!)
+//!
+//! Refer to `README.md` to see how to import or generate the TLS certificate.
 
 use std::net::{TcpListener, TcpStream};
+use std::thread;
 
 use anyhow::Result;
 use async_native_tls::{Identity, TlsAcceptor};
@@ -23,6 +29,7 @@ Content-Length: 47
 <!DOCTYPE html><html><body>Hello!</body></html>
 "#;
 
+/// Reads a request from the client and sends it a response.
 async fn serve(mut stream: Async<TcpStream>, tls: Option<TlsAcceptor>) -> Result<()> {
     match tls {
         None => {
@@ -31,7 +38,10 @@ async fn serve(mut stream: Async<TcpStream>, tls: Option<TlsAcceptor>) -> Result
         }
         Some(tls) => {
             println!("Serving https://{}", stream.get_ref().local_addr()?);
+
+            // In case of HTTPS, establish a secure TLS connection first.
             let mut stream = tls.accept(stream).await?;
+
             stream.write_all(RESPONSE).await?;
             stream.flush().await?;
             stream.close().await?;
@@ -40,21 +50,35 @@ async fn serve(mut stream: Async<TcpStream>, tls: Option<TlsAcceptor>) -> Result
     Ok(())
 }
 
+/// Listens for incoming connections and serves them.
 async fn listen(listener: Async<TcpListener>, tls: Option<TlsAcceptor>) -> Result<()> {
+    // Display the full host address.
     match &tls {
         None => println!("Listening on http://{}", listener.get_ref().local_addr()?),
         Some(_) => println!("Listening on https://{}", listener.get_ref().local_addr()?),
     }
+
     loop {
+        // Accept the next connection.
         let (stream, _) = listener.accept().await?;
+
+        // Spawn a background task serving this connection.
         Task::spawn(serve(stream, tls.clone())).unwrap().detach();
     }
 }
 
 fn main() -> Result<()> {
+    // Initialize TLS with the local certificate, private key, and password.
     let identity = Identity::from_pkcs12(include_bytes!("../identity.pfx"), "password")?;
     let tls = TlsAcceptor::from(native_tls::TlsAcceptor::new(identity)?);
 
+    // Create an executor thread pool.
+    let num_threads = num_cpus::get().max(1);
+    for _ in 0..num_threads {
+        thread::spawn(|| smol::run(future::pending::<()>()));
+    }
+
+    // Start HTTP and HTTPS servers.
     smol::run(async {
         let http = listen(Async::<TcpListener>::bind("127.0.0.1:8000")?, None);
         let https = listen(Async::<TcpListener>::bind("127.0.0.1:8001")?, Some(tls));

@@ -22,6 +22,21 @@ A small and fast async runtime.
 * Stdio - Asynchronous stdin, stdout, and stderr.
 * Timer - Efficient userspace timers.
 
+# TODO Crate recommendations
+
+# TODO certificate and private key
+```
+// To access the HTTPS version, import the certificate into Chrome/Firefox:
+// 1. Open settings and go to the certificate 'Authorities' list
+// 2. Click 'Import' and select certificate.pem
+// 3. Enable 'Trust this CA to identify websites' and click OK
+// 4. Restart the browser and go to https://127.0.0.1:8001
+//
+// The certificate was generated using minica and openssl:
+// 1. minica --domains localhost -ip-addresses 127.0.0.1 -ca-cert certificate.pem
+// 2. openssl pkcs12 -export -out identity.pfx -inkey localhost/key.pem -in localhost/cert.pem
+```
+
 ## Examples
 
 * [Async-h1 client](./examples/async-h1-client.rs)

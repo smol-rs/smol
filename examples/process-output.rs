@@ -1,8 +1,8 @@
 use std::env;
-use std::process::{Stdio,Command};
+use std::process::{Command, Stdio};
 
-use futures::prelude::*;
 use futures::io;
+use futures::prelude::*;
 use smol::blocking;
 
 fn main() -> io::Result<()> {
@@ -25,7 +25,8 @@ fn main() -> io::Result<()> {
         future::try_join(
             io::copy(child_out, &mut stdout),
             io::copy(child_err, &mut stderr),
-        ).await?;
+        )
+        .await?;
 
         println!("{}", blocking!(child.wait())?);
         Ok(())

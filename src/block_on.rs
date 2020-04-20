@@ -1,4 +1,9 @@
 //! Implementation of [`block_on()`].
+//!
+//! This is equivalent to [`futures::executor::block_on()`], but slightly more efficient.
+//!
+//! The following blog post explains it in detail:
+//! - https://stjepang.github.io/2020/01/25/build-your-own-block-on.html
 
 use std::cell::RefCell;
 use std::future::Future;
@@ -36,9 +41,6 @@ use crate::context;
 /// })
 /// ```
 pub fn block_on<T>(future: impl Future<Output = T>) -> T {
-    // The implementation of this function is explained in the following blog post:
-    // https://stjepang.github.io/2020/01/25/build-your-own-block-on.html
-
     thread_local! {
         // Parker and waker associated with the current thread.
         static CACHE: RefCell<(Parker, Waker)> = {
