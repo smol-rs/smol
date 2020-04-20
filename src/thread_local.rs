@@ -80,11 +80,12 @@ impl ThreadLocalExecutor {
                 } else if let Some(injector) = injector.upgrade() {
                     // If scheduling from a different thread, push into the injector queue.
                     injector.push(runnable);
-                    // Trigger an I/O event to let the original thread know that a task has been
-                    // scheduled. If that thread is inside epoll/kqueue/wepoll, an I/O event will
-                    // wake it up.
-                    event.set();
                 }
+
+                // Trigger an I/O event to let the original thread know that a task has been
+                // scheduled. If that thread is inside epoll/kqueue/wepoll, an I/O event will wake
+                // it up.
+                event.set();
             };
 
             // Create a task, schedule it, and return its `Task` handle.
