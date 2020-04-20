@@ -39,7 +39,7 @@ impl Timer {
 
 impl Drop for Timer {
     fn drop(&mut self) {
-        if let Some(id) = self.id {
+        if let Some(id) = self.id.take() {
             // Deregister the timer from the reactor.
             Reactor::get().remove_timer(self.when, id);
         }
@@ -52,7 +52,7 @@ impl Future for Timer {
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         // Check if the timer has already fired.
         if Instant::now() >= self.when {
-            if let Some(id) = self.id {
+            if let Some(id) = self.id.take() {
                 // Deregister the timer from the reactor.
                 Reactor::get().remove_timer(self.when, id);
             }

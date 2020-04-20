@@ -80,6 +80,9 @@
 //! Finally, you can mix this runtime with [async-std][compat-async-std] and [tokio][compat-tokio]
 //! to use runtime-dependent libraries like [surf][compat-surf] and [reqwest][compat-reqwest].
 //!
+//! TODO: See [here][compat] for an example of using this runtime with libraries like async-std, tokio,
+//! reqwest, and surf.
+//!
 //! [epoll]: https://en.wikipedia.org/wiki/Epoll
 //! [kqueue]: https://en.wikipedia.org/wiki/Kqueue
 //! [wepoll]: https://github.com/piscisaureus/wepoll

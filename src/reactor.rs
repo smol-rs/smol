@@ -129,20 +129,19 @@ impl Reactor {
     pub fn insert_timer(&self, when: Instant, waker: Waker) -> u64 {
         let mut timers = self.timers.lock();
 
-        // If this timer is going to be the earliest one, interrupt the reactor.
-        if let Some((first, _)) = timers.keys().next() {
-            if when < *first {
-                self.event.set();
-            }
-        }
-
-        // Generate a new ID.
+        // Generate a new timer ID.
         static ID_GENERATOR: AtomicU64 = AtomicU64::new(1);
         let id = ID_GENERATOR.fetch_add(1, Ordering::Relaxed);
         assert!(id < u64::max_value() / 2, "exhausted timer IDs");
 
         // Insert this timer into the timers map.
         timers.insert((when, id), waker);
+
+        // If this timer is now the earliest one, interrupt the reactor.
+        if timers.keys().next().map(|(when, _)| *when) == Some(when) {
+            self.event.set();
+        }
+
         id
     }
 
@@ -189,26 +188,27 @@ impl ReactorLock<'_> {
         // TODO: document this function.......................
         self.reactor.event.clear();
 
-        let next_timer = {
+        let timeout = {
             // Split timers into ready and pending timers.
             let mut timers = self.reactor.timers.lock();
-            let pending = timers.split_off(&(Instant::now(), 0));
+            let now = Instant::now();
+            let pending = timers.split_off(&(now, 0));
             let ready = mem::replace(&mut *timers, pending);
+
+            let timeout = if ready.is_empty() && block {
+                // Calculate the timeout till the first timer fires.
+                timers.keys().next().map(|(when, _)| when.saturating_duration_since(now))
+            } else {
+                // If there are ready timers or this poll doesn't block, the timeout is zero.
+                Some(Duration::from_secs(0))
+            };
 
             // Wake up tasks waiting on timers.
             for (_, waker) in ready {
                 waker.wake();
             }
-            // Find when the next timer fires.
-            timers.keys().next().map(|(when, _)| *when)
-        };
 
-        let timeout = if block {
-            // Calculate the timeout till the first timer fires.
-            next_timer.map(|when| when.saturating_duration_since(Instant::now()))
-        } else {
-            // If this poll doesn't block, the timeout is zero.
-            Some(Duration::from_secs(0))
+            timeout
         };
 
         // Block on I/O events.

@@ -1,4 +1,25 @@
 //! The work-stealing executor.
+//!
+//! Tasks created by [`Task::spawn()`] go into this executor. Any thread calling [`run()`]
+//! initializes a `Worker` that participates in work stealing, which is allowed to run any task in
+//! this executor or in other workers.
+//!
+//! Since tasks can be stolen by any worker and thus move from thread to thread, their futures must
+//! implement [`Send`].
+//!
+//! There is only one global instance of this type, accessible by [`WorkStealingExecutor::get()`].
+//!
+//! Work stealing is a strategy that reduces contention in a multi-threaded environment. If all
+//! invocations of [`run()`] used the same global task queue all the time, they would constantly
+//! "step on each other's toes", causing a lot of CPU cache traffic and too often waste time
+//! retrying queue operations in compare-and-swap loops.
+//!
+//! The solution is to have a separate queue in each invocation of [`run()`], called a "worker".
+//! Each thread is primarily using its own worker. Once there are no more tasks in the worker, we
+//! either grab a batch of tasks from the main global queue, or steal tasks from other workers.
+//! Of course, work-stealing still causes contention in some cases, but much less often.
+//!
+//! More about work stealing: https://en.wikipedia.org/wiki/Work_stealing
 
 use std::cell::Cell;
 use std::future::Future;
@@ -25,27 +46,6 @@ use crate::throttle;
 scoped_thread_local!(static WORKER: for<'a> &'a Worker<'a>);
 
 /// The global work-stealing executor.
-///
-/// Tasks created by `Task::spawn()` go into this executor. Any calling `run()` initializes a
-/// `Worker` that participates in work stealing, which is allowed to run any task in this executor
-/// or in other workers.
-///
-/// Since tasks can be stolen by any worker and thus move from thread to thread, their futures must
-/// implement `Send`.
-///
-/// There is only one global instance of this type, accessible by `WorkStealingExecutor::get()`.
-///
-/// Work stealing is a strategy that reduces contention in a multi-threaded environment. If all
-/// invocations of `run()` used the same global task queue all the time, they would constantly
-/// "step on each other's toes", causing a lot of CPU cache traffic and too often waste time
-/// retrying queue operations in compare-and-swap loops.
-///
-/// The solution is to have a separate queue in each invocation of `run()`, called a "worker".
-/// Each thread is primarily using its own worker. Once there are no more tasks in the worker, we
-/// either grab a batch of tasks from the main global queue, or steal tasks from other workers.
-/// Of course, work-stealing still causes contention in some cases, but much less often.
-///
-/// More about work stealing: https://en.wikipedia.org/wiki/Work_stealing
 pub(crate) struct WorkStealingExecutor {
     /// When a thread that is not inside `run()` spawns or wakes a task, it goes into this queue.
     injector: deque::Injector<Runnable>,
@@ -88,7 +88,8 @@ impl WorkStealingExecutor {
             } else {
                 // If scheduling from a non-worker thread, push into the injector queue.
                 self.injector.push(runnable);
-                // Trigger an I/O event to let workers know that a task has been scheduled.
+
+                // Notify workers that there is a task in the injector queue.
                 self.event.set();
             }
         };
@@ -159,7 +160,11 @@ impl Worker<'_> {
                         return false;
                     }
                     Some(r) => {
-                        // Notify other workers that there may be more tasks.
+                        // Notify other workers that there may be stealable tasks.
+                        //
+                        // This is necessary because `pop()` sometimes re-shuffles tasks between
+                        // queues, which races with other workers looking for tasks. They might
+                        // believe there are no tasks while there really are, so we notify here.
                         self.executor.event.set();
 
                         // Run the task.
@@ -194,6 +199,9 @@ impl Worker<'_> {
         if let Some(r) = self.slot.replace(runnable.into()) {
             // If the slot had a task, push it into the queue.
             self.queue.push(r);
+
+            // Notify other workers that there are stealable tasks.
+            self.executor.event.set();
         }
     }
 
@@ -203,8 +211,10 @@ impl Worker<'_> {
         if let Some(r) = self.slot.take().or_else(|| self.queue.pop()) {
             return Some(r);
         }
+
         // If not, fetch more tasks from the injector queue, the reactor, or other workers.
         self.fetch();
+
         // Check the slot and the queue again.
         self.slot.take().or_else(|| self.queue.pop())
     }
@@ -225,6 +235,7 @@ impl Worker<'_> {
             self.slot.set(Some(r));
             return;
         }
+
         // If there is at least one task in the queue, return.
         if !self.queue.is_empty() {
             return;
@@ -259,12 +270,14 @@ impl Drop for Worker<'_> {
         // Unregister the worker.
         self.executor.stealers.write().unwrap().remove(self.key);
 
-        // Flush the slot.
-        self.push(None);
+        // Move the task in the slot into the injector queue.
+        if let Some(r) = self.slot.take() {
+            r.schedule();
+        }
 
         // Move all tasks in this worker's queue into the injector queue.
         while let Some(r) = self.queue.pop() {
-            self.executor.injector.push(r);
+            r.schedule();
         }
     }
 }

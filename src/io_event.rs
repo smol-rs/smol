@@ -55,7 +55,7 @@ struct SelfPipe {
 impl SelfPipe {
     /// Creates a self-pipe.
     fn new() -> io::Result<SelfPipe> {
-        let (writer, reader) = pipe()?;
+        let (writer, reader) = socket_pair()?;
         writer.set_send_buffer_size(1)?;
         reader.set_recv_buffer_size(1)?;
         Ok(SelfPipe {
@@ -109,7 +109,7 @@ impl SelfPipe {
 
 /// TODO
 #[cfg(unix)]
-fn pipe() -> io::Result<(Socket, Socket)> {
+fn socket_pair() -> io::Result<(Socket, Socket)> {
     let (sock1, sock2) = Socket::pair(Domain::unix(), Type::stream(), None)?;
     sock1.set_nonblocking(true)?;
     sock2.set_nonblocking(true)?;
@@ -117,16 +117,15 @@ fn pipe() -> io::Result<(Socket, Socket)> {
 }
 
 /// TODO
+/// TODO The only portable way of manually triggering I/O events is to create a socket and
+/// send/receive dummy data on it. This pattern is also known as "the self-pipe trick".
+/// See the links below for more information.
+///
+/// https://github.com/python-trio/trio/blob/master/trio/_core/_wakeup_socketpair.py
+/// https://stackoverflow.com/questions/24933411/how-to-emulate-socket-socketpair-on-windows
+/// https://gist.github.com/geertj/4325783
 #[cfg(windows)]
-fn pipe() -> io::Result<(Socket, Socket)> {
-    // TODO The only portable way of manually triggering I/O events is to create a socket and
-    // send/receive dummy data on it. This pattern is also known as "the self-pipe trick".
-    // See the links below for more information.
-    //
-    // https://github.com/python-trio/trio/blob/master/trio/_core/_wakeup_socketpair.py
-    // https://stackoverflow.com/questions/24933411/how-to-emulate-socket-socketpair-on-windows
-    // https://gist.github.com/geertj/4325783
-
+fn socket_pair() -> io::Result<(Socket, Socket)> {
     // Create a temporary listener.
     let listener = Socket::new(Domain::ipv4(), Type::stream(), None)?;
     listener.bind(&SocketAddr::from(([127, 0, 0, 1], 0)).into())?;

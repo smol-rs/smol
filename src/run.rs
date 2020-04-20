@@ -33,6 +33,7 @@ pub fn run<T>(future: impl Future<Output = T>) -> T {
     let local = ThreadLocalExecutor::new();
     let ws_executor = WorkStealingExecutor::get();
     let worker = ws_executor.worker();
+    let reactor = Reactor::get();
 
     // Create a waker that triggers an I/O event in the thread-local scheduler.
     let ev = local.event().clone();
@@ -52,17 +53,17 @@ pub fn run<T>(future: impl Future<Output = T>) -> T {
         // 1. `future` - the main future.
         // 2. `local - the thread-local executor.
         // 3. `worker` - the work-stealing executor.
-        // 4. `Reactor::get()` - the reactor.
+        // 4. `reactor` - the reactor.
         //
         // When all four components are out of work, we block the current thread on
         // epoll/kevent/wepoll. If new work comes in that isn't naturally triggered by an I/O event
         // registered with `Async` handles, we use `IoEvent`s to simulate an I/O event that will
         // unblock the thread:
         //
-        // - When the main future is woken, `local.event` is triggered.
-        // - When thread-local executor gets new work, `local.event` is triggered.
-        // - When work-stealing executor gets new work, `ws_executor.event` is triggered.
-        // - When a new earliest timer is registered, `Reactor::get().event` is triggered.
+        // - When the main future is woken, `local.event()` is triggered.
+        // - When thread-local executor gets new work, `local.event()` is triggered.
+        // - When work-stealing executor gets new work, `ws_executor.event()` is triggered.
+        // - When a new earliest timer is registered, `reactor.event()` is triggered.
         //
         // This way we make sure that if any changes happen that might give us new work will
         // unblock epoll/kevent/wepoll and let us continue the loop.
@@ -76,7 +77,7 @@ pub fn run<T>(future: impl Future<Output = T>) -> T {
             // 3. Run a batch of tasks in the work-stealing executor.
             let more_worker = worker.execute();
             // 4. Poll the reactor.
-            Reactor::get().poll().expect("failure while polling I/O");
+            reactor.poll().expect("failure while polling I/O");
 
             // If there is more work in the thread-local or the work-stealing executor, continue
             // the loop.
@@ -84,22 +85,22 @@ pub fn run<T>(future: impl Future<Output = T>) -> T {
                 continue;
             }
 
-            // Prepare for blocking until the reactor is locked or `local.event` is triggered.
+            // Prepare for blocking until the reactor is locked or `local.event()` is triggered.
             //
-            // Note that there is no need to wait for `executor.event`. If the reactor is locked
-            // immediately, we'll check for the I/O event right after that anyway.
+            // Note that there is no need to wait for `ws_executor.event()`. If the reactor is
+            // locked immediately, we'll check for the I/O event right after that anyway.
             //
             // If some other worker is holding the reactor locked, it will be unblocked as soon as
             // the I/O event is triggered. Then, another worker will be allowed to lock the
             // reactor, and will be unblocked if there is more work to do. Every worker triggers
-            // `worker.executor.event` each time it finds a runnable task.
-            let lock = Reactor::get().lock();
+            // `ws_executor.event()` each time it finds a runnable task.
+            let lock = reactor.lock();
             let ready = local.event().ready();
             futures::pin_mut!(lock);
             futures::pin_mut!(ready);
 
-            // Block until either the reactor is locked or `local.event` is triggered.
-            if let Either::Left((mut reactor, _)) = block_on(future::select(lock, ready)) {
+            // Block until either the reactor is locked or `local.event()` is triggered.
+            if let Either::Left((mut reactor_lock, _)) = block_on(future::select(lock, ready)) {
                 // Clear the two I/O events.
                 let local_ev = local.event().clear();
                 let ws_ev = ws_executor.event().clear();
@@ -110,7 +111,7 @@ pub fn run<T>(future: impl Future<Output = T>) -> T {
                 }
 
                 // Block until an I/O event occurs.
-                reactor.wait().expect("failure while waiting on I/O");
+                reactor_lock.wait().expect("failure while waiting on I/O");
             }
         }
     })
