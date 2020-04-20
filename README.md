@@ -6,7 +6,7 @@ https://discord.gg/5RxMVnr
 
 ## Goals
 
-* Small - Fits into a single source file.
+* Small - Around 1500 lines of code.
 * Fast - On par with async-std and Tokio.
 * Safe - Written in 100% safe Rust.
 * Complete - Fully featured and ready for production.
