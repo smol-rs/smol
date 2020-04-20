@@ -2,6 +2,8 @@
 
 A small and fast async runtime.
 
+https://discord.gg/5RxMVnr
+
 ## Goals
 
 * Small - Fits into a single source file.
@@ -21,6 +23,12 @@ A small and fast async runtime.
 * Files - Filesystem manipulation operations.
 * Stdio - Asynchronous stdin, stdout, and stderr.
 * Timer - Efficient userspace timers.
+
+# Documentation
+
+```
+cargo doc --document-private-items --no-deps --open
+```
 
 # TODO Crate recommendations
 
