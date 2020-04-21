@@ -104,7 +104,7 @@ certificate from this repository (Chrome/Firefox):
 1. Open browser settings and go to the certificate *Authorities* list.
 2. Click *Import* and select `certificate.pem`.
 3. Enable *Trust this CA to identify websites* and click *OK*.
-4. Restart the browser and go to [https://127.0.0.1:8001](https://127.0.0.1:8001)
+4. Restart the browser (yes, you have to!) and go to [https://127.0.0.1:8001](https://127.0.0.1:8001)
 
 The certificate file was generated using
 [minica](https://github.com/jsha/minica) and

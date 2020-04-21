@@ -41,7 +41,7 @@ pub struct Async<T> {
 
 #[cfg(unix)]
 impl<T: AsRawFd> Async<T> {
-    /// Converts a non-blocking I/O handle into an async I/O handle.
+    /// Creates an async I/O handle.
     ///
     /// TODO: explain AsRawFd and AsRawSocket
     /// TODO: **warning** for unix users: the I/O handle must be compatible with epoll/kqueue!
@@ -63,7 +63,7 @@ impl<T: AsRawFd> AsRawFd for Async<T> {
 
 #[cfg(windows)]
 impl<T: AsRawSocket> Async<T> {
-    /// Converts a non-blocking I/O handle into an async I/O handle.
+    /// Creates an async I/O handle.
     ///
     /// TODO
     pub fn new(io: T) -> io::Result<Async<T>> {
