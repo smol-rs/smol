@@ -1,3 +1,4 @@
+// TODO: document
 use std::collections::{HashSet, VecDeque};
 
 use anyhow::Result;

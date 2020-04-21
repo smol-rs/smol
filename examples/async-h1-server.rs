@@ -20,7 +20,7 @@ use anyhow::Result;
 use async_native_tls::{Identity, TlsAcceptor};
 use futures::prelude::*;
 use http_types::{Request, Response, StatusCode};
-use piper::{Lock, Shared};
+use piper::{Arc, Mutex};
 use smol::{Async, Task};
 
 /// Serves a request and returns a response.
@@ -50,13 +50,13 @@ async fn listen(listener: Async<TcpListener>, tls: Option<TlsAcceptor>) -> Resul
         // Spawn a background task serving this connection.
         let task = match &tls {
             None => {
-                let stream = Shared::new(stream);
+                let stream = Arc::new(stream);
                 Task::spawn(async move { async_h1::accept(&host, stream, serve).await })
             }
             Some(tls) => {
                 // In case of HTTPS, establish a secure TLS connection first.
                 let stream = tls.accept(stream).await?;
-                let stream = Shared::new(Lock::new(stream));
+                let stream = Arc::new(Mutex::new(stream));
                 Task::spawn(async move { async_h1::accept(&host, stream, serve).await })
             }
         };

@@ -1,3 +1,4 @@
+// TODO: document
 //! TCP echo server.
 //!
 //! To send messages, do:

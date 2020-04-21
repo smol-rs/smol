@@ -8,7 +8,22 @@ use crate::reactor::Reactor;
 
 /// Fires at the chosen point in time.
 ///
-/// TODO
+/// # Examples
+///
+/// Sleep for 1 second:
+///
+/// ```
+/// use smol::Timer;
+/// use std::time::Duration;
+///
+/// async fn sleep(dur: Duration) {
+///     Timer::after(dur).await;
+/// }
+///
+/// # smol::run(async {
+/// sleep(Duration::from_secs(1)).await;
+/// # });
+/// ```
 #[derive(Debug)]
 pub struct Timer {
     /// A unique ID for this timer.

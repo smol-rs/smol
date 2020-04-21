@@ -1,3 +1,4 @@
+// TODO: document
 #[cfg(windows)]
 fn main() -> std::io::Result<()> {
     use std::path::PathBuf;

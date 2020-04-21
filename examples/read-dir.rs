@@ -1,3 +1,4 @@
+// TODO: document
 //! Lists files in a directory given as an argument.
 
 use std::env;

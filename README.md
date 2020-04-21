@@ -1,30 +1,26 @@
 # smol
 
-A small and fast async runtime.
+A small and fast async runtime in Rust.
 
 https://discord.gg/5RxMVnr
 
-## Goals
+### Goals
 
-* Small - Around 1500 lines of code.
-* Fast - On par with async-std and Tokio.
-* Safe - Written in 100% safe Rust.
-* Complete - Fully featured and ready for production.
-* Documented - Simple code, easy to understand and modify.
-* Lightweight - Small dependencies, relies on epoll/kqueue/wepoll.
+* Small - 1500 lines of code.
+* Simple - Well-documented, easy to maintain.
+* Fast - Based on [async-task], [crossbeam], and [piper].
+* Safe - Just 1 line of unsafe code for Windows support.
 * Portable - Linux, Android, macOS, iOS, Windows, FreeBSD, OpenBSD, NetBSD, DragonFly BSD.
 
-## Features
+### Features
 
-* Executor - Configurable threads, work stealing, supports non-send futures.
-* Blocking - Thread pool for isolating blocking code.
-* Networking - TCP, UDP, Unix domain sockets, and custom files/sockets.
-* Process - Spawns child processes and interacts with their I/O.
-* Files - Filesystem manipulation operations.
-* Stdio - Asynchronous stdin, stdout, and stderr.
+* Async I/O - TCP, UDP, Unix domain sockets, and custom FDs/sockets.
+* Thread-local executor - For non-send futures.
+* Work-stealing executor - adapts to uneven workload.
+* Blocking executor - For files, processes, and standard I/O.
 * Timer - Efficient userspace timers.
 
-# Documentation
+### Documentation
 
 ```
 cargo doc --document-private-items --no-deps --open

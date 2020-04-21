@@ -1,3 +1,4 @@
+// TODO: document
 use std::net::TcpStream;
 use std::pin::Pin;
 use std::task::{Context, Poll};

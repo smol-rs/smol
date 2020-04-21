@@ -1,3 +1,4 @@
+// TODO: document
 //! Prints a file given as an argument to stdout.
 
 use std::env;

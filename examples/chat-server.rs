@@ -17,10 +17,10 @@ use std::net::{SocketAddr, TcpListener, TcpStream};
 
 use futures::io::{self, BufReader};
 use futures::prelude::*;
-use piper::{Receiver, Sender, Shared};
+use piper::{Receiver, Sender, Arc};
 use smol::{Async, Task};
 
-type Client = Shared<Async<TcpStream>>;
+type Client = Arc<Async<TcpStream>>;
 
 enum Event {
     Join(SocketAddr, Client),
@@ -53,7 +53,8 @@ async fn dispatch(receiver: Receiver<Event>) -> io::Result<()> {
 
         // Send the event to all active clients.
         for stream in map.values_mut() {
-            stream.write_all(output.as_bytes()).await?;
+            // Ignore errors because the client might disconnect at any point.
+            let _ = stream.write_all(output.as_bytes()).await;
         }
     }
     Ok(())
@@ -87,7 +88,7 @@ fn main() -> io::Result<()> {
         loop {
             // Accept the next connection.
             let (stream, addr) = listener.accept().await?;
-            let client = Shared::new(stream);
+            let client = Arc::new(stream);
             let sender = sender.clone();
 
             // Spawn a background task reading messages from the client.

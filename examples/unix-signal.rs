@@ -1,3 +1,4 @@
+// TODO: document
 #[cfg(unix)]
 fn main() -> std::io::Result<()> {
     use std::os::unix::net::UnixStream;

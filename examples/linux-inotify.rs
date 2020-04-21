@@ -1,3 +1,4 @@
+// TODO: document
 #[cfg(target_os = "linux")]
 fn main() -> std::io::Result<()> {
     use std::ffi::OsString;

@@ -45,17 +45,17 @@ pub(crate) struct Reactor {
     sys: sys::Reactor,
 
     /// Registered sources.
-    sources: piper::Lock<Slab<Arc<Source>>>,
+    sources: piper::Mutex<Slab<Arc<Source>>>,
 
     /// Temporary storage for I/O events when polling the reactor.
-    events: piper::Mutex<sys::Events>,
+    events: piper::Lock<sys::Events>,
 
     /// An ordered map of registered timers.
     ///
     /// Timers are in the order in which they fire. The `u64` in this type is a unique timer ID
     /// used to distinguish timers that fire at the same time. The `Waker` represents the task
     /// awaiting the timer.
-    timers: piper::Lock<BTreeMap<(Instant, u64), Waker>>,
+    timers: piper::Mutex<BTreeMap<(Instant, u64), Waker>>,
 
     /// An I/O event that is triggered when a new earliest timer is registered.
     ///
@@ -72,9 +72,9 @@ impl Reactor {
     pub fn get() -> &'static Reactor {
         static REACTOR: Lazy<Reactor> = Lazy::new(|| Reactor {
             sys: sys::Reactor::new().expect("cannot initialize I/O event notification"),
-            sources: piper::Lock::new(Slab::new()),
-            events: piper::Mutex::new(sys::Events::new()),
-            timers: piper::Lock::new(BTreeMap::new()),
+            sources: piper::Mutex::new(Slab::new()),
+            events: piper::Lock::new(sys::Events::new()),
+            timers: piper::Mutex::new(BTreeMap::new()),
             event: Lazy::new(|| IoEvent::new().expect("cannot create an `IoEvent`")),
         });
         &REACTOR
@@ -110,7 +110,7 @@ impl Reactor {
         let source = Arc::new(Source {
             raw,
             key: vacant.key(),
-            wakers: piper::Lock::new(Vec::new()),
+            wakers: piper::Mutex::new(Vec::new()),
             tick: AtomicU64::new(0),
         });
         self.sys.register(raw, source.key)?;
@@ -175,7 +175,7 @@ impl Reactor {
 /// Polls the reactor for I/O events and wakes up tasks.
 pub(crate) struct ReactorLock<'a> {
     reactor: &'a Reactor,
-    events: piper::MutexGuard<'a, sys::Events>,
+    events: piper::LockGuard<sys::Events>,
 }
 
 impl ReactorLock<'_> {
@@ -255,7 +255,7 @@ pub(crate) struct Source {
     key: usize,
 
     /// A list of wakers representing tasks interested in events on this source.
-    wakers: piper::Lock<Vec<Waker>>,
+    wakers: piper::Mutex<Vec<Waker>>,
 
     /// Incremented on every I/O notification - this is only used for synchronization.
     tick: AtomicU64,

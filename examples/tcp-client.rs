@@ -1,3 +1,4 @@
+// TODO: document
 use std::net::TcpStream;
 
 use futures::io;

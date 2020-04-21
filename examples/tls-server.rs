@@ -1,14 +1,15 @@
+// TODO: document
 use std::net::{TcpListener, TcpStream};
 
 use anyhow::Result;
 use async_native_tls::{Identity, TlsAcceptor, TlsStream};
 use futures::io;
-use piper::Lock;
+use piper::Mutex;
 use smol::{Async, Task};
 
 async fn echo(stream: TlsStream<Async<TcpStream>>) -> Result<()> {
     println!("Copying");
-    let stream = Lock::new(stream);
+    let stream = Mutex::new(stream);
     io::copy(&stream, &mut &stream).await?;
     Ok(())
 }

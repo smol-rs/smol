@@ -1,3 +1,4 @@
+// TODO: document
 use std::time::{Duration, Instant};
 
 use smol::Timer;

@@ -1,10 +1,11 @@
+// TODO: document
 use std::net::TcpStream;
 
 use anyhow::Result;
 use async_native_tls::{Certificate, TlsConnector};
 use futures::io;
 use futures::prelude::*;
-use piper::Lock;
+use piper::Mutex;
 use smol::Async;
 
 fn main() -> Result<()> {
@@ -21,7 +22,7 @@ fn main() -> Result<()> {
         let stream = tls.connect("127.0.0.1", stream).await?;
 
         println!("Connected to {}", stream.get_ref().get_ref().peer_addr()?);
-        let stream = Lock::new(stream);
+        let stream = Mutex::new(stream);
 
         future::try_join(
             io::copy(stdin, &mut &stream),
