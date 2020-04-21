@@ -234,11 +234,7 @@ impl Async<TcpListener> {
     /// println!("Listening on {}", listener.get_ref().local_addr()?);
     /// # std::io::Result::Ok(()) });
     /// ```
-    pub fn bind<A: ToString>(addr: A) -> io::Result<Async<TcpListener>> {
-        let addr = addr
-            .to_string()
-            .parse::<SocketAddr>()
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+    pub fn bind<A: ToSocketAddrs>(addr: A) -> io::Result<Async<TcpListener>> {
         Ok(Async::new(TcpListener::bind(addr)?)?)
     }
 
