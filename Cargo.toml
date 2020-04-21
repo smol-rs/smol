@@ -19,7 +19,7 @@ socket2 = { version = "0.3.12", features = ["pair", "unix"] }
 # Optional feature for seamless integration with crates depending on tokio.
 # It creates a global tokio runtime and sets up its context inside smol.
 #
-# To use in your crate, enable the feature as follows:
+# Enable the feature as follows:
 # ```
 # [dependencies]
 # smol = { version = "1", features = ["tokio"] }

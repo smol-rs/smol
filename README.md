@@ -10,6 +10,8 @@ https://crates.io/crates/smol)
 https://docs.rs/smol)
 [![chat](https://img.shields.io/discord/701824908866617385.svg?logo=discord)](https://discord.gg/5RxMVnr)
 
+**NOTE:** Still a work in progress.
+
 A small and fast async runtime for Rust.
 
 This runtime extends [the standard library][std] and
