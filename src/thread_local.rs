@@ -44,7 +44,7 @@ impl ThreadLocalExecutor {
         }
     }
 
-    /// TODO
+    /// Enters the context of this executor.
     pub fn enter<T>(&self, f: impl FnOnce() -> T) -> T {
         if EXECUTOR.is_set() {
             panic!("cannot run an executor inside another executor");
@@ -52,7 +52,7 @@ impl ThreadLocalExecutor {
         EXECUTOR.set(self, f)
     }
 
-    /// TODO
+    /// Returns the event indicating there is a scheduled task.
     pub fn event(&self) -> &IoEvent {
         &self.event
     }

@@ -36,8 +36,10 @@ pub(crate) struct BlockingExecutor {
 struct State {
     /// Number of sleeping threads in the pool.
     idle_count: usize,
+
     /// Total number of thread in the pool.
     thread_count: usize,
+
     /// Runnable blocking tasks.
     queue: VecDeque<Runnable>,
 }

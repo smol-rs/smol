@@ -8,6 +8,8 @@ use crate::reactor::Reactor;
 
 /// Fires at the chosen point in time.
 ///
+/// Timers are futures that output the [`Instant`] at which they fired.
+///
 /// # Examples
 ///
 /// Sleep for 1 second:
@@ -24,6 +26,33 @@ use crate::reactor::Reactor;
 /// sleep(Duration::from_secs(1)).await;
 /// # });
 /// ```
+///
+/// Set a timeout on an I/O operation:
+///
+/// ```
+/// use futures::prelude::*;
+/// use futures::io::{self, BufReader};
+/// use smol::Timer;
+/// use std::time::Duration;
+///
+/// async fn timeout<T>(
+///     dur: Duration,
+///     f: impl Future<Output = io::Result<T>>,
+/// ) -> io::Result<T> {
+///     futures::select! {
+///         t = f.fuse() => t,
+///         _ = Timer::after(dur).fuse() => Err(io::Error::from(io::ErrorKind::TimedOut)),
+///     }
+/// }
+///
+/// # smol::run(async {
+/// // Create a buffered stdin reader.
+/// let mut stdin = BufReader::new(smol::reader(std::io::stdin()));
+///
+/// // Read a line within 5 seconds.
+/// let mut line = String::new();
+/// timeout(Duration::from_secs(5), stdin.read_line(&mut line)).await?;
+/// # io::Result::Ok(()) });
 #[derive(Debug)]
 pub struct Timer {
     /// A unique ID for this timer.
@@ -38,14 +67,34 @@ pub struct Timer {
 impl Timer {
     /// Fires after the specified duration of time.
     ///
-    /// TODO
+    /// # Examples
+    ///
+    /// ```
+    /// use smol::Timer;
+    /// use std::time::Duration;
+    ///
+    /// # smol::run(async {
+    /// Timer::after(Duration::from_secs(1)).await;
+    /// # });
+    /// ```
     pub fn after(dur: Duration) -> Timer {
         Timer::at(Instant::now() + dur)
     }
 
     /// Fires at the specified instant in time.
     ///
-    /// TODO
+    /// # Examples
+    ///
+    /// ```
+    /// use smol::Timer;
+    /// use std::time::{duration, Instant};
+    ///
+    /// # smol::run(async {
+    /// let now = Instant::now();
+    /// let when = now + Duration::from_secs(1);
+    /// Timer::after(when).await;
+    /// # });
+    /// ```
     pub fn at(when: Instant) -> Timer {
         let id = None;
         Timer { id, when }

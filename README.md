@@ -16,12 +16,12 @@ A small and fast async runtime for Rust.
 
 This runtime extends [the standard library][std] and
 [futures] with async combinators.
-It has a small API and is only 1500 lines of well-documented code.
+It has a very small API and consists of only 1500 lines of well-documented code.
 
 [std]: https://docs.rs/std
 [futures]: https://docs.rs/futures
 
-Reading [docs] and [examples] is a good place to start learning async Rust.
+Reading the [docs] and [examples] is a good place to start learning async Rust.
 
 [docs]: https://docs.rs/smol
 [examples]: ./examples
@@ -79,7 +79,7 @@ My personal crate recommendation list:
 * HTTP clients: [surf], [isahc], [reqwest]
 * HTTP servers: [async-h1], [hyper]
 * WebSockets: [tungstenite]
-* TLS authentication: [async-native-tls] and [native-tls]
+* TLS authentication: [async-native-tls]
 * Signals: [ctrlc], [signal-hook]
 
 [piper]: https://docs.rs/piper

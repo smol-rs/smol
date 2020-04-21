@@ -68,7 +68,7 @@ impl WorkStealingExecutor {
         &EXECUTOR
     }
 
-    /// TODO
+    /// Returns the event indicating there is a scheduled task.
     pub fn event(&self) -> &IoEvent {
         &self.event
     }
@@ -140,7 +140,7 @@ pub(crate) struct Worker<'a> {
 }
 
 impl Worker<'_> {
-    /// TODO
+    /// Enters the context of this executor.
     pub fn enter<T>(&self, f: impl FnOnce() -> T) -> T {
         if WORKER.is_set() {
             panic!("cannot run an executor inside another executor");
