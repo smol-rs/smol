@@ -1,90 +1,130 @@
 # smol
 
-A small and fast async runtime in Rust.
+[![Build Status](https://travis-ci.org/stjepangs/smol.svg?branch=master)](
+https://travis-ci.org/stjepang/smol)
+[![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](
+https://github.com/stjepang/smol)
+[![Cargo](https://img.shields.io/crates/v/smol.svg)](
+https://crates.io/crates/smol)
+[![Documentation](https://docs.rs/smol/badge.svg)](
+https://docs.rs/smol)
+[![chat](https://img.shields.io/discord/569610676205781012.svg?logo=discord)](https://discord.gg/5RxMVnr)
 
-https://discord.gg/5RxMVnr
+A small and fast async runtime for Rust.
 
-### Goals
+This runtime extends [the standard library][std] and
+[futures] with async combinators.
+It has a small API and is only 1500 lines of well-documented code.
 
-* Small - 1500 lines of code.
-* Simple - Well-documented, easy to maintain.
-* Fast - Based on [async-task], [crossbeam], and [piper].
-* Safe - Just 1 line of unsafe code for Windows support.
-* Portable - Linux, Android, macOS, iOS, Windows, FreeBSD, OpenBSD, NetBSD, DragonFly BSD.
+[std]: https://docs.rs/std
+[futures]: https://docs.rs/futures
 
-### Features
+Reading [docs] and [examples] is a good place to start learning async Rust.
 
-* Async I/O - TCP, UDP, Unix domain sockets, and custom FDs/sockets.
-* Thread-local executor - For non-send futures.
-* Work-stealing executor - adapts to uneven workload.
-* Blocking executor - For files, processes, and standard I/O.
-* Timer - Efficient userspace timers.
+[docs]: https://docs.rs/smol
+[examples]: ./examples
 
-### Documentation
+Async I/O is implemented using [epoll] on Linux/Android, [kqueue] on
+macOS/iOS/BSD, and [wepoll] on Windows.
+
+[epoll]: https://en.wikipedia.org/wiki/Epoll
+[kqueue]: https://en.wikipedia.org/wiki/Kqueue
+[wepoll]: https://github.com/piscisaureus/wepoll
+
+## Features
+
+* Async TCP, UDP, Unix domain sockets, and custom file descriptors.
+* Thread-local executor for `!Send` futures.
+* Work-stealing executor that adapts to uneven workloads.
+* Blocking executor for files, processes, and standard I/O.
+* Tasks that support cancelation.
+* Userspace timers.
+
+## Compatibility
+
+This runtime is compatible with [async-std] and [tokio].
+
+There is an optional feature for seamless integration with crates depending
+on tokio. It creates a global tokio runtime and sets up its context inside smol.
+
+Enable the feature as follows:
+
+```toml
+[dependencies]
+smol = { version = "1", features = ["tokio"] }
+```
+
+[async-std]: https://docs.rs/async-std
+[tokio]: https://docs.rs/tokio
+
+## Documentation
+
+You can read the docs [here][docs], or generate them on your own.
+
+If you'd like to explore the implementation in more depth, the following
+command generates docs for the whole crate, including private modules:
 
 ```
 cargo doc --document-private-items --no-deps --open
 ```
 
-# TODO Crate recommendations
+[docs]: https://docs.rs/smol
 
-# TODO certificate and private key
+## Other crates
+
+My personal crate recommendation list:
+
+* Channels, pipes, and mutexes: [piper]
+* HTTP clients: [surf], [isahc], [reqwest]
+* HTTP servers: [async-h1], [hyper]
+* WebSockets: [tungstenite]
+* TLS authentication: [async-native-tls] and [native-tls]
+* Signals: [ctrlc], [signal-hook]
+
+[piper]: https://docs.rs/piper
+[surf]: https://docs.rs/surf
+[isahc]: https://docs.rs/isahc
+[reqwest]: https://docs.rs/reqwest
+[async-h1]: https://docs.rs/async-h1
+[hyper]: https://docs.rs/hyper
+[tungstenite]: https://docs.rs/tungstenite
+[async-native-tls]: https://docs.rs/async-native-tls
+[native-tls]: https://docs.rs/native-tls
+[ctrlc]: https://docs.rs/ctrlc
+[signal-hook]: https://docs.rs/signal-hook
+
+## TLS certificate
+
+Some code examples are using TLS for authentication.
+
+To access HTTPS servers from your browser, you'll first need to import the
+certificate from this repository (Chrome/Firefox):
+
+1. Open browser settings and go to the certificate *Authorities* list.
+2. Click *Import* and select `certificate.pem`.
+3. Enable *Trust this CA to identify websites* and click *OK*.
+4. Restart the browser and go to [https://127.0.0.1:8001](https://127.0.0.1:8001)
+
+The certificate file was generated using
+[minica](https://github.com/jsha/minica) and
+[openssl](https://www.openssl.org/):
+
 ```
-// To access the HTTPS version, import the certificate into Chrome/Firefox:
-// 1. Open settings and go to the certificate 'Authorities' list
-// 2. Click 'Import' and select certificate.pem
-// 3. Enable 'Trust this CA to identify websites' and click OK
-// 4. Restart the browser and go to https://127.0.0.1:8001
-//
-// The certificate was generated using minica and openssl:
-// 1. minica --domains localhost -ip-addresses 127.0.0.1 -ca-cert certificate.pem
-// 2. openssl pkcs12 -export -out identity.pfx -inkey localhost/key.pem -in localhost/cert.pem
+minica --domains localhost -ip-addresses 127.0.0.1 -ca-cert certificate.pem
+openssl pkcs12 -export -out identity.pfx -inkey localhost/key.pem -in localhost/cert.pem
 ```
-
-## Examples
-
-* [Async-h1 client](./examples/async-h1-client.rs)
-* [Async-h1 server](./examples/async-h1-server.rs)
-* [Chat Client](./examples/chat-client.rs)
-* [Chat Server](./examples/chat-server.rs)
-* [Compat reqwest](./examples/compat-reqwest.rs)
-* [Compat tokio](./examples/compat-tokio.rs)
-* [Ctrl-c](./examples/ctrl-c.rs)
-* [Hyper Client](./examples/hyper-client.rs)
-* [Hyper Server](./examples/hyper-server.rs)
-* [Linux Inotify](./examples/linux-inotify.rs)
-* [Linux Timefd](./examples/linux-timerfd.rs)
-* [Process Output](./examples/process-output.rs)
-* [Process Run](./examples/process-run.rs)
-* [Read Dir](./examples/read-dir.rs)
-* [Read File](./examples/read-file.rs)
-* [Simple Client](./examples/simple-client.rs)
-* [Simple Server](./examples/simple-server.rs)
-* [Stdin to Stdout](./examples/stdin-to-stdout.rs)
-* [Tcp Client](./examples/tcp-client.rs)
-* [Tcp Server](./examples/tcp-server.rs)
-* [Thread Pool](./examples/thread-pool.rs)
-* [Timer Sleep](./examples/timer-sleep.rs)
-* [Timer Timeout](./examples/timer-timeout.rs)
-* [TLS Client](./examples/tls-client.rs)
-* [TLS Server](./examples/tls-server.rs)
-* [Unix Signal](./examples/unix-signal.rs)
-* [Web Crawler](./examples/web-crawler.rs)
-* [Websocket Client](./examples/websocket-client.rs)
-* [WebSocket Server](./examples/websocket-server.rs)
-* [Windows Uds](./examples/windows-uds.rs)
 
 ## License
 
-<sup>
-Licensed under either of <a href="LICENSE-APACHE">Apache License, Version
-2.0</a> or <a href="LICENSE-MIT">MIT license</a> at your option.
-</sup>
+Licensed under either of
 
-<br/>
+ * Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE) or http://www.apache.org/licenses/LICENSE-2.0)
+ * MIT license ([LICENSE-MIT](LICENSE-MIT) or http://opensource.org/licenses/MIT)
 
-<sub>
+at your option.
+
+#### Contribution
+
 Unless you explicitly state otherwise, any contribution intentionally submitted
-for inclusion in this crate by you, as defined in the Apache-2.0 license, shall
-be dual licensed as above, without any additional terms or conditions.
-</sub>
+for inclusion in the work by you, as defined in the Apache-2.0 license, shall be
+dual licensed as above, without any additional terms or conditions.

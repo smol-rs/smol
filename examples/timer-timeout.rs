@@ -2,8 +2,7 @@
 use std::io;
 use std::time::Duration;
 
-use anyhow::{bail, Result};
-use futures::future::{select, Either};
+use anyhow::Result;
 use futures::io::BufReader;
 use futures::prelude::*;
 use smol::Timer;
