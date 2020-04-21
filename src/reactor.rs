@@ -245,11 +245,11 @@ impl ReactorLock<'_> {
 pub(crate) struct Source {
     /// Raw file descriptor on Unix platforms.
     #[cfg(unix)]
-    raw: RawFd,
+    pub(crate) raw: RawFd,
 
     /// Raw socket handle on Windows.
     #[cfg(windows)]
-    raw: RawSocket,
+    pub(crate) raw: RawSocket,
 
     /// The ID of this source obtain during registration.
     key: usize,

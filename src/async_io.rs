@@ -9,7 +9,7 @@ use std::task::{Context, Poll};
 
 #[cfg(unix)]
 use std::{
-    os::unix::io::AsRawFd,
+    os::unix::io::{AsRawFd, RawFd},
     os::unix::net::{SocketAddr as UnixSocketAddr, UnixDatagram, UnixListener, UnixStream},
     path::Path,
 };
@@ -54,6 +54,13 @@ impl<T: AsRawFd> Async<T> {
     }
 }
 
+#[cfg(unix)]
+impl<T: AsRawFd> AsRawFd for Async<T> {
+    fn as_raw_fd(&self) -> RawFd {
+        self.source.raw
+    }
+}
+
 #[cfg(windows)]
 impl<T: AsRawSocket> Async<T> {
     /// Converts a non-blocking I/O handle into an async I/O handle.
@@ -64,6 +71,13 @@ impl<T: AsRawSocket> Async<T> {
             source: Reactor::get().insert_io(io.as_raw_socket())?,
             io: Some(Box::new(io)),
         })
+    }
+}
+
+#[cfg(windows)]
+impl<T: AsRawSocket> AsRawSocket for Async<T> {
+    fn as_raw_socket(&self) -> RawSocket {
+        self.source.raw
     }
 }
 
