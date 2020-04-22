@@ -1,4 +1,9 @@
-//! TODO
+//! An I/O object for waking up threads blocked on the reactor.
+//!
+//! We use the self-pipe trick explained [here](https://cr.yp.to/docs/selfpipe.html).
+//!
+//! On Unix systems, the self-pipe is a pair of unnamed connected sockets. On Windows, the
+//! self-pipe is a pair of TCP sockets connected over localhost.
 
 use std::io::{self, Read, Write};
 #[cfg(windows)]
@@ -11,8 +16,6 @@ use socket2::{Domain, Socket, Type};
 use crate::async_io::Async;
 
 /// A self-pipe.
-///
-/// Explained in: https://cr.yp.to/docs/selfpipe.html
 struct Inner {
     /// Set to `true` if notified.
     flag: AtomicBool,
@@ -87,7 +90,7 @@ impl IoEvent {
     }
 }
 
-/// TODO
+/// Creates a pair of connected sockets.
 #[cfg(unix)]
 fn socket_pair() -> io::Result<(Socket, Socket)> {
     let (sock1, sock2) = Socket::pair(Domain::unix(), Type::stream(), None)?;
@@ -96,14 +99,7 @@ fn socket_pair() -> io::Result<(Socket, Socket)> {
     Ok((sock1, sock2))
 }
 
-/// TODO
-/// TODO The only portable way of manually triggering I/O events is to create a socket and
-/// send/receive dummy data on it. This pattern is also known as "the self-pipe trick".
-/// See the links below for more information.
-///
-/// https://github.com/python-trio/trio/blob/master/trio/_core/_wakeup_socketpair.py
-/// https://stackoverflow.com/questions/24933411/how-to-emulate-socket-socketpair-on-windows
-/// https://gist.github.com/geertj/4325783
+/// Creates a pair of connected sockets.
 #[cfg(windows)]
 fn socket_pair() -> io::Result<(Socket, Socket)> {
     // Create a temporary listener.
