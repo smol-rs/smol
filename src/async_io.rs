@@ -1,21 +1,21 @@
 //! Async I/O.
+//!
+//! TODO
 
 use std::future::Future;
 use std::io::{self, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream, ToSocketAddrs, UdpSocket};
+#[cfg(windows)]
+use std::os::windows::io::{AsRawSocket, RawSocket};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
-
 #[cfg(unix)]
 use std::{
     os::unix::io::{AsRawFd, RawFd},
     os::unix::net::{SocketAddr as UnixSocketAddr, UnixDatagram, UnixListener, UnixStream},
     path::Path,
 };
-
-#[cfg(windows)]
-use std::os::windows::io::{AsRawSocket, FromRawSocket, RawSocket};
 
 use futures::future;
 use futures::io::{AsyncRead, AsyncWrite};
@@ -27,9 +27,71 @@ use crate::task::Task;
 
 /// Async I/O.
 ///
-/// TODO
-/// TODO: suggest using Shared to split
-/// TODO: suggest using Lock if Async<T> is not splittable
+/// This type converts a blocking I/O type into an async type, provided it is supported by
+/// [epoll]/[kqueue]/[wepoll].
+///
+/// I/O operations can then be *asyncified* by methods [`Async::with()`] and [`Async::with_mut()`],
+/// or you can use the predefined async methods on the standard networking types.
+///
+/// **NOTE**: Do not use this type with [`File`][`std::fs::File`], [`Stdin`][`std::io::Stdin`],
+/// [`Stdout`][`std::io::Stdout`], or [`Stderr`][`std::io::Stderr`] because they're not
+/// supported. Use [`reader()`][`crate::reader()`] and [`writer()`][`crate::writer()`] functions
+/// instead to read/write on a thread.
+///
+/// # Examples
+///
+/// To make an async I/O handle cloneable, wrap it in [piper]'s `Arc`:
+///
+/// ```no_run
+/// use piper::Arc;
+/// use smol::Async;
+/// use std::net::TcpStream;
+///
+/// # smol::run(async {
+/// // Connect to a local server.
+/// let stream = Async::<TcpStream>::connect("127.0.0.1:8000").await?;
+///
+/// // Create two handles to the stream.
+/// let reader = Arc::new(stream);
+/// let mut writer = reader.clone();
+///
+/// // Echo all messages from the read side of the stream into the write side.
+/// futures::io::copy(reader, &mut writer).await?;
+/// # std::io::Result::Ok(()) });
+/// ```
+///
+/// If a type does but its reference doesn't implement [`AsyncRead`] and [`AsyncWrite`], wrap it in
+/// [piper]'s `Mutex`:
+///
+/// ```no_run
+/// use futures::prelude::*;
+/// use piper::{Arc, Mutex};
+/// use smol::Async;
+/// use std::net::TcpStream;
+///
+/// # smol::run(async {
+/// // Reads data from a stream and echoes it back.
+/// async fn echo(stream: impl AsyncRead + AsyncWrite + Unpin) -> std::io::Result<u64> {
+///     let stream = Mutex::new(stream);
+///
+///     // Create two handles to the stream.
+///     let reader = Arc::new(stream);
+///     let mut writer = reader.clone();
+///
+///     // Echo all messages from the read side of the stream into the write side.
+///     futures::io::copy(reader, &mut writer).await
+/// }
+///
+/// // Connect to a local server and echo its messages back.
+/// let stream = Async::<TcpStream>::connect("127.0.0.1:8000").await?;
+/// echo(stream).await?;
+/// # std::io::Result::Ok(()) });
+/// ```
+///
+/// [piper]: https://docs.rs/piper
+/// [epoll]: https://en.wikipedia.org/wiki/Epoll
+/// [kqueue]: https://en.wikipedia.org/wiki/Kqueue
+/// [wepoll]: https://github.com/piscisaureus/wepoll
 #[derive(Debug)]
 pub struct Async<T> {
     /// A source registered in the reactor.
@@ -43,9 +105,37 @@ pub struct Async<T> {
 impl<T: AsRawFd> Async<T> {
     /// Creates an async I/O handle.
     ///
-    /// TODO: explain AsRawFd and AsRawSocket
-    /// TODO: **warning** for unix users: the I/O handle must be compatible with epoll/kqueue!
-    /// Most notably, `File`, `Stdin`, `Stdout`, `Stderr` will **not** work.
+    /// This function will put the handle in non-blocking mode and register it in [epoll] on
+    /// Linux/Android, [kqueue] on macOS/iOS/BSD, or [wepoll] on Windows.
+    /// On Unix systems, the handle must implement `AsRawFd`, while on Windows it must implement
+    /// `AsRawSocket`.
+    ///
+    /// If the handle implements [`Read`] and [`Write`], then `Async<T>` automatically
+    /// implements [`AsyncRead`] and [`AsyncWrite`].
+    /// Other I/O operations can be *asyncified* by methods [`Async::with()`] and
+    /// [`Async::with_mut()`].
+    ///
+    /// **NOTE**: Do not use this type with [`File`][`std::fs::File`], [`Stdin`][`std::io::Stdin`],
+    /// [`Stdout`][`std::io::Stdout`], or [`Stderr`][`std::io::Stderr`] because they're not
+    /// supported by [epoll]/[kqueue]/[wepoll].
+    /// Use [`reader()`][`crate::reader()`] and [`writer()`][`crate::writer()`] functions instead
+    /// to read/write on a thread.
+    ///
+    /// [epoll]: https://en.wikipedia.org/wiki/Epoll
+    /// [kqueue]: https://en.wikipedia.org/wiki/Kqueue
+    /// [wepoll]: https://github.com/piscisaureus/wepoll
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use smol::Async;
+    /// use std::net::TcpListener;
+    ///
+    /// # smol::run(async {
+    /// let listener = TcpListener::bind("127.0.0.1:80")?;
+    /// let listener = Async::new(listener)?;
+    /// # std::io::Result::Ok(()) });
+    /// ```
     pub fn new(io: T) -> io::Result<Async<T>> {
         Ok(Async {
             source: Reactor::get().insert_io(io.as_raw_fd())?,
@@ -65,7 +155,37 @@ impl<T: AsRawFd> AsRawFd for Async<T> {
 impl<T: AsRawSocket> Async<T> {
     /// Creates an async I/O handle.
     ///
-    /// TODO
+    /// This function will put the handle in non-blocking mode and register it in [epoll] on
+    /// Linux/Android, [kqueue] on macOS/iOS/BSD, or [wepoll] on Windows.
+    /// On Unix systems, the handle must implement `AsRawFd`, while on Windows it must implement
+    /// `AsRawSocket`.
+    ///
+    /// If the handle implements [`Read`] and [`Write`], then `Async<T>` automatically
+    /// implements [`AsyncRead`] and [`AsyncWrite`].
+    /// Other I/O operations can be *asyncified* by methods [`Async::with()`] and
+    /// [`Async::with_mut()`].
+    ///
+    /// **NOTE**: Do not use this type with [`File`][`std::fs::File`], [`Stdin`][`std::io::Stdin`],
+    /// [`Stdout`][`std::io::Stdout`], or [`Stderr`][`std::io::Stderr`] because they're not
+    /// supported by epoll/kqueue/wepoll.
+    /// Use [`reader()`][`crate::reader()`] and [`writer()`][`crate::writer()`] functions instead
+    /// to read/write on a thread.
+    ///
+    /// [epoll]: https://en.wikipedia.org/wiki/Epoll
+    /// [kqueue]: https://en.wikipedia.org/wiki/Kqueue
+    /// [wepoll]: https://github.com/piscisaureus/wepoll
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use smol::Async;
+    /// use std::net::TcpListener;
+    ///
+    /// # smol::run(async {
+    /// let listener = TcpListener::bind("127.0.0.1:80")?;
+    /// let listener = Async::new(listener)?;
+    /// # std::io::Result::Ok(()) });
+    /// ```
     pub fn new(io: T) -> io::Result<Async<T>> {
         Ok(Async {
             source: Reactor::get().insert_io(io.as_raw_socket())?,
@@ -135,7 +255,30 @@ impl<T> Async<T> {
         Ok(io)
     }
 
-    /// TODO
+    /// Performs an I/O operation asynchronously.
+    ///
+    /// This I/O handle is in non-blocking mode and is registered in the reactor. It gets notified
+    /// on every new event.
+    ///
+    /// The closure passed to this function attempts an I/O operation and must return
+    /// [`io::ErrorKind::WouldBlock`] if it's not ready. The current task then gets notified by the
+    /// reactor when the I/O handle is ready again and the closure retries the operation.
+    ///
+    /// The closure gets a shared reference to the inner I/O handle.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use smol::Async;
+    /// use std::net::TcpListener;
+    ///
+    /// # smol::run(async {
+    /// let listener = Async::<TcpListener>::bind("127.0.0.1:80")?;
+    ///
+    /// // Accept a new client asynchronously.
+    /// let (stream, addr) = listener.with(|l| l.accept()).await?;
+    /// # std::io::Result::Ok(()) });
+    /// ```
     pub async fn with<R>(&self, op: impl FnMut(&T) -> io::Result<R>) -> io::Result<R> {
         let mut op = op;
         let mut io = self.io.as_ref().unwrap();
@@ -143,7 +286,29 @@ impl<T> Async<T> {
         future::poll_fn(|cx| source.poll_io(cx, || op(&mut io))).await
     }
 
-    /// TODO
+    /// Performs an I/O operation asynchronously.
+    ///
+    /// This I/O handle is in non-blocking mode and is registered in the reactor. It gets notified
+    /// on every new event.
+    ///
+    /// The closure passed to this function attempts an I/O operation and must return
+    /// [`io::ErrorKind::WouldBlock`] if it's not ready. The current task then gets notified by the
+    ///
+    /// The closure gets a mutable reference to the inner I/O handle.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use smol::Async;
+    /// use std::net::TcpListener;
+    ///
+    /// # smol::run(async {
+    /// let mut listener = Async::<TcpListener>::bind("127.0.0.1:80")?;
+    ///
+    /// // Accept a new client asynchronously.
+    /// let (stream, addr) = listener.with_mut(|l| l.accept()).await?;
+    /// # std::io::Result::Ok(()) });
+    /// ```
     pub async fn with_mut<R>(&mut self, op: impl FnMut(&mut T) -> io::Result<R>) -> io::Result<R> {
         let mut op = op;
         let mut io = self.io.as_mut().unwrap();

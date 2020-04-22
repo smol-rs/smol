@@ -90,7 +90,7 @@ impl WorkStealingExecutor {
                 self.injector.push(runnable);
 
                 // Notify workers that there is a task in the injector queue.
-                self.event.set();
+                self.event.notify();
             }
         };
 
@@ -165,7 +165,7 @@ impl Worker<'_> {
                         // This is necessary because `pop()` sometimes re-shuffles tasks between
                         // queues, which races with other workers looking for tasks. They might
                         // believe there are no tasks while there really are, so we notify here.
-                        self.executor.event.set();
+                        self.executor.event.notify();
 
                         // Run the task.
                         if throttle::setup(|| r.run()) {
@@ -201,7 +201,7 @@ impl Worker<'_> {
             self.queue.push(r);
 
             // Notify other workers that there are stealable tasks.
-            self.executor.event.set();
+            self.executor.event.notify();
         }
     }
 

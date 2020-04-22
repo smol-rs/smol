@@ -1,8 +1,11 @@
 //! The reactor, async I/O, and timers.
+//!
+//! TODO
 
 #[cfg(not(any(
     target_os = "linux",     // epoll
     target_os = "android",   // epoll
+    target_os = "illumos",   // epoll
     target_os = "macos",     // kqueue
     target_os = "ios",       // kqueue
     target_os = "freebsd",   // kqueue
@@ -17,19 +20,21 @@ use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::io;
 use std::mem;
+#[cfg(unix)]
+use std::os::unix::io::RawFd;
+#[cfg(windows)]
+use std::os::windows::io::{FromRawSocket, RawSocket};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::task::{Context, Poll, Waker};
 use std::time::{Duration, Instant};
 
 #[cfg(unix)]
-use std::os::unix::io::RawFd;
-
-#[cfg(windows)]
-use std::os::windows::io::RawSocket;
-
+use nix::fcntl::{fcntl, FcntlArg, OFlag};
 use once_cell::sync::Lazy;
 use slab::Slab;
+#[cfg(windows)]
+use socket2::Socket;
 
 use crate::io_event::IoEvent;
 use crate::throttle;
@@ -89,19 +94,15 @@ impl Reactor {
         let mut sources = self.sources.lock();
         let vacant = sources.vacant_entry();
 
+        // Put the I/O handle in non-blocking mode.
         #[cfg(unix)]
         {
-            use nix::fcntl::{fcntl, FcntlArg, OFlag};
-
-            // Put the I/O handle in non-blocking mode.
             let flags = fcntl(raw, FcntlArg::F_GETFL).map_err(io_err)?;
             let flags = OFlag::from_bits_truncate(flags) | OFlag::O_NONBLOCK;
             fcntl(raw, FcntlArg::F_SETFL(flags)).map_err(io_err)?;
         }
-
         #[cfg(windows)]
         {
-            // Put the I/O handle in non-blocking mode.
             let socket = unsafe { Socket::from_raw_socket(raw) };
             mem::ManuallyDrop::new(socket).set_nonblocking(true)?;
         }
@@ -141,7 +142,7 @@ impl Reactor {
 
         // If this timer is now the earliest one, interrupt the reactor.
         if timers.keys().next().map(|(when, _)| *when) == Some(when) {
-            self.event.set();
+            self.event.notify();
         }
 
         id
@@ -339,8 +340,8 @@ fn io_err(err: nix::Error) -> io::Error {
     }
 }
 
-/// Bindings to epoll (Linux, Android).
-#[cfg(any(target_os = "linux", target_os = "android"))]
+/// Bindings to epoll (Linux, Android, illumos).
+#[cfg(any(target_os = "linux", target_os = "android", target_os = "illumos"))]
 mod sys {
     use std::convert::TryInto;
     use std::io;

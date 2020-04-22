@@ -1,4 +1,6 @@
 //! The thread-local executor.
+//!
+//! TODO
 
 use std::cell::RefCell;
 use std::collections::VecDeque;
@@ -85,7 +87,7 @@ impl ThreadLocalExecutor {
                 // Trigger an I/O event to let the original thread know that a task has been
                 // scheduled. If that thread is inside epoll/kqueue/wepoll, an I/O event will wake
                 // it up.
-                event.set();
+                event.notify();
             };
 
             // Create a task, schedule it, and return its `Task` handle.

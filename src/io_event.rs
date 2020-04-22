@@ -1,104 +1,81 @@
+//! TODO
+
 use std::io::{self, Read, Write};
+#[cfg(windows)]
+use std::net::SocketAddr;
 use std::sync::atomic::{self, AtomicBool, Ordering};
 use std::sync::Arc;
-
-#[cfg(windows)]
-use std::os::windows::io::{AsRawSocket, FromRawSocket, RawSocket};
 
 use socket2::{Domain, Socket, Type};
 
 use crate::async_io::Async;
 
-/// A boolean flag that is set whenever a thread-local task is woken by another thread.
+/// A self-pipe.
 ///
-/// Every time this flag's value is changed, an I/O event is triggered.
-///
-/// TODO
-#[derive(Clone)]
-pub(crate) struct IoEvent {
-    pipe: Arc<SelfPipe>,
-}
-
-/// TODO
-impl IoEvent {
-    pub fn new() -> io::Result<IoEvent> {
-        Ok(IoEvent {
-            pipe: Arc::new(SelfPipe::new()?),
-        })
-    }
-
-    pub fn set(&self) {
-        self.pipe.set();
-    }
-
-    pub fn clear(&self) -> bool {
-        self.pipe.clear()
-    }
-
-    pub async fn ready(&self) {
-        self.pipe.ready().await;
-    }
-}
-
-/// A boolean flag that triggers I/O events whenever changed.
-///
-/// https://cr.yp.to/docs/selfpipe.html
-///
-/// TODO
-struct SelfPipe {
+/// Explained in: https://cr.yp.to/docs/selfpipe.html
+struct Inner {
+    /// Set to `true` if notified.
     flag: AtomicBool,
+
+    /// The writer side, emptied by `clear()`.
     writer: Socket,
+
+    /// The reader side, filled by `notify()`.
     reader: Async<Socket>,
 }
 
-/// TODO
-impl SelfPipe {
-    /// Creates a self-pipe.
-    fn new() -> io::Result<SelfPipe> {
+/// A flag that that triggers an I/O event whenever it is set.
+#[derive(Clone)]
+pub(crate) struct IoEvent(Arc<Inner>);
+
+impl IoEvent {
+    /// Creates a new `IoEvent`.
+    pub fn new() -> io::Result<IoEvent> {
         let (writer, reader) = socket_pair()?;
         writer.set_send_buffer_size(1)?;
         reader.set_recv_buffer_size(1)?;
-        Ok(SelfPipe {
+
+        Ok(IoEvent(Arc::new(Inner {
             flag: AtomicBool::new(false),
             writer,
             reader: Async::new(reader)?,
-        })
+        })))
     }
 
     /// Sets the flag to `true`.
-    // TODO: rename to raise() as in "raise a signal"? or even better: emit() or notify()
-    fn set(&self) {
+    pub fn notify(&self) {
         // Publish all in-memory changes before setting the flag.
         atomic::fence(Ordering::SeqCst);
 
         // If the flag is not set...
-        if !self.flag.load(Ordering::SeqCst) {
+        if !self.0.flag.load(Ordering::SeqCst) {
             // If this thread sets it...
-            if !self.flag.swap(true, Ordering::SeqCst) {
+            if !self.0.flag.swap(true, Ordering::SeqCst) {
                 // Trigger an I/O event by writing a byte into the sending socket.
-                let _ = (&self.writer).write(&[1]);
-                let _ = (&self.writer).flush();
+                let _ = (&self.0.writer).write(&[1]);
+                let _ = (&self.0.writer).flush();
             }
         }
     }
 
     /// Sets the flag to `false`.
-    fn clear(&self) -> bool {
+    pub fn clear(&self) -> bool {
         // Read all available bytes from the receiving socket.
-        while self.reader.get_ref().read(&mut [0; 64]).is_ok() {}
-        let value = self.flag.swap(false, Ordering::SeqCst);
+        while self.0.reader.get_ref().read(&mut [0; 64]).is_ok() {}
+        let value = self.0.flag.swap(false, Ordering::SeqCst);
 
         // Publish all in-memory changes after clearing the flag.
         atomic::fence(Ordering::SeqCst);
         value
     }
 
-    /// Waits until the flag is changed.
+    /// Waits until notified.
     ///
-    /// Note that this method may spuriously report changes when they didn't really happen.
-    async fn ready(&self) {
-        self.reader
-            .with(|_| match self.flag.load(Ordering::SeqCst) {
+    /// You should assume notifications may spuriously occur.
+    pub async fn notified(&self) {
+        self.0
+            .reader
+            .with(|_| match self.0.flag.load(Ordering::SeqCst) {
                 true => Ok(()),
                 false => Err(io::Error::new(io::ErrorKind::WouldBlock, "")),
             })

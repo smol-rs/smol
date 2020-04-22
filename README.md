@@ -14,14 +14,13 @@ https://docs.rs/smol)
 
 A small and fast async runtime for Rust.
 
-This runtime extends [the standard library][std] and
-[futures] with async combinators.
-It has a very small API and consists of only 1500 lines of well-documented code.
+This runtime extends [the standard library][std] with async combinators
+and is only 1500 lines of code.
 
 [std]: https://docs.rs/std
-[futures]: https://docs.rs/futures
 
-Reading the [docs] and [examples] is a good place to start learning async Rust.
+Reading the [docs] or looking at the [examples] is a good way of starting to
+learn async Rust.
 
 [docs]: https://docs.rs/smol
 [examples]: ./examples

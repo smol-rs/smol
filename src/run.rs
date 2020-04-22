@@ -1,3 +1,5 @@
+//! TODO
+
 use std::future::Future;
 use std::task::{Context, Poll};
 
@@ -96,7 +98,7 @@ pub fn run<T>(future: impl Future<Output = T>) -> T {
 
     // Create a waker that triggers an I/O event in the thread-local scheduler.
     let ev = local.event().clone();
-    let waker = async_task::waker_fn(move || ev.set());
+    let waker = async_task::waker_fn(move || ev.notify());
     let cx = &mut Context::from_waker(&waker);
     futures::pin_mut!(future);
 
@@ -154,12 +156,12 @@ pub fn run<T>(future: impl Future<Output = T>) -> T {
             // reactor, and will be unblocked if there is more work to do. Every worker triggers
             // `ws_executor.event()` each time it finds a runnable task.
             let lock = reactor.lock();
-            let ready = local.event().ready();
+            let notified = local.event().notified();
             futures::pin_mut!(lock);
-            futures::pin_mut!(ready);
+            futures::pin_mut!(notified);
 
             // Block until either the reactor is locked or `local.event()` is triggered.
-            if let Either::Left((mut reactor_lock, _)) = block_on(future::select(lock, ready)) {
+            if let Either::Left((mut reactor_lock, _)) = block_on(future::select(lock, notified)) {
                 // Clear the two I/O events.
                 let local_ev = local.event().clear();
                 let ws_ev = ws_executor.event().clear();
