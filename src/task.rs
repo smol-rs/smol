@@ -176,7 +176,7 @@ where
     }
 }
 
-impl Task<()> {
+impl<T> Task<T> {
     /// Detaches the task to let it keep running in the background.
     ///
     /// # Examples
@@ -195,12 +195,10 @@ impl Task<()> {
     /// .detach();
     /// # })
     /// ```
-    pub fn detach(mut self) {
-        self.0.take().unwrap();
+    pub fn detach(mut self) -> async_task::JoinHandle<T, ()> {
+        self.0.take().unwrap()
     }
-}
 
-impl<T> Task<T> {
     /// Cancels the task and waits for it to stop running.
     ///
     /// Returns the task's output if it was completed just before it got canceled, or `None` if it
