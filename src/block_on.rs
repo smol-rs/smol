@@ -55,7 +55,7 @@ pub fn block_on<T>(future: impl Future<Output = T>) -> T {
 
     CACHE.with(|cache| {
         // Panic if `block_on()` is called recursively.
-        let (parker, waker) = &mut *cache.try_borrow_mut().ok().expect("recursive `block_on()`");
+        let (parker, waker) = &mut *cache.try_borrow_mut().expect("recursive `block_on()`");
 
         // If enabled, set up tokio before execution begins.
         context::enter(|| {

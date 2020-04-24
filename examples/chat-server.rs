@@ -17,7 +17,7 @@ use std::net::{SocketAddr, TcpListener, TcpStream};
 
 use futures::io::{self, BufReader};
 use futures::prelude::*;
-use piper::{Receiver, Sender, Arc};
+use piper::{Arc, Receiver, Sender};
 use smol::{Async, Task};
 
 type Client = Arc<Async<TcpStream>>;
