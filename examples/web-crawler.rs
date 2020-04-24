@@ -50,11 +50,11 @@ fn main() -> Result<()> {
             tasks -= 1;
 
             for mut url in links(body) {
-                if url.starts_with("/") {
+                if url.starts_with('/') {
                     url = format!("{}{}", ROOT, url);
                 }
                 if url.starts_with(ROOT) && seen.insert(url.clone()) {
-                    url = url.trim_end_matches("/").to_string();
+                    url = url.trim_end_matches('/').to_string();
                     queue.push_back(url);
                 }
             }

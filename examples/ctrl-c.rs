@@ -6,7 +6,7 @@ use futures::prelude::*;
 
 fn main() {
     let (s, ctrl_c) = piper::chan(100);
-    let handle = move || drop(s.send(()).now_or_never());
+    let handle = move || s.send(()).now_or_never().unwrap_or(());
     ctrlc::set_handler(handle).unwrap();
 
     smol::run(async {

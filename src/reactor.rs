@@ -434,7 +434,7 @@ mod sys {
                 KEvent::new(fd as _, EventFilter::EVFILT_WRITE, flags, FFLAGS, 0, udata),
                 KEvent::new(fd as _, EventFilter::EVFILT_READ, flags, FFLAGS, 0, udata),
             ];
-            let mut eventlist = changelist.clone();
+            let mut eventlist = changelist;
             kevent_ts(self.0, &changelist, &mut eventlist, None).map_err(io_err)?;
             for ev in &eventlist {
                 // See https://github.com/tokio-rs/mio/issues/582
@@ -454,7 +454,7 @@ mod sys {
                 KEvent::new(fd as _, EventFilter::EVFILT_WRITE, flags, FFLAGS, 0, 0),
                 KEvent::new(fd as _, EventFilter::EVFILT_READ, flags, FFLAGS, 0, 0),
             ];
-            let mut eventlist = changelist.clone();
+            let mut eventlist = changelist;
             kevent_ts(self.0, &changelist, &mut eventlist, None).map_err(io_err)?;
             for ev in &eventlist {
                 let (flags, data) = (ev.flags(), ev.data());

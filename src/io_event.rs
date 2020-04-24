@@ -75,9 +75,12 @@ impl IoEvent {
     pub async fn notified(&self) {
         self.0
             .reader
-            .with(|_| match self.0.flag.load(Ordering::SeqCst) {
-                true => Ok(()),
-                false => Err(io::Error::new(io::ErrorKind::WouldBlock, "")),
+            .with(|_| {
+                if self.0.flag.load(Ordering::SeqCst) {
+                    Ok(())
+                } else {
+                    Err(io::Error::new(io::ErrorKind::WouldBlock, ""))
+                }
             })
             .await
             .expect("failure while waiting on a self-pipe");
