@@ -20,6 +20,8 @@
 //! Of course, work-stealing still causes contention in some cases, but much less often.
 //!
 //! More about work stealing: https://en.wikipedia.org/wiki/Work_stealing
+//!
+//! [`run()`]: crate::run()
 
 use std::cell::Cell;
 use std::future::Future;

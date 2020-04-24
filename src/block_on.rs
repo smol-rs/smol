@@ -18,7 +18,7 @@ use crate::context;
 /// This function polls the future in a loop, parking the current thread after each step to wait
 /// until its waker is woken.
 ///
-/// Unlike [`run`], it does not run executors or poll the reactor!
+/// Unlike [`run()`], it does not run executors or poll the reactor!
 ///
 /// You can think of it as the easiest and most efficient way of turning an async operation into a
 /// blocking operation.
@@ -40,6 +40,8 @@ use crate::context;
 ///     Timer::after(Duration::from_secs(1)).await;
 /// })
 /// ```
+///
+/// [`run()`]: crate::run()
 pub fn block_on<T>(future: impl Future<Output = T>) -> T {
     thread_local! {
         // Parker and waker associated with the current thread.
