@@ -115,8 +115,7 @@ impl ThreadLocalExecutor {
                 }
             }
 
-            // Poll the reactor and drain the injector queue. We do this occasionally to make
-            // execution more fair to all tasks involved.
+            // Drain the injector queue occasionally to make execution more fair.
             self.fetch();
         }
 
@@ -136,11 +135,8 @@ impl ThreadLocalExecutor {
         self.queue.borrow_mut().pop_front()
     }
 
-    /// Polls the reactor and moves all tasks from the injector queue into the main queue.
+    /// Moves all tasks from the injector queue into the main queue.
     fn fetch(&self) {
-        // The reactor might wake tasks belonging to this executor.
-        Reactor::get().poll().expect("failure while polling I/O");
-
         // Move tasks from the injector queue into the main queue.
         let mut queue = self.queue.borrow_mut();
         while let Ok(r) = self.injector.pop() {

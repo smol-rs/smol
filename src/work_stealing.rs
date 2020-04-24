@@ -33,7 +33,6 @@ use scoped_tls_hkt::scoped_thread_local;
 use slab::Slab;
 
 use crate::io_event::IoEvent;
-use crate::reactor::Reactor;
 use crate::task::{Runnable, Task};
 use crate::throttle;
 
@@ -180,10 +179,11 @@ impl Worker<'_> {
                 }
             }
 
-            // Flush the slot, grab some tasks from the global queue, and poll the reactor. We do
-            // this occasionally to make execution more fair to all tasks involved.
             self.push(None);
-            self.fetch();
+            if let Some(r) = retry_steal(|| self.executor.injector.steal_batch_and_pop(&self.queue))
+            {
+                self.push(Some(r));
+            }
         }
 
         // There are likely more tasks to run.
@@ -199,9 +199,6 @@ impl Worker<'_> {
         if let Some(r) = self.slot.replace(runnable.into()) {
             // If the slot had a task, push it into the queue.
             self.queue.push(r);
-
-            // Notify other workers that there are stealable tasks.
-            self.executor.event.notify();
         }
     }
 
@@ -212,39 +209,14 @@ impl Worker<'_> {
             return Some(r);
         }
 
-        // If not, fetch more tasks from the injector queue, the reactor, or other workers.
-        self.fetch();
-
-        // Check the slot and the queue again.
-        self.slot.take().or_else(|| self.queue.pop())
-    }
-
-    /// Steals from the injector and polls the reactor, or steals from other workers if that fails.
-    fn fetch(&self) {
         // Try stealing from the global queue.
         if let Some(r) = retry_steal(|| self.executor.injector.steal_batch_and_pop(&self.queue)) {
-            // Push the task, but don't return -- let's not forget to poll the reactor.
-            self.push(r);
+            return Some(r);
         }
 
-        // Poll the reactor.
-        Reactor::get().poll().expect("failure while polling I/O");
-
-        // If there is at least one task in the slot, return.
-        if let Some(r) = self.slot.take() {
-            self.slot.set(Some(r));
-            return;
-        }
-
-        // If there is at least one task in the queue, return.
-        if !self.queue.is_empty() {
-            return;
-        }
-
-        // Still no tasks found - our last hope is to steal from other workers.
+        // Try stealing from other workers.
         let stealers = self.executor.stealers.read().unwrap();
-
-        if let Some(r) = retry_steal(|| {
+        retry_steal(|| {
             // Pick a random starting point in the iterator list and rotate the list.
             let n = stealers.len();
             let start = fast_random(n);
@@ -258,10 +230,7 @@ impl Worker<'_> {
             // that's the collected result and we'll retry from the beginning.
             iter.map(|(_, s)| s.steal_batch_and_pop(&self.queue))
                 .collect()
-        }) {
-            // Push the stolen task.
-            self.push(r);
-        }
+        })
     }
 }
 

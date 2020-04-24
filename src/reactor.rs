@@ -157,14 +157,14 @@ impl Reactor {
     ///
     /// This doesn't have strong guarantees. If there are ready events, they may or may not be
     /// processed depending on whether the reactor is locked.
-    pub fn poll(&self) -> io::Result<()> {
-        if let Some(events) = self.events.try_lock() {
-            let reactor = self;
-            let mut lock = ReactorLock { reactor, events };
+    pub fn poll(&self) -> io::Result<Option<usize>> {
+        if let Some(mut lock) = self.try_lock() {
             // React to events without blocking.
-            lock.react(false)?;
+            let n = lock.react(false)?;
+            Ok(Some(n))
+        } else {
+            Ok(None)
         }
-        Ok(())
     }
 
     /// Locks the reactor.
@@ -172,6 +172,14 @@ impl Reactor {
         let reactor = self;
         let events = self.events.lock().await;
         ReactorLock { reactor, events }
+    }
+
+    /// Attempts to lock the reactor.
+    pub fn try_lock(&self) -> Option<ReactorLock<'_>> {
+        self.events.try_lock().map(|events| {
+            let reactor = self;
+            ReactorLock { reactor, events }
+        })
     }
 }
 
@@ -183,12 +191,18 @@ pub(crate) struct ReactorLock<'a> {
 
 impl ReactorLock<'_> {
     /// Blocks until at least one event is processed.
-    pub fn wait(&mut self) -> io::Result<()> {
+    pub fn wait(&mut self) -> io::Result<usize> {
         self.react(true)
     }
 
+    /// TODO
+    pub fn poll(&mut self) -> io::Result<usize> {
+        self.react(false)
+    }
+
     /// Processes new events, optionally blocking until the first event.
-    fn react(&mut self, block: bool) -> io::Result<()> {
+    fn react(&mut self, block: bool) -> io::Result<usize> {
+        let mut count = 0;
         loop {
             // Fire timers and compute the timeout until the next event.
             let timeout = self.fire_timers();
@@ -207,7 +221,7 @@ impl ReactorLock<'_> {
                 // The timeout was hit, so check for timers again.
                 Ok(0) => {
                     self.fire_timers();
-                    return Ok(());
+                    return Ok(0); // TODO
                 }
 
                 // At least one I/O event occured.
@@ -225,11 +239,12 @@ impl ReactorLock<'_> {
 
                         // Wake up tasks waiting on I/O.
                         for w in wakers.drain(..) {
+                            count += 1; // TODO: don't forget timers
                             w.wake();
                         }
                     }
 
-                    return Ok(());
+                    return Ok(count);
                 }
 
                 // The syscall was interrupted - recompute the timeout and restart.
