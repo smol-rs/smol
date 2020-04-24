@@ -8,13 +8,13 @@ use std::future::Future;
 use std::io::{self, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream, ToSocketAddrs, UdpSocket};
 #[cfg(windows)]
-use std::os::windows::io::{AsRawSocket, RawSocket};
+use std::os::windows::io::{AsRawSocket, IntoRawSocket, RawSocket};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 #[cfg(unix)]
 use std::{
-    os::unix::io::{AsRawFd, RawFd},
+    os::unix::io::{AsRawFd, IntoRawFd, RawFd},
     os::unix::net::{SocketAddr as UnixSocketAddr, UnixDatagram, UnixListener, UnixStream},
     path::Path,
 };
@@ -153,6 +153,13 @@ impl<T: AsRawFd> AsRawFd for Async<T> {
     }
 }
 
+#[cfg(unix)]
+impl<T: IntoRawFd> IntoRawFd for Async<T> {
+    fn into_raw_fd(self) -> RawFd {
+        self.source.raw
+    }
+}
+
 #[cfg(windows)]
 impl<T: AsRawSocket> Async<T> {
     /// Creates an async I/O handle.
@@ -199,6 +206,13 @@ impl<T: AsRawSocket> Async<T> {
 #[cfg(windows)]
 impl<T: AsRawSocket> AsRawSocket for Async<T> {
     fn as_raw_socket(&self) -> RawSocket {
+        self.source.raw
+    }
+}
+
+#[cfg(windows)]
+impl<T: IntowRawSocket> IntoRawSocket for Async<T> {
+    fn into_raw_socket(self) -> RawSocket {
         self.source.raw
     }
 }
