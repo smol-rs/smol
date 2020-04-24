@@ -89,12 +89,12 @@ impl Timer {
     ///
     /// ```
     /// use smol::Timer;
-    /// use std::time::{duration, Instant};
+    /// use std::time::{Duration, Instant};
     ///
     /// # smol::run(async {
     /// let now = Instant::now();
     /// let when = now + Duration::from_secs(1);
-    /// Timer::after(when).await;
+    /// Timer::at(when).await;
     /// # });
     /// ```
     pub fn at(when: Instant) -> Timer {

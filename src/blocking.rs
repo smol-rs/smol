@@ -157,6 +157,7 @@ macro_rules! blocking {
 /// ```no_run
 /// use smol::blocking;
 /// use std::fs;
+/// use futures::stream::StreamExt;
 ///
 /// # smol::run(async {
 /// let mut dir = smol::iter(blocking!(fs::read_dir("."))?);
