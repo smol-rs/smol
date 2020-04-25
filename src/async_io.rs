@@ -14,7 +14,7 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 #[cfg(unix)]
 use std::{
-    os::unix::io::{AsRawFd, IntoRawFd, RawFd},
+    os::unix::io::{AsRawFd, FromRawFd, IntoRawFd, RawFd},
     os::unix::net::{SocketAddr as UnixSocketAddr, UnixDatagram, UnixListener, UnixStream},
     path::Path,
 };
@@ -156,7 +156,15 @@ impl<T: AsRawFd> AsRawFd for Async<T> {
 #[cfg(unix)]
 impl<T: IntoRawFd> IntoRawFd for Async<T> {
     fn into_raw_fd(self) -> RawFd {
-        self.source.raw
+        self.into_inner().unwrap().into_raw_fd()
+    }
+}
+
+#[cfg(unix)]
+impl<T: FromRawFd + AsRawFd> FromRawFd for Async<T> {
+    unsafe fn from_raw_fd(fd: RawFd) -> Self {
+        let raw = T::from_raw_fd(fd);
+        Async::new(raw).expect("invalid file descriptor")
     }
 }
 
@@ -213,7 +221,7 @@ impl<T: AsRawSocket> AsRawSocket for Async<T> {
 #[cfg(windows)]
 impl<T: IntowRawSocket> IntoRawSocket for Async<T> {
     fn into_raw_socket(self) -> RawSocket {
-        self.source.raw
+        self.into_inner().unwrap().into_raw_socket()
     }
 }
 
