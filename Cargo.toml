@@ -50,7 +50,7 @@ timerfd = "1.1.1"
 anyhow = "1.0.28"
 async-h1 = "1.1.2"
 async-native-tls = "0.3.3"
-async-std = "1.5.0"
+async-std = { version = "1.5.0", features = ["unstable"] }
 async-tungstenite = { version = "0.4.2", features = ["async-native-tls"] }
 base64 = "0.12.0"
 ctrlc = "3.1.4"
@@ -68,3 +68,11 @@ tempfile = "3.1.0"
 tokio = { version = "0.2.18", default-features = false }
 tungstenite = "0.10.1"
 url = "2.1.1"
+
+criterion = "0.3"
+ring = "0.16"
+rand = "0.7"
+
+[[bench]]
+name = "blocking"
+harness = false
