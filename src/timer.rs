@@ -1,4 +1,6 @@
-//! TODO
+//! Implementation of [`Timer`].
+//!
+//! Timers are futures that fire at a predefined point in time.
 
 use std::fmt::Debug;
 use std::future::Future;

@@ -1,6 +1,8 @@
 //! The thread-local executor.
 //!
-//! TODO
+//! Tasks created by [`Task::local()`] go into this executor. Every thread calling
+//! [`run()`][`crate::run()`] creates a thread-local executor. Tasks cannot be spawned onto a
+//! thread-local executor if it is not running.
 
 use std::cell::RefCell;
 use std::collections::VecDeque;
@@ -15,15 +17,17 @@ use crate::io_event::IoEvent;
 use crate::task::{Runnable, Task};
 use crate::throttle;
 
-// The thread-local executor.
-//
-// This thread-local is only set while inside `ThreadLocalExecutor::enter()`.
-scoped_thread_local!(static EXECUTOR: ThreadLocalExecutor);
+scoped_thread_local! {
+    /// The thread-local executor.
+    ///
+    /// This thread-local is only set while inside [`ThreadLocalExecutor::enter()`].
+    static EXECUTOR: ThreadLocalExecutor
+}
 
 /// An executor for thread-local tasks.
 ///
-/// Thread-local tasks are spawned by calling `Task::local()` and their futures do not have to
-/// implement `Send`. They can only be run by the same thread that created them.
+/// Thread-local tasks are spawned by calling [`Task::local()`] and their futures do not have to
+/// implement [`Send`]. They can only be run by the same thread that created them.
 pub(crate) struct ThreadLocalExecutor {
     /// The main task queue.
     queue: RefCell<VecDeque<Runnable>>,
@@ -60,7 +64,7 @@ impl ThreadLocalExecutor {
 
     /// Spawns a future onto this executor.
     ///
-    /// Returns a `Task` handle for the spawned task.
+    /// Returns a [`Task`] handle for the spawned task.
     pub fn spawn<T: 'static>(future: impl Future<Output = T> + 'static) -> Task<T> {
         if !EXECUTOR.is_set() {
             panic!("cannot spawn a thread-local task if not inside an executor");

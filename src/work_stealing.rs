@@ -1,27 +1,22 @@
 //! The work-stealing executor.
 //!
-//! Tasks created by [`Task::spawn()`] go into this executor. Any thread calling [`run()`]
-//! initializes a `Worker` that participates in work stealing, which is allowed to run any task in
-//! this executor or in other workers.
-//!
-//! Since tasks can be stolen by any worker and thus move from thread to thread, their futures must
-//! implement [`Send`].
+//! Tasks created by [`Task::spawn()`] go into this executor. Every thread calling [`run()`]
+//! initializes a [`Worker`] that participates in work stealing, which is allowed to run any task in
+//! this executor or in other workers. Since tasks can be stolen by any worker and thus move from
+//! thread to thread, their futures must implement [`Send`].
 //!
 //! There is only one global instance of this type, accessible by [`WorkStealingExecutor::get()`].
 //!
-//! Work stealing is a strategy that reduces contention in a multi-threaded environment. If all
-//! invocations of [`run()`] used the same global task queue all the time, they would constantly
-//! "step on each other's toes", causing a lot of CPU cache traffic and too often waste time
-//! retrying queue operations in compare-and-swap loops.
+//! [Work stealing] is a strategy that reduces contention in multi-threaded environments. If all
+//! invocations of [`run()`] used the same global task queue all the time, they would contend on
+//! the queue all the time, thus slowing the executor down.
 //!
-//! The solution is to have a separate queue in each invocation of [`run()`], called a "worker".
-//! Each thread is primarily using its own worker. Once there are no more tasks in the worker, we
-//! either grab a batch of tasks from the main global queue ("injector"), or steal tasks from other
-//! workers. Of course, work-stealing still causes contention in some cases, but much less often.
-//!
-//! More about work stealing: https://en.wikipedia.org/wiki/Work_stealing
+//! The solution is to have a separate queue for each invocation of [`run()`], called a "worker".
+//! Each thread is primarily using its own worker. Once all tasks in the worker are exhausted, then
+//! we look for tasks in the global queue, called "injector", or steal tasks from other workers.
 //!
 //! [`run()`]: crate::run()
+//! [Work stealing]: https://en.wikipedia.org/wiki/Work_stealing
 
 use std::cell::Cell;
 use std::future::Future;
@@ -38,17 +33,20 @@ use crate::io_event::IoEvent;
 use crate::task::{Runnable, Task};
 use crate::throttle;
 
-// The current thread's worker.
-//
-// Other threads may steal tasks from this worker through its associated stealer that was
-// registered in the work-stealing executor.
-//
-// This thread-local is only set while inside `WorkStealingExecutor::enter()`.
-scoped_thread_local!(static WORKER: for<'a> &'a Worker<'a>);
+scoped_thread_local! {
+    /// The current thread's worker.
+    ///
+    /// Other threads may steal tasks from this worker through its associated stealer that was
+    /// registered in the work-stealing executor.
+    ///
+    /// This thread-local is only set while inside [`Worker::enter()`].
+    static WORKER: for<'a> &'a Worker<'a>
+}
 
 /// The global work-stealing executor.
 pub(crate) struct WorkStealingExecutor {
-    /// When a thread that is not inside `run()` spawns or wakes a task, it goes into this queue.
+    /// When a thread that is not inside [`run()`][`crate::run()`] spawns or wakes a task, it goes
+    /// into this queue.
     injector: deque::Injector<Runnable>,
 
     /// Registered handles for stealing tasks from workers.
@@ -76,7 +74,7 @@ impl WorkStealingExecutor {
 
     /// Spawns a future onto this executor.
     ///
-    /// Returns a `Task` handle for the spawned task.
+    /// Returns a [`Task`] handle for the spawned task.
     pub fn spawn<T: Send + 'static>(
         &'static self,
         future: impl Future<Output = T> + Send + 'static,

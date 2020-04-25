@@ -43,8 +43,8 @@ use crate::throttle;
 
 /// The reactor.
 ///
-/// Every async I/O handle and every timer is registered here. Invocations of [`run()`] poll the
-/// reactor to check for new events every now and then.
+/// Every async I/O handle and every timer is registered here. Invocations of
+/// [`run()`][`crate::run()`] poll the reactor to check for new events every now and then.
 ///
 /// There is only one global instance of this type, accessible by [`Reactor::get()`].
 pub(crate) struct Reactor {
@@ -354,7 +354,7 @@ impl Source {
     }
 }
 
-/// Converts a `nix::Error` into `std::io::Error`.
+/// Converts a [`nix::Error`] into [`io::Error`].
 #[cfg(unix)]
 fn io_err(err: nix::Error) -> io::Error {
     match err {

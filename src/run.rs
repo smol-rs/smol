@@ -1,4 +1,6 @@
-//! TODO
+//! Implementation of [`run()`].
+//!
+//! This function is the entry point to the smol executor.
 
 use std::future::Future;
 use std::task::{Context, Poll};

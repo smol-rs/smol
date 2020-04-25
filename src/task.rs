@@ -1,4 +1,6 @@
-//! TODO
+//! The task system.
+//!
+//! A [`Task`] handle represents a spawned future that is run by the executor.
 
 use std::fmt::Debug;
 use std::future::Future;
