@@ -43,7 +43,7 @@ use crate::reactor::Reactor;
 /// ) -> io::Result<T> {
 ///     futures::select! {
 ///         t = f.fuse() => t,
-///         _ = Timer::after(dur).fuse() => Err(io::Error::from(io::ErrorKind::TimedOut)),
+///         _ = Timer::after(dur).fuse() => Err(io::ErrorKind::TimedOut.into()),
 ///     }
 /// }
 ///
@@ -126,8 +126,7 @@ impl Future for Timer {
         } else {
             if self.id.is_none() {
                 // Register the timer in the reactor.
-                let waker = cx.waker().clone();
-                self.id = Some(Reactor::get().insert_timer(self.when, waker));
+                self.id = Some(Reactor::get().insert_timer(self.when, cx.waker()));
             }
             Poll::Pending
         }

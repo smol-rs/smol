@@ -1,6 +1,8 @@
-//! Async I/O.
+//! Abstraction over [epoll]/[kqueue]/[wepoll].
 //!
-//! TODO
+//! [epoll]: https://en.wikipedia.org/wiki/Epoll
+//! [kqueue]: https://en.wikipedia.org/wiki/Kqueue
+//! [wepoll]: https://github.com/piscisaureus/wepoll
 
 use std::future::Future;
 use std::io::{self, Read, Write};
