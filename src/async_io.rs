@@ -159,15 +159,6 @@ impl<T: IntoRawFd> IntoRawFd for Async<T> {
         self.into_inner().unwrap().into_raw_fd()
     }
 }
-
-#[cfg(unix)]
-impl<T: FromRawFd + AsRawFd> FromRawFd for Async<T> {
-    unsafe fn from_raw_fd(fd: RawFd) -> Self {
-        let raw = T::from_raw_fd(fd);
-        Async::new(raw).expect("invalid file descriptor")
-    }
-}
-
 #[cfg(windows)]
 impl<T: AsRawSocket> Async<T> {
     /// Creates an async I/O handle.
