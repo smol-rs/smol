@@ -70,14 +70,11 @@ pub(crate) struct Reactor {
     /// this queue. Timers actually get processed when the queue fills up or the reactor is polled.
     timer_ops: ArrayQueue<TimerOp>,
 
-    /// An I/O event that is triggered when a new earliest timer is registered.
-    ///
-    /// This is used to wake up the thread waiting on the reactor, which would otherwise wait until
-    /// the previously earliest timer.
+    /// An I/O event that is triggered when a new timer is registered.
     ///
     /// The reason why this field is lazily created is because `IoEvent`s can be created only after
     /// the reactor is fully initialized.
-    event: Lazy<IoEvent>,
+    timer_event: Lazy<IoEvent>,
 }
 
 impl Reactor {
@@ -89,7 +86,7 @@ impl Reactor {
             events: piper::Lock::new(sys::Events::new()),
             timers: piper::Mutex::new(BTreeMap::new()),
             timer_ops: ArrayQueue::new(1000),
-            event: Lazy::new(|| IoEvent::new().expect("cannot create an `IoEvent`")),
+            timer_event: Lazy::new(|| IoEvent::new().expect("cannot create an `IoEvent`")),
         });
         &REACTOR
     }
@@ -150,7 +147,7 @@ impl Reactor {
         }
 
         // Interrupt the reactor.
-        self.event.notify();
+        self.timer_event.notify();
 
         id
     }
@@ -183,6 +180,9 @@ impl Reactor {
     ///
     /// Returns the duration until the next timer before this method was called.
     fn fire_timers(&self) -> Option<Duration> {
+        // Clear this event because we're about to fire timers.
+        self.timer_event.clear();
+
         let mut timers = self.timers.lock();
 
         // Process timer operations, but no more than the queue capacity because otherwise we could
