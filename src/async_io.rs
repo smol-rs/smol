@@ -210,7 +210,7 @@ impl<T: AsRawSocket> AsRawSocket for Async<T> {
 }
 
 #[cfg(windows)]
-impl<T: IntowRawSocket> IntoRawSocket for Async<T> {
+impl<T: IntoRawSocket> IntoRawSocket for Async<T> {
     fn into_raw_socket(self) -> RawSocket {
         self.into_inner().unwrap().into_raw_socket()
     }
