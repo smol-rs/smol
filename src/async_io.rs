@@ -14,7 +14,7 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 #[cfg(unix)]
 use std::{
-    os::unix::io::{AsRawFd, FromRawFd, IntoRawFd, RawFd},
+    os::unix::io::{AsRawFd, IntoRawFd, RawFd},
     os::unix::net::{SocketAddr as UnixSocketAddr, UnixDatagram, UnixListener, UnixStream},
     path::Path,
 };
