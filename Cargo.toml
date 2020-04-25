@@ -6,6 +6,17 @@ edition = "2018"
 description = "WIP"
 license = "MIT OR Apache-2.0"
 
+[features]
+# Optional feature for seamless integration with crates depending on tokio.
+# It creates a global tokio runtime and sets up its context inside smol.
+#
+# Enable the feature as follows:
+# ```
+# [dependencies]
+# smol = { version = "1", features = ["tokio02"] }
+# ```
+tokio02 = ["tokio"]
+
 [dependencies]
 async-task = "3.0.0"
 crossbeam = "0.7.3"
@@ -16,14 +27,6 @@ scoped-tls-hkt = "0.1.2"
 slab = "0.4.2"
 socket2 = { version = "0.3.12", features = ["pair", "unix"] }
 
-# Optional feature for seamless integration with crates depending on tokio.
-# It creates a global tokio runtime and sets up its context inside smol.
-#
-# Enable the feature as follows:
-# ```
-# [dependencies]
-# smol = { version = "1", features = ["tokio"] }
-# ```
 [dependencies.tokio]
 version = "0.2.18"
 default-features = false
@@ -59,7 +62,7 @@ num_cpus = "1.13.0"
 reqwest = "0.10.4"
 scraper = "0.11.0"
 signal-hook = "0.1.13"
-smol = { path = ".", features = ["tokio"] }
+smol = { path = ".", features = ["tokio02"] }
 surf = { version = "2.0.0-alpha.1", default-features = false, features = ["h1-client"] }
 tempfile = "3.1.0"
 tokio = { version = "0.2.18", default-features = false }
