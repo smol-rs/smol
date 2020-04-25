@@ -176,7 +176,7 @@ where
     }
 }
 
-impl<T> Task<T> {
+impl Task<()> {
     /// Detaches the task to let it keep running in the background.
     ///
     /// # Examples
@@ -195,10 +195,12 @@ impl<T> Task<T> {
     /// .detach();
     /// # })
     /// ```
-    pub fn detach(mut self) -> async_task::JoinHandle<T, ()> {
-        self.0.take().unwrap()
+    pub fn detach(mut self) {
+        self.0.take().unwrap();
     }
+}
 
+impl<T> Task<T> {
     /// Cancels the task and waits for it to stop running.
     ///
     /// Returns the task's output if it was completed just before it got canceled, or `None` if it
@@ -250,5 +252,13 @@ impl<T> Future for Task<T> {
             Poll::Pending => Poll::Pending,
             Poll::Ready(output) => Poll::Ready(output.expect("task has failed")),
         }
+    }
+}
+
+impl<T> Into<async_task::JoinHandle<T, ()>> for Task<T> {
+    fn into(mut self) -> async_task::JoinHandle<T, ()> {
+        self.0
+            .take()
+            .expect("task was already canceled or has failed")
     }
 }
