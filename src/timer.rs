@@ -57,10 +57,10 @@ use crate::reactor::Reactor;
 /// # io::Result::Ok(()) });
 #[derive(Debug)]
 pub struct Timer {
-    /// A unique ID for this timer.
+    /// This timer's ID.
     ///
     /// When this field is set to `None`, this timer is not registered in the reactor.
-    id: Option<u64>,
+    id: Option<usize>,
 
     /// When this timer fires.
     when: Instant,

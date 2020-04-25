@@ -12,7 +12,6 @@ use crossbeam::queue::SegQueue;
 use scoped_tls_hkt::scoped_thread_local;
 
 use crate::io_event::IoEvent;
-use crate::reactor::Reactor;
 use crate::task::{Runnable, Task};
 use crate::throttle;
 
@@ -97,13 +96,13 @@ impl ThreadLocalExecutor {
         })
     }
 
-    /// Executes a batch of tasks and returns `true` if there are more tasks to run.
+    /// Executes a batch of tasks and returns `true` if there may be more tasks to run.
     pub fn execute(&self) -> bool {
         // Execute 4 series of 50 tasks.
         for _ in 0..4 {
             for _ in 0..50 {
                 // Find the next task to run.
-                match self.pop() {
+                match self.search() {
                     None => {
                         // There are no more tasks to run.
                         return false;
@@ -115,8 +114,7 @@ impl ThreadLocalExecutor {
                 }
             }
 
-            // Poll the reactor and drain the injector queue. We do this occasionally to make
-            // execution more fair to all tasks involved.
+            // Drain the injector queue occasionally for fair scheduling.
             self.fetch();
         }
 
@@ -125,23 +123,21 @@ impl ThreadLocalExecutor {
     }
 
     /// Finds the next task to run.
-    fn pop(&self) -> Option<Runnable> {
+    fn search(&self) -> Option<Runnable> {
         // Check if there is a task in the main queue.
         if let Some(r) = self.queue.borrow_mut().pop_front() {
             return Some(r);
         }
-        // If not, fetch more tasks from the reactor or the injector queue.
+
+        // If not, fetch tasks from the injector queue.
         self.fetch();
+
         // Check the main queue again.
         self.queue.borrow_mut().pop_front()
     }
 
-    /// Polls the reactor and moves all tasks from the injector queue into the main queue.
+    /// Moves all tasks from the injector queue into the main queue.
     fn fetch(&self) {
-        // The reactor might wake tasks belonging to this executor.
-        Reactor::get().poll().expect("failure while polling I/O");
-
-        // Move tasks from the injector queue into the main queue.
         let mut queue = self.queue.borrow_mut();
         while let Ok(r) = self.injector.pop() {
             queue.push_back(r);

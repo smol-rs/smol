@@ -24,7 +24,7 @@ use std::mem;
 use std::os::unix::io::RawFd;
 #[cfg(windows)]
 use std::os::windows::io::{FromRawSocket, RawSocket};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::task::{Context, Poll, Waker};
 use std::time::{Duration, Instant};
@@ -57,10 +57,10 @@ pub(crate) struct Reactor {
 
     /// An ordered map of registered timers.
     ///
-    /// Timers are in the order in which they fire. The `u64` in this type is a unique timer ID
-    /// used to distinguish timers that fire at the same time. The `Waker` represents the task
-    /// awaiting the timer.
-    timers: piper::Mutex<BTreeMap<(Instant, u64), Waker>>,
+    /// Timers are in the order in which they fire. The `usize` in this type is a timer ID used to
+    /// distinguish timers that fire at the same time. The `Waker` represents the task awaiting the
+    /// timer.
+    timers: piper::Mutex<BTreeMap<(Instant, usize), Waker>>,
 
     /// An I/O event that is triggered when a new earliest timer is registered.
     ///
@@ -112,7 +112,7 @@ impl Reactor {
             raw,
             key: vacant.key(),
             wakers: piper::Mutex::new(Vec::new()),
-            tick: AtomicU64::new(0),
+            tick: AtomicUsize::new(0),
         });
         self.sys.register(raw, source.key)?;
 
@@ -128,14 +128,13 @@ impl Reactor {
 
     /// Registers a timer in the reactor.
     ///
-    /// Returns the inserted timer's unique ID.
-    pub fn insert_timer(&self, when: Instant, waker: Waker) -> u64 {
+    /// Returns the inserted timer's ID.
+    pub fn insert_timer(&self, when: Instant, waker: Waker) -> usize {
         let mut timers = self.timers.lock();
 
         // Generate a new timer ID.
-        static ID_GENERATOR: AtomicU64 = AtomicU64::new(1);
+        static ID_GENERATOR: AtomicUsize = AtomicUsize::new(1);
         let id = ID_GENERATOR.fetch_add(1, Ordering::Relaxed);
-        assert!(id < u64::max_value() / 2, "exhausted timer IDs");
 
         // Insert this timer into the timers map.
         timers.insert((when, id), waker);
@@ -149,22 +148,16 @@ impl Reactor {
     }
 
     /// Deregisters a timer from the reactor.
-    pub fn remove_timer(&self, when: Instant, id: u64) {
+    pub fn remove_timer(&self, when: Instant, id: usize) {
         self.timers.lock().remove(&(when, id));
     }
 
-    /// Processes ready events without blocking.
-    ///
-    /// This doesn't have strong guarantees. If there are ready events, they may or may not be
-    /// processed depending on whether the reactor is locked.
-    pub fn poll(&self) -> io::Result<()> {
-        if let Some(events) = self.events.try_lock() {
+    /// Attempts to lock the reactor.
+    pub fn try_lock(&self) -> Option<ReactorLock<'_>> {
+        self.events.try_lock().map(|events| {
             let reactor = self;
-            let mut lock = ReactorLock { reactor, events };
-            // React to events without blocking.
-            lock.react(false)?;
-        }
-        Ok(())
+            ReactorLock { reactor, events }
+        })
     }
 
     /// Locks the reactor.
@@ -182,94 +175,80 @@ pub(crate) struct ReactorLock<'a> {
 }
 
 impl ReactorLock<'_> {
-    /// Blocks until at least one event is processed.
+    /// Processes ready events without blocking.
+    pub fn poll(&mut self) -> io::Result<()> {
+        self.react(false)
+    }
+
+    /// Blocks until at least one event is processed or the syscall is interrupted.
     pub fn wait(&mut self) -> io::Result<()> {
         self.react(true)
     }
 
     /// Processes new events, optionally blocking until the first event.
     fn react(&mut self, block: bool) -> io::Result<()> {
-        loop {
-            // Fire timers and compute the timeout until the next event.
-            let timeout = self.fire_timers();
+        let timeout = {
+            let mut timers = self.reactor.timers.lock();
+            let now = Instant::now();
 
-            // The timeout for waiting on I/O events.
-            let timeout = if block {
+            // Split timers into ready and pending timers.
+            let pending = timers.split_off(&(now, 0));
+            let ready = mem::replace(&mut *timers, pending);
+
+            // Calculate the timeout for waiting on I/O events.
+            let timeout = if ready.is_empty() && block {
                 // Block until the next timer.
-                timeout
+                timers
+                    .keys()
+                    .next()
+                    .map(|(when, _)| when.saturating_duration_since(now))
             } else {
                 // Don't block.
                 Some(Duration::from_secs(0))
             };
 
-            // Block on I/O events.
-            match self.reactor.sys.wait(&mut self.events, timeout) {
-                // The timeout was hit, so check for timers again.
-                Ok(0) => {
-                    self.fire_timers();
-                    return Ok(());
-                }
-
-                // At least one I/O event occured.
-                Ok(_) => {
-                    // Iterate over sources in the event list.
-                    let sources = self.reactor.sources.lock();
-
-                    for source in self.events.iter().filter_map(|i| sources.get(i)) {
-                        // I/O events may deregister sources, so we need to re-register.
-                        self.reactor.sys.reregister(source.raw, source.key)?;
-
-                        let mut wakers = source.wakers.lock();
-                        let tick = source.tick.load(Ordering::Acquire);
-                        source.tick.store(tick.wrapping_add(1), Ordering::Release);
-
-                        // Wake up tasks waiting on I/O.
-                        for w in wakers.drain(..) {
-                            w.wake();
-                        }
-                    }
-
-                    return Ok(());
-                }
-
-                // The syscall was interrupted - recompute the timeout and restart.
-                Err(err) if err.kind() == io::ErrorKind::Interrupted => continue,
-
-                // A real error occureed.
-                Err(err) => return Err(err),
+            // Wake up tasks waiting on timers.
+            for (_, waker) in ready {
+                waker.wake();
             }
-        }
-    }
 
-    /// Fires ready timers and returns how long we need to wait until the next event.
-    ///
-    /// If there are ready timers, we don't need to wait - returns `Some(Duration::from_secs(0))`.
-    ///
-    /// If there are no timers at all, we need to wait forever - returns `None`.
-    fn fire_timers(&self) -> Option<Duration> {
-        // Split timers into ready and pending timers.
-        let mut timers = self.reactor.timers.lock();
-        let now = Instant::now();
-        let pending = timers.split_off(&(now, 0));
-        let ready = mem::replace(&mut *timers, pending);
-
-        let timeout = if ready.is_empty() {
-            // Calculate the timeout till the first timer fires.
-            timers
-                .keys()
-                .next()
-                .map(|(when, _)| when.saturating_duration_since(now))
-        } else {
-            // If there are ready timers, the timeout is zero.
-            Some(Duration::from_secs(0))
+            timeout
         };
 
-        // Wake up tasks waiting on timers.
-        for (_, waker) in ready {
-            waker.wake();
-        }
+        // Block on I/O events.
+        match self.reactor.sys.wait(&mut self.events, timeout) {
+            // The timeout was hit.
+            Ok(0) => Ok(()),
 
-        timeout
+            // At least one I/O event occured.
+            Ok(_) => {
+                // Iterate over sources in the event list.
+                let sources = self.reactor.sources.lock();
+
+                for source in self.events.iter().filter_map(|i| sources.get(i)) {
+                    // I/O events may deregister sources, so we need to re-register.
+                    self.reactor.sys.reregister(source.raw, source.key)?;
+
+                    // Bump the ticker.
+                    let mut wakers = source.wakers.lock();
+                    let tick = source.tick.load(Ordering::Acquire);
+                    source.tick.store(tick.wrapping_add(1), Ordering::Release);
+
+                    // Wake up tasks waiting on I/O.
+                    for w in wakers.drain(..) {
+                        w.wake();
+                    }
+                }
+
+                Ok(())
+            }
+
+            // The syscall was interrupted.
+            Err(err) if err.kind() == io::ErrorKind::Interrupted => Ok(()),
+
+            // A real error occureed.
+            Err(err) => Err(err),
+        }
     }
 }
 
@@ -291,7 +270,7 @@ pub(crate) struct Source {
     wakers: piper::Mutex<Vec<Waker>>,
 
     /// Incremented on every I/O notification - this is only used for synchronization.
-    tick: AtomicU64,
+    tick: AtomicUsize,
 }
 
 impl Source {

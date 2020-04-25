@@ -16,8 +16,8 @@
 //!
 //! The solution is to have a separate queue in each invocation of [`run()`], called a "worker".
 //! Each thread is primarily using its own worker. Once there are no more tasks in the worker, we
-//! either grab a batch of tasks from the main global queue, or steal tasks from other workers.
-//! Of course, work-stealing still causes contention in some cases, but much less often.
+//! either grab a batch of tasks from the main global queue ("injector"), or steal tasks from other
+//! workers. Of course, work-stealing still causes contention in some cases, but much less often.
 //!
 //! More about work stealing: https://en.wikipedia.org/wiki/Work_stealing
 //!
@@ -35,7 +35,6 @@ use scoped_tls_hkt::scoped_thread_local;
 use slab::Slab;
 
 use crate::io_event::IoEvent;
-use crate::reactor::Reactor;
 use crate::task::{Runnable, Task};
 use crate::throttle;
 
@@ -130,6 +129,8 @@ pub(crate) struct Worker<'a> {
     key: usize,
 
     /// A slot into which tasks go before entering the actual queue.
+    ///
+    /// Note that other workers cannot steal this task.
     slot: Cell<Option<Runnable>>,
 
     /// A queue of tasks.
@@ -150,13 +151,13 @@ impl Worker<'_> {
         WORKER.set(self, f)
     }
 
-    /// Executes a batch of tasks and returns `true` if there are more tasks to run.
+    /// Executes a batch of tasks and returns `true` if there may be more tasks to run.
     pub fn execute(&self) -> bool {
         // Execute 4 series of 50 tasks.
         for _ in 0..4 {
             for _ in 0..50 {
                 // Find the next task to run.
-                match self.pop() {
+                match self.search() {
                     None => {
                         // There are no more tasks to run.
                         return false;
@@ -164,28 +165,49 @@ impl Worker<'_> {
                     Some(r) => {
                         // Notify other workers that there may be stealable tasks.
                         //
-                        // This is necessary because `pop()` sometimes re-shuffles tasks between
-                        // queues, which races with other workers looking for tasks. They might
-                        // believe there are no tasks while there really are, so we notify here.
+                        // Instead of notifying when we find a task, we could notify when we push a
+                        // task into the local queue - either strategy works.
+                        //
+                        // Notifying when we find a task is somewhat simpler because then we don't
+                        // need to worry about `search()` re-shuffling tasks between queues, which
+                        // races with other workers searching for tasks. Other workers might not
+                        // find a task while there is one! Notifying here avoids this problem.
                         self.executor.event.notify();
 
                         // Run the task.
                         if throttle::setup(|| r.run()) {
-                            // The task was scheduled while it was running, which means it got
-                            // pushed into this worker. It is now inside the slot and would be the
-                            // next task to run.
+                            // The task was woken while it was running, which means it got
+                            // scheduled the moment running completed. Therefore, it is now inside
+                            // the slot and would be the next task to run.
                             //
-                            // Let's flush the slot in order to give other tasks a chance to run.
-                            self.push(None);
+                            // Instead of re-running the task in the next iteration, let's flush
+                            // the slot in order to give other tasks a chance to run.
+                            //
+                            // This is a necessary step to ensure task yielding works as expected.
+                            // If a task wakes itself and returns `Poll::Pending`, we don't want it
+                            // to run immediately after that because that'd defeat the whole
+                            // purpose of yielding.
+                            self.flush_slot();
                         }
                     }
                 }
             }
 
-            // Flush the slot, grab some tasks from the global queue, and poll the reactor. We do
-            // this occasionally to make execution more fair to all tasks involved.
-            self.push(None);
-            self.fetch();
+            // Flush the slot occasionally for fair scheduling.
+            //
+            // It is possible for two tasks to be exchanging messages between each other forever so
+            // that every time one of them runs, it wakes the other one and puts it into the slot.
+            // Flushing the slot prevena them from hogging the executor.
+            self.flush_slot();
+
+            // Steal some tasks from the injector queue.
+            //
+            // If the executor always has tasks in the local queue, it might never get to run tasks
+            // in the injector queue. To prevent them from starvation, we must move them into the
+            // local queue every now and then.
+            if let Some(r) = self.steal_global() {
+                self.push(r);
+            }
         }
 
         // There are likely more tasks to run.
@@ -193,60 +215,36 @@ impl Worker<'_> {
     }
 
     /// Pushes a task into this worker.
-    ///
-    /// If the given task is `None`, the slot's contents gets replaced with `None`, moving its
-    /// previously held task into the queue (if there was one).
-    fn push(&self, runnable: impl Into<Option<Runnable>>) {
+    fn push(&self, runnable: Runnable) {
         // Put the task into the slot.
-        if let Some(r) = self.slot.replace(runnable.into()) {
+        if let Some(r) = self.slot.replace(Some(runnable)) {
             // If the slot had a task, push it into the queue.
             self.queue.push(r);
+        }
+    }
 
-            // Notify other workers that there are stealable tasks.
-            self.executor.event.notify();
+    /// Moves a task from the slot into the local queue.
+    fn flush_slot(&self) {
+        if let Some(r) = self.slot.take() {
+            self.queue.push(r);
         }
     }
 
     /// Finds the next task to run.
-    fn pop(&self) -> Option<Runnable> {
+    fn search(&self) -> Option<Runnable> {
         // Check if there is a task in the slot or in the queue.
         if let Some(r) = self.slot.take().or_else(|| self.queue.pop()) {
             return Some(r);
         }
 
-        // If not, fetch more tasks from the injector queue, the reactor, or other workers.
-        self.fetch();
-
-        // Check the slot and the queue again.
-        self.slot.take().or_else(|| self.queue.pop())
-    }
-
-    /// Steals from the injector and polls the reactor, or steals from other workers if that fails.
-    fn fetch(&self) {
-        // Try stealing from the global queue.
-        if let Some(r) = retry_steal(|| self.executor.injector.steal_batch_and_pop(&self.queue)) {
-            // Push the task, but don't return -- let's not forget to poll the reactor.
-            self.push(r);
+        // Try stealing from the injector queue.
+        if let Some(r) = self.steal_global() {
+            return Some(r);
         }
 
-        // Poll the reactor.
-        Reactor::get().poll().expect("failure while polling I/O");
-
-        // If there is at least one task in the slot, return.
-        if let Some(r) = self.slot.take() {
-            self.slot.set(Some(r));
-            return;
-        }
-
-        // If there is at least one task in the queue, return.
-        if !self.queue.is_empty() {
-            return;
-        }
-
-        // Still no tasks found - our last hope is to steal from other workers.
+        // Try stealing from other workers.
         let stealers = self.executor.stealers.read().unwrap();
-
-        if let Some(r) = retry_steal(|| {
+        retry_steal(|| {
             // Pick a random starting point in the iterator list and rotate the list.
             let n = stealers.len();
             let start = fast_random(n);
@@ -260,10 +258,12 @@ impl Worker<'_> {
             // that's the collected result and we'll retry from the beginning.
             iter.map(|(_, s)| s.steal_batch_and_pop(&self.queue))
                 .collect()
-        }) {
-            // Push the stolen task.
-            self.push(r);
-        }
+        })
+    }
+
+    /// Steals tasks from the injector queue.
+    fn steal_global(&self) -> Option<Runnable> {
+        retry_steal(|| self.executor.injector.steal_batch_and_pop(&self.queue))
     }
 }
 
@@ -281,6 +281,10 @@ impl Drop for Worker<'_> {
         while let Some(r) = self.queue.pop() {
             r.schedule();
         }
+
+        // This task will not search for tasks anymore and therefore won't notify other workers if
+        // new tasks are found. Notify another worker to start searching right away.
+        self.executor.event.notify();
     }
 }
 

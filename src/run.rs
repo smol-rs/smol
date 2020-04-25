@@ -2,12 +2,14 @@
 
 use std::future::Future;
 use std::task::{Context, Poll};
+use std::thread;
 
 use futures::future::{self, Either};
 
 use crate::block_on;
 use crate::context;
-use crate::reactor::Reactor;
+use crate::io_event::IoEvent;
+use crate::reactor::{Reactor, ReactorLock};
 use crate::thread_local::ThreadLocalExecutor;
 use crate::throttle;
 use crate::work_stealing::WorkStealingExecutor;
@@ -108,6 +110,12 @@ pub fn run<T>(future: impl Future<Output = T>) -> T {
     let enter = |f| worker.enter(|| enter(f));
 
     enter(|| {
+        // A list of I/O events that indicate there is work to do.
+        let io_events = [local.event(), ws_executor.event()];
+
+        // Number of times this thread has yielded because it didn't find any work.
+        let mut yields = 0;
+
         // We run four components at the same time, treating them all fairly and making sure none
         // of them get starved:
         //
@@ -133,47 +141,76 @@ pub fn run<T>(future: impl Future<Output = T>) -> T {
             if let Poll::Ready(val) = throttle::setup(|| future.as_mut().poll(cx)) {
                 return val;
             }
+
             // 2. Run a batch of tasks in the thread-local executor.
             let more_local = local.execute();
             // 3. Run a batch of tasks in the work-stealing executor.
             let more_worker = worker.execute();
-            // 4. Poll the reactor.
-            reactor.poll().expect("failure while polling I/O");
 
-            // If there is more work in the thread-local or the work-stealing executor, continue
-            // the loop.
-            if more_local || more_worker {
+            // 4. Poll the reactor.
+            if let Some(reactor_lock) = reactor.try_lock() {
+                yields = 0;
+                react(reactor_lock, &io_events, more_local || more_worker);
                 continue;
             }
 
+            // If there is more work in the thread-local or the work-stealing executor, continue.
+            if more_local || more_worker {
+                yields = 0;
+                continue;
+            }
+
+            // Yield a few times if no work is found.
+            yields += 1;
+            if yields <= 2 {
+                thread::yield_now();
+                continue;
+            }
+
+            // If still no work is found, stop yielding and block the thread.
+            yields = 0;
+
             // Prepare for blocking until the reactor is locked or `local.event()` is triggered.
             //
-            // Note that there is no need to wait for `ws_executor.event()`. If the reactor is
-            // locked immediately, we'll check for the I/O event right after that anyway.
+            // Note that there is no need to wait for `ws_executor.event()`. If we lock the reactor
+            // immediately, we'll check for the I/O event right after that anyway.
             //
-            // If some other worker is holding the reactor locked, it will be unblocked as soon as
-            // the I/O event is triggered. Then, another worker will be allowed to lock the
-            // reactor, and will be unblocked if there is more work to do. Every worker triggers
-            // `ws_executor.event()` each time it finds a runnable task.
+            // If some other worker is holding the reactor locked, it will unlock it as soon as the
+            // I/O event is triggered. Then, another worker will be allowed to lock the reactor,
+            // and will unlock it if there is more work to do because every worker triggers the I/O
+            // event whenever it finds a runnable task.
             let lock = reactor.lock();
             let notified = local.event().notified();
             futures::pin_mut!(lock);
             futures::pin_mut!(notified);
 
             // Block until either the reactor is locked or `local.event()` is triggered.
-            if let Either::Left((mut reactor_lock, _)) = block_on(future::select(lock, notified)) {
-                // Clear the two I/O events.
-                let local_ev = local.event().clear();
-                let ws_ev = ws_executor.event().clear();
-
-                // If any of the two I/O events has been triggered, continue the loop.
-                if local_ev || ws_ev {
-                    continue;
-                }
-
-                // Block until an I/O event occurs.
-                reactor_lock.wait().expect("failure while waiting on I/O");
+            if let Either::Left((reactor_lock, _)) = block_on(future::select(lock, notified)) {
+                react(reactor_lock, &io_events, false);
             }
         }
     })
+}
+
+fn react(mut reactor_lock: ReactorLock<'_>, io_events: &[&IoEvent], mut more_tasks: bool) {
+    // Clear all I/O events and check if any of them were triggered.
+    for ev in io_events {
+        if ev.clear() {
+            more_tasks = true;
+        }
+    }
+
+    if more_tasks {
+        // If there might be more tasks to run, just poll without blocking.
+        reactor_lock.poll().expect("failure while polling I/O");
+    } else {
+        // Otherwise, block until the first I/O event or a timer.
+        reactor_lock.wait().expect("failure while waiting on I/O");
+
+        // Clear all I/O events before dropping the lock. This is not really necessary, but
+        // clearing flags here might prevent a redundant wakeup in the future.
+        for ev in io_events {
+            ev.clear();
+        }
+    }
 }
