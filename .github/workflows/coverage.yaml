@@ -1,6 +1,6 @@
 name: Code Coverage
 
-on: [push]
+on: []
 
 jobs:
   grcov:
