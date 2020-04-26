@@ -60,7 +60,7 @@
 //!
 //! Look inside the [examples] directory for more.
 //!
-//! The examples show how to read a [file][read-file] or a [directory][read-directory],
+//! The examples show how to read a [file][read-file] or a [directory][read-dir],
 //! [spawn][process-run] a process and read its [output][process-output], use timers to
 //! [sleep][timer-sleep] or set a [timeout][timer-timeout], or catch the [Ctrl-C][ctrl-c] signal
 //! for graceful shutdown.
@@ -77,10 +77,10 @@
 //! Many non-async libraries can be plugged into the runtime: see how to use [inotify], [timerfd],
 //! [signal-hook], and [uds_windows].
 //!
-//! Finally, you can mix this runtime with [async-std][compat-async-std] and [tokio][compat-tokio]
-//! to use runtime-dependent libraries like [surf][compat-surf] and [reqwest][compat-reqwest].
+//! Finally, you can mix this runtime with [async-std] and [tokio]
+//! to use runtime-dependent libraries like [surf] and [reqwest].
 //!
-//! TODO: See [here][compat] for an example of using this runtime with libraries like async-std, tokio,
+//! See [here][compat] for an example of using this runtime with libraries like async-std, tokio,
 //! reqwest, and surf.
 //!
 //! [epoll]: https://en.wikipedia.org/wiki/Epoll
@@ -89,23 +89,24 @@
 //!
 //! [examples]: https://github.com/stjepang/smol/tree/master/examples
 //! [async-h1]: https://docs.rs/async-h1
+//! [async-std]: https://docs.rs/async-std
 //! [hyper]: https://docs.rs/hyper
+//! [reqwest]: https://docs.rs/reqwest
+//! [surf]: https://docs.rs/surf
+//! [tokio]: https://docs.rs/tokio
 //!
 //! [async-h1-client]: https://github.com/stjepang/smol/blob/master/examples/async-h1-client.rs
 //! [async-h1-server]: https://github.com/stjepang/smol/blob/master/examples/async-h1-server.rs
 //! [chat-client]: https://github.com/stjepang/smol/blob/master/examples/chat-client.rs
 //! [chat-server]: https://github.com/stjepang/smol/blob/master/examples/chat-server.rs
-//! [compat-async-std]: https://github.com/stjepang/smol/blob/master/examples/compat-async-std.rs
-//! [compat-reqwest]: https://github.com/stjepang/smol/blob/master/examples/compat-reqwest.rs
-//! [compat-surf]: https://github.com/stjepang/smol/blob/master/examples/compat-surf.rs
-//! [compat-tokio]: https://github.com/stjepang/smol/blob/master/examples/compat-tokio.rs
+//! [compat]: https://github.com/stjepang/smol/blob/master/examples/other-runtime.rs
 //! [ctrl-c]: https://github.com/stjepang/smol/blob/master/examples/ctrl-c.rs
 //! [hyper-client]: https://github.com/stjepang/smol/blob/master/examples/hyper-client.rs
 //! [hyper-server]: https://github.com/stjepang/smol/blob/master/examples/hyper-server.rs
 //! [inotify]: https://github.com/stjepang/smol/blob/master/examples/linux-inotify.rs
 //! [process-output]: https://github.com/stjepang/smol/blob/master/examples/process-output.rs
 //! [process-run]: https://github.com/stjepang/smol/blob/master/examples/process-run.rs
-//! [read-directory]: https://github.com/stjepang/smol/blob/master/examples/read-directory.rs
+//! [read-dir]: https://github.com/stjepang/smol/blob/master/examples/read-dir.rs
 //! [read-file]: https://github.com/stjepang/smol/blob/master/examples/read-file.rs
 //! [signal-hook]: https://github.com/stjepang/smol/blob/master/examples/unix-signal.rs
 //! [simple-client]: https://github.com/stjepang/smol/blob/master/examples/simple-client.rs
