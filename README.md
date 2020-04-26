@@ -1,6 +1,6 @@
 # smol
 
-[![Build](https://github.com/stjepang/smol/workflows/%22Build+and+test%22/badge.svg)](
+[![Build](https://github.com/stjepang/smol/workflows/Build%20and%20test/badge.svg)](
 https://travis-ci.org/stjepang/smol)
 [![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](
 https://github.com/stjepang/smol)
