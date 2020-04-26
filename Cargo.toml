@@ -43,7 +43,7 @@ optional = true
 nix = "0.17.0"
 
 [target.'cfg(windows)'.dependencies]
-wepoll-binding = "1.1.0"
+wepoll-binding = "2.0.0"
 
 [target.'cfg(windows)'.dev-dependencies]
 uds_windows = "0.1.4"
