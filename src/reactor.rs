@@ -141,7 +141,11 @@ impl Reactor {
         let id = ID_GENERATOR.fetch_add(1, Ordering::Relaxed);
 
         // Push an insert operation.
-        while self.timer_ops.push(TimerOp::Insert(when, id, waker.clone())).is_err() {
+        while self
+            .timer_ops
+            .push(TimerOp::Insert(when, id, waker.clone()))
+            .is_err()
+        {
             // Fire timers to drain the queue.
             self.fire_timers();
         }

@@ -1,4 +1,11 @@
-// TODO: document
+//! Uses the `signal-hook` crate to catch the Ctrl-C signal.
+//!
+//! Run with:
+//!
+//! ```
+//! cargo run --example unix-signal
+//! ```
+
 #[cfg(unix)]
 fn main() -> std::io::Result<()> {
     use std::os::unix::net::UnixStream;
@@ -7,13 +14,15 @@ fn main() -> std::io::Result<()> {
     use smol::Async;
 
     smol::run(async {
+        // Create a Unix stream that receives a byte on each signal occurrence.
         let (a, mut b) = Async::<UnixStream>::pair()?;
         signal_hook::pipe::register(signal_hook::SIGINT, a)?;
+        println!("Waiting for Ctrl-C...");
 
-        println!("Waiting for Ctrl-C");
+        // Receive a byte that indicates the Ctrl-C signal occured.
         b.read_exact(&mut [0]).await?;
-        println!("Done!");
 
+        println!("Done!");
         Ok(())
     })
 }

@@ -1,4 +1,11 @@
-// TODO: document
+//! Crawls the Rust language website and prints found pages.
+//!
+//! Run with:
+//!
+//! ```
+//! cargo run --example web-crawler
+//! ```
+
 use std::collections::{HashSet, VecDeque};
 
 use anyhow::Result;
@@ -36,23 +43,27 @@ fn main() -> Result<()> {
         let (s, r) = piper::chan(100);
         let mut tasks = 0;
 
+        // Loop while the queue is not empty or tasks are fetching pages.
         while queue.len() + tasks > 0 {
+            // Process URLs in the queue and fetch more pages.
             while let Some(url) = queue.pop_front() {
                 println!("{}", url);
                 tasks += 1;
                 Task::spawn(fetch(url, s.clone())).detach();
             }
 
-            let body = match r.try_recv() {
-                Some(body) => body,
-                None => r.recv().await.unwrap(),
-            };
+            // Get a fetched web page.
+            let body = r.recv().await.unwrap();
             tasks -= 1;
 
+            // Parse links in the web page and add them to the queue.
             for mut url in links(body) {
+                // Add the site prefix if it's missing.
                 if url.starts_with('/') {
                     url = format!("{}{}", ROOT, url);
                 }
+
+                // If the URL makes sense and was not seen already, push it into the queue.
                 if url.starts_with(ROOT) && seen.insert(url.clone()) {
                     url = url.trim_end_matches('/').to_string();
                     queue.push_back(url);

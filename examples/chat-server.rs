@@ -22,9 +22,15 @@ use smol::{Async, Task};
 
 type Client = Arc<Async<TcpStream>>;
 
+/// An event on the chat server.
 enum Event {
+    /// A client has joined.
     Join(SocketAddr, Client),
+
+    /// A client has left.
     Leave(SocketAddr),
+
+    /// A client sent a message.
     Message(SocketAddr, String),
 }
 

@@ -165,12 +165,25 @@ impl BlockingExecutor {
 ///
 /// # Examples
 ///
+/// Read a file to string:
+///
 /// ```no_run
 /// use smol::blocking;
 /// use std::fs;
 ///
 /// # smol::run(async {
 /// let contents = blocking!(fs::read_to_string("file.txt"))?;
+/// # std::io::Result::Ok(()) });
+/// ```
+///
+/// Spawn a process:
+///
+/// ```no_run
+/// use smol::blocking;
+/// use std::process::Command;
+///
+/// # smol::run(async {
+/// let out = blocking!(Command::new("dir").output())?;
 /// # std::io::Result::Ok(()) });
 /// ```
 #[macro_export]
@@ -195,10 +208,11 @@ macro_rules! blocking {
 /// use std::fs;
 ///
 /// # smol::run(async {
-/// //
+/// // Load a directory.
 /// let mut dir = blocking!(fs::read_dir("."))?;
 /// let mut dir = iter(dir);
 ///
+/// // Iterate over the contents of the directory.
 /// while let Some(res) = dir.next().await {
 ///     println!("{}", res?.file_name().to_string_lossy());
 /// }
@@ -292,6 +306,24 @@ pub fn iter<T: Send + 'static>(
 /// file.read_to_end(&mut contents).await?;
 /// # std::io::Result::Ok(()) });
 /// ```
+///
+/// Read output from a process:
+///
+/// ```no_run
+/// use futures::prelude::*;
+/// use smol::reader;
+/// use std::process::{Command, Stdio};
+///
+/// # smol::run(async {
+/// // Spawn a child process and make an async reader for its stdout.
+/// let child = Command::new("dir").stdout(Stdio::piped()).spawn()?;
+/// let mut child_stdout = reader(child.stdout.unwrap());
+///
+/// // Read the entire output.
+/// let mut output = String::new();
+/// child_stdout.read_to_string(&mut output).await?;
+/// # std::io::Result::Ok(()) });
+/// ```
 pub fn reader(reader: impl Read + Send + 'static) -> impl AsyncRead + Send + Unpin + 'static {
     /// Current state of the reader.
     enum State<T> {
@@ -383,6 +415,22 @@ pub fn reader(reader: impl Read + Send + 'static) -> impl AsyncRead + Send + Unp
 /// // Write some bytes into the file and flush.
 /// file.write_all(b"hello").await?;
 /// file.flush().await?;
+/// # std::io::Result::Ok(()) });
+/// ```
+///
+/// Write into standard output:
+///
+/// ```no_run
+/// use futures::prelude::*;
+/// use smol::writer;
+///
+/// # smol::run(async {
+/// // Create an async writer to stdout.
+/// let mut stdout = writer(std::io::stdout());
+///
+/// // Write a message and flush.
+/// stdout.write_all(b"hello").await?;
+/// stdout.flush().await?;
 /// # std::io::Result::Ok(()) });
 /// ```
 pub fn writer(writer: impl Write + Send + 'static) -> impl AsyncWrite + Send + Unpin + 'static {

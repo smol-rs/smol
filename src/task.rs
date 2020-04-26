@@ -109,6 +109,8 @@ impl<T: Send + 'static> Task<T> {
     ///
     /// # Examples
     ///
+    /// Read a line from the standard input:
+    ///
     /// ```no_run
     /// use smol::Task;
     /// use std::io::stdin;
@@ -122,6 +124,12 @@ impl<T: Send + 'static> Task<T> {
     /// .await;
     /// # });
     /// ```
+    ///
+    /// See also examples for [`blocking!`], [`iter()`], [`reader()`], and [`writer()`].
+    ///
+    /// [`iter()`]: `crate::iter()`
+    /// [`reader()`]: `crate::reader()`
+    /// [`writer()`]: `crate::writer()`
     pub fn blocking(future: impl Future<Output = T> + Send + 'static) -> Task<T> {
         BlockingExecutor::get().spawn(future)
     }

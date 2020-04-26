@@ -1,6 +1,6 @@
 # smol
 
-[![Build Status](https://travis-ci.org/stjepangs/smol.svg?branch=master)](
+[![Build](https://github.com/stjepang/smol/workflows/%22Build+and+test%22/badge.svg)](
 https://travis-ci.org/stjepang/smol)
 [![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](
 https://github.com/stjepang/smol)
@@ -41,7 +41,8 @@ macOS/iOS/BSD, and [wepoll] on Windows.
 
 ## Compatibility
 
-This runtime is compatible with [async-std] and [tokio].
+See [this example](./examples/other-runtimes.rs) for how to use smol with
+[async-std], [tokio], [surf], and [reqwest].
 
 There is an optional feature for seamless integration with crates depending
 on tokio. It creates a global tokio runtime and sets up its context inside smol.
@@ -54,6 +55,8 @@ smol = { version = "1", features = ["tokio02"] }
 
 [async-std]: https://docs.rs/async-std
 [tokio]: https://docs.rs/tokio
+[surf]: https://docs.rs/surf
+[reqwest]: https://docs.rs/reqwest
 
 ## Documentation
 
@@ -75,7 +78,7 @@ My personal crate recommendation list:
 * Channels, pipes, and mutexes: [piper]
 * HTTP clients: [surf], [isahc], [reqwest]
 * HTTP servers: [async-h1], [hyper]
-* WebSockets: [tungstenite]
+* WebSockets: [async-tungstenite]
 * TLS authentication: [async-native-tls]
 * Signals: [ctrlc], [signal-hook]
 
@@ -85,7 +88,7 @@ My personal crate recommendation list:
 [reqwest]: https://docs.rs/reqwest
 [async-h1]: https://docs.rs/async-h1
 [hyper]: https://docs.rs/hyper
-[tungstenite]: https://docs.rs/tungstenite
+[async-tungstenite]: https://docs.rs/async-tungstenite
 [async-native-tls]: https://docs.rs/async-native-tls
 [native-tls]: https://docs.rs/native-tls
 [ctrlc]: https://docs.rs/ctrlc

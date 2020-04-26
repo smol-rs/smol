@@ -1,4 +1,11 @@
-// TODO: document
+//! Uses the `uds_windows` crate to simulate Unix sockets on Windows.
+//!
+//! Run with:
+//!
+//! ```
+//! cargo run --example windows-uds
+//! ```
+
 #[cfg(windows)]
 fn main() -> std::io::Result<()> {
     use std::path::PathBuf;
@@ -10,9 +17,11 @@ fn main() -> std::io::Result<()> {
     use uds_windows::{UnixListener, UnixStream};
 
     async fn client(addr: PathBuf) -> io::Result<()> {
+        // Connect to the address.
         let stream = Async::new(UnixStream::connect(addr)?)?;
         println!("Connected to {:?}", stream.get_ref().peer_addr()?);
 
+        // Pipe the stream to stdout.
         let mut stdout = smol::writer(std::io::stdout());
         io::copy(&stream, &mut stdout).await?;
         Ok(())

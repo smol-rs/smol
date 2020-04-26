@@ -28,8 +28,8 @@
 //! executor, and polls the reactor for I/O events and timers. At least one thread has to be
 //! calling [`run()`] in order for futures waiting on I/O and timers to get notified.
 //!
-//! If you want a multithreaded runtime, just call [`run()`] from multiple threads. See [here](TODO)
-//! for an example.
+//! If you want a multithreaded runtime, just call [`run()`] from multiple threads. See
+//! [here](fn.run.html#examples) for an example.
 //!
 //! There is also [`block_on()`], which blocks the thread until a future completes, but it doesn't
 //! do anything else besides that.
@@ -58,30 +58,22 @@
 //! }
 //! ```
 //!
-//! Look inside the [examples] directory for more.
-//!
-//! The examples show how to read a [file][read-file] or a [directory][read-directory],
-//! [spawn][process-run] a process and read its [output][process-output], use timers to
-//! [sleep][timer-sleep] or set a [timeout][timer-timeout], or catch the [Ctrl-C][ctrl-c] signal
-//! for graceful shutdown.
-//!
-//! They also include a [web crawler][web-crawler],
-//! a simple TCP [client][tcp-client]/[server][tcp-server],
+//! Look inside the [examples] directory for more:
+//! a [web crawler][web-crawler],
+//! a [Ctrl-C handler][ctrl-c],
+//! a TCP [client][tcp-client]/[server][tcp-server],
 //! a TCP chat [client][chat-client]/[server][chat-server],
-//! a simple TLS [client][tls-client]/[server][tls-server],
-//! a simple HTTP+TLS [client][simple-client]/[server][simple-server],
-//! a [hyper] [client][hyper-client]/[server][hyper-server],
+//! a TLS [client][tls-client]/[server][tls-server],
+//! an HTTP+TLS [client][simple-client]/[server][simple-server],
 //! an [async-h1] [client][async-h1-client]/[server][async-h1-server],
+//! a [hyper] [client][hyper-client]/[server][hyper-server],
 //! and a WebSocket+TLS [client][websocket-client]/[server][websocket-server].
 //!
-//! Many non-async libraries can be plugged into the runtime: see how to use [inotify], [timerfd],
-//! [signal-hook], and [uds_windows].
+//! It's also possible to plug non-async libraries into the runtime: see
+//! [inotify], [timerfd], [signal-hook], and [uds_windows].
 //!
-//! Finally, you can mix this runtime with [async-std][compat-async-std] and [tokio][compat-tokio]
-//! to use runtime-dependent libraries like [surf][compat-surf] and [reqwest][compat-reqwest].
-//!
-//! TODO: See [here][compat] for an example of using this runtime with libraries like async-std, tokio,
-//! reqwest, and surf.
+//! Finally, there's an [example][other-runtimes] showing how to use smol with
+//! [async-std], [tokio], [surf], and [reqwest].
 //!
 //! [epoll]: https://en.wikipedia.org/wiki/Epoll
 //! [kqueue]: https://en.wikipedia.org/wiki/Kqueue
@@ -90,30 +82,25 @@
 //! [examples]: https://github.com/stjepang/smol/tree/master/examples
 //! [async-h1]: https://docs.rs/async-h1
 //! [hyper]: https://docs.rs/hyper
+//! [async-std]: https://docs.rs/async-std
+//! [tokio]: https://docs.rs/tokio
+//! [surf]: https://docs.rs/surf
+//! [reqwest]: https://docs.rs/reqwest
 //!
 //! [async-h1-client]: https://github.com/stjepang/smol/blob/master/examples/async-h1-client.rs
 //! [async-h1-server]: https://github.com/stjepang/smol/blob/master/examples/async-h1-server.rs
 //! [chat-client]: https://github.com/stjepang/smol/blob/master/examples/chat-client.rs
 //! [chat-server]: https://github.com/stjepang/smol/blob/master/examples/chat-server.rs
-//! [compat-async-std]: https://github.com/stjepang/smol/blob/master/examples/compat-async-std.rs
-//! [compat-reqwest]: https://github.com/stjepang/smol/blob/master/examples/compat-reqwest.rs
-//! [compat-surf]: https://github.com/stjepang/smol/blob/master/examples/compat-surf.rs
-//! [compat-tokio]: https://github.com/stjepang/smol/blob/master/examples/compat-tokio.rs
 //! [ctrl-c]: https://github.com/stjepang/smol/blob/master/examples/ctrl-c.rs
 //! [hyper-client]: https://github.com/stjepang/smol/blob/master/examples/hyper-client.rs
 //! [hyper-server]: https://github.com/stjepang/smol/blob/master/examples/hyper-server.rs
 //! [inotify]: https://github.com/stjepang/smol/blob/master/examples/linux-inotify.rs
-//! [process-output]: https://github.com/stjepang/smol/blob/master/examples/process-output.rs
-//! [process-run]: https://github.com/stjepang/smol/blob/master/examples/process-run.rs
-//! [read-directory]: https://github.com/stjepang/smol/blob/master/examples/read-directory.rs
-//! [read-file]: https://github.com/stjepang/smol/blob/master/examples/read-file.rs
+//! [other-runtimes]: https://github.com/stjepang/smol/blob/master/examples/other-runtimes.rs
 //! [signal-hook]: https://github.com/stjepang/smol/blob/master/examples/unix-signal.rs
 //! [simple-client]: https://github.com/stjepang/smol/blob/master/examples/simple-client.rs
 //! [simple-server]: https://github.com/stjepang/smol/blob/master/examples/simple-server.rs
 //! [tcp-client]: https://github.com/stjepang/smol/blob/master/examples/tcp-client.rs
 //! [tcp-server]: https://github.com/stjepang/smol/blob/master/examples/tcp-server.rs
-//! [timer-sleep]: https://github.com/stjepang/smol/blob/master/examples/timer-sleep.rs
-//! [timer-timeout]: https://github.com/stjepang/smol/blob/master/examples/timer-timeout.rs
 //! [timerfd]: https://github.com/stjepang/smol/blob/master/examples/linux-timerfd.rs
 //! [tls-client]: https://github.com/stjepang/smol/blob/master/examples/tls-client.rs
 //! [tls-server]: https://github.com/stjepang/smol/blob/master/examples/tls-server.rs

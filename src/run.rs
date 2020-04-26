@@ -194,6 +194,12 @@ pub fn run<T>(future: impl Future<Output = T>) -> T {
     })
 }
 
+/// Polls or waits on the locked reactor.
+///
+/// If any of the I/O events are ready or there are more tasks to run, the reactor is polled.
+/// Otherwise, the current thread waits on it until a timer fires or an I/O event occurs.
+///
+/// I/O events are cleared at the end of this function.
 fn react(mut reactor_lock: ReactorLock<'_>, io_events: &[&IoEvent], mut more_tasks: bool) {
     // Clear all I/O events and check if any of them were triggered.
     for ev in io_events {

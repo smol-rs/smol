@@ -1,4 +1,15 @@
-// TODO: document
+//! Demonstrates how to use `async-std`, `tokio`, `surf`, and `request`.
+//!
+//! Note that `smol` needs to have the `tokio02` feature to be enabled so that the tokio runtime is
+//! automatically started. You can see that this feature is enabled in `Cargo.toml` in the
+//! `dev-dependencies` section.
+//!
+//! Run with:
+//!
+//! ```
+//! cargo run --example other-runtimes
+//! ```
+
 use std::time::{Duration, Instant};
 
 use anyhow::{Error, Result};

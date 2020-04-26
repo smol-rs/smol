@@ -1,17 +1,27 @@
-// TODO: document
-// Uses the `ctrlc` crate to set a handler that sends a message
-// through an async channel.
+//! Uses the `ctrlc` crate to catch the Ctrl-C signal.
+//!
+//! Run with:
+//!
+//! ```
+//! cargo run --example ctrl-c
+//! ```
 
 use futures::prelude::*;
 
 fn main() {
+    // Set a handler that sends a message through a channel.
     let (s, ctrl_c) = piper::chan(100);
-    let handle = move || s.send(()).now_or_never().unwrap_or(());
+    let handle = move || {
+        let _ = s.send(()).now_or_never();
+    };
     ctrlc::set_handler(handle).unwrap();
 
     smol::run(async {
-        println!("Waiting for Ctrl-C");
+        println!("Waiting for Ctrl-C...");
+
+        // Receive a message that indicates the Ctrl-C signal occured.
         ctrl_c.recv().await;
+
         println!("Done!");
     })
 }

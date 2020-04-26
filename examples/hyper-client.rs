@@ -50,6 +50,7 @@ fn main() -> Result<()> {
     })
 }
 
+/// Spawns futures.
 #[derive(Clone)]
 struct SmolExecutor;
 
@@ -59,6 +60,7 @@ impl<F: Future + Send + 'static> hyper::rt::Executor<F> for SmolExecutor {
     }
 }
 
+/// Connects to URLs.
 #[derive(Clone)]
 struct SmolConnector;
 
@@ -94,8 +96,12 @@ impl hyper::service::Service<Uri> for SmolConnector {
     }
 }
 
+/// A TCP or TCP+TLS connection.
 enum SmolStream {
+    /// A plain TCP connection.
     Plain(Async<TcpStream>),
+
+    /// A TCP connection secured by TLS.
     Tls(TlsStream<Async<TcpStream>>),
 }
 

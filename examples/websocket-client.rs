@@ -1,4 +1,17 @@
-// TODO: document
+//! A WebSocket+TLS client based on `async-tungstenite` and `async-native-tls`.
+//!
+//! First start a server:
+//!
+//! ```
+//! cargo run --example websocket-server
+//! ```
+//!
+//! Then start a client:
+//!
+//! ```
+//! cargo run --example websocket-client
+//! ```
+
 use std::net::TcpStream;
 use std::pin::Pin;
 use std::task::{Context, Poll};
@@ -12,6 +25,7 @@ use tungstenite::handshake::client::Response;
 use tungstenite::Message;
 use url::Url;
 
+/// Connects to a WebSocket address (optionally secured by TLS).
 async fn connect(addr: &str, tls: TlsConnector) -> Result<(WsStream, Response)> {
     // Parse the address.
     let url = Url::parse(addr)?;
@@ -26,6 +40,7 @@ async fn connect(addr: &str, tls: TlsConnector) -> Result<(WsStream, Response)> 
             Ok((WsStream::Plain(stream), resp))
         }
         "wss" => {
+            // In case of WSS, establish a secure TLS connection first.
             let stream = Async::<TcpStream>::connect(format!("{}:{}", host, port)).await?;
             let stream = tls.connect(host, stream).await?;
             let (stream, resp) = async_tungstenite::client_async(addr, stream).await?;
@@ -36,15 +51,17 @@ async fn connect(addr: &str, tls: TlsConnector) -> Result<(WsStream, Response)> 
 }
 
 fn main() -> Result<()> {
-    // Create a TLS connector that is able to connect to wss://127.0.0.1:9001
+    // Initialize TLS with the local certificate.
     let mut builder = native_tls::TlsConnector::builder();
     builder.add_root_certificate(Certificate::from_pem(include_bytes!("../certificate.pem"))?);
     let tls = TlsConnector::from(builder);
 
     smol::run(async {
-        let (mut stream, resp) = connect("wss://echo.websocket.org", tls).await?;
+        // Connect to the server.
+        let (mut stream, resp) = connect("wss://127.0.0.1:9001", tls).await?;
         dbg!(resp);
 
+        // Send a message and receive a response.
         stream.send(Message::text("Hello!")).await?;
         dbg!(stream.next().await);
 
@@ -52,8 +69,12 @@ fn main() -> Result<()> {
     })
 }
 
+/// A WebSocket or WebSocket+TLS connection.
 enum WsStream {
+    /// A plain WebSocket connection.
     Plain(WebSocketStream<Async<TcpStream>>),
+
+    /// A WebSocket connection secured by TLS.
     Tls(WebSocketStream<TlsStream<Async<TcpStream>>>),
 }
 

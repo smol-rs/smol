@@ -1,4 +1,17 @@
-// TODO: document
+//! A WebSocket+TLS echo server based on `async-tungstenite` and `async-native-tls`.
+//!
+//! First start a server:
+//!
+//! ```
+//! cargo run --example websocket-server
+//! ```
+//!
+//! Then start a client:
+//!
+//! ```
+//! cargo run --example websocket-client
+//! ```
+
 use std::net::{TcpListener, TcpStream};
 use std::pin::Pin;
 use std::task::{Context, Poll};
@@ -11,15 +24,14 @@ use futures::prelude::*;
 use smol::{Async, Task};
 use tungstenite::Message;
 
-async fn serve(mut stream: WsStream, host: String) -> Result<()> {
-    println!("Serving {}", host);
+/// Echoes messages from the client back to it.
+async fn echo(mut stream: WsStream) -> Result<()> {
     let msg = stream.next().await.context("expected a message")??;
-    stream
-        .send(Message::text(format!("Server echoes: {}", msg)))
-        .await?;
+    stream.send(Message::text(msg.to_string())).await?;
     Ok(())
 }
 
+/// Listens for incoming connections and serves them.
 async fn listen(listener: Async<TcpListener>, tls: Option<TlsAcceptor>) -> Result<()> {
     let host = match &tls {
         None => format!("ws://{}", listener.get_ref().local_addr()?),
@@ -28,24 +40,27 @@ async fn listen(listener: Async<TcpListener>, tls: Option<TlsAcceptor>) -> Resul
     println!("Listening on {}", host);
 
     loop {
+        // Accept the next connection.
         let (stream, _) = listener.accept().await?;
-        let host = host.clone();
+        println!("Accepted client: {}", stream.get_ref().peer_addr()?);
 
         match &tls {
             None => {
                 let stream = WsStream::Plain(async_tungstenite::accept_async(stream).await?);
-                Task::spawn(serve(stream, host.clone())).unwrap().detach();
+                Task::spawn(echo(stream)).unwrap().detach();
             }
             Some(tls) => {
+                // In case of WSS, establish a secure TLS connection first.
                 let stream = tls.accept(stream).await?;
                 let stream = WsStream::Tls(async_tungstenite::accept_async(stream).await?);
-                Task::spawn(serve(stream, host.clone())).unwrap().detach();
+                Task::spawn(echo(stream)).unwrap().detach();
             }
         }
     }
 }
 
 fn main() -> Result<()> {
+    // Initialize TLS with the local certificate, private key, and password.
     let identity = Identity::from_pkcs12(include_bytes!("../identity.pfx"), "password")?;
     let tls = TlsAcceptor::from(native_tls::TlsAcceptor::new(identity)?);
 
@@ -54,6 +69,7 @@ fn main() -> Result<()> {
         thread::spawn(|| smol::run(future::pending::<()>()));
     }
 
+    // Start WS and WSS servers.
     smol::block_on(async {
         let ws = listen(Async::<TcpListener>::bind("127.0.0.1:9000")?, None);
         let wss = listen(Async::<TcpListener>::bind("127.0.0.1:9001")?, Some(tls));
@@ -62,8 +78,12 @@ fn main() -> Result<()> {
     })
 }
 
+/// A WebSocket or WebSocket+TLS connection.
 enum WsStream {
+    /// A plain WebSocket connection.
     Plain(WebSocketStream<Async<TcpStream>>),
+
+    /// A WebSocket connection secured by TLS.
     Tls(WebSocketStream<TlsStream<Async<TcpStream>>>),
 }
 

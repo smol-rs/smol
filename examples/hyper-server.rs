@@ -72,6 +72,7 @@ fn main() -> Result<()> {
     }))
 }
 
+/// Spawns futures.
 #[derive(Clone)]
 struct SmolExecutor;
 
@@ -81,6 +82,7 @@ impl<F: Future + Send + 'static> hyper::rt::Executor<F> for SmolExecutor {
     }
 }
 
+/// Listens for incoming connections.
 struct SmolListener {
     listener: Async<TcpListener>,
     tls: Option<TlsAcceptor>,
@@ -120,9 +122,15 @@ impl hyper::server::accept::Accept for SmolListener {
     }
 }
 
+/// A TCP or TCP+TLS connection.
 enum SmolStream {
+    /// A plain TCP connection.
     Plain(Async<TcpStream>),
+
+    /// A TCP connection secured by TLS.
     Tls(TlsStream<Async<TcpStream>>),
+
+    /// A TCP connection that is in process of getting secured by TLS.
     Handshake(future::BoxFuture<'static, io::Result<TlsStream<Async<TcpStream>>>>),
 }
 
