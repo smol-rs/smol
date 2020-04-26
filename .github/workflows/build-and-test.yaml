@@ -18,10 +18,6 @@ jobs:
             toolchain: ${{ matrix.rust }}
             override: true
 
-      - name: Install LLVM
-        run: choco install -y llvm
-        if: runner.os == 'Windows'
-
       - name: Run cargo check
         uses: actions-rs/cargo@v1
         with:
