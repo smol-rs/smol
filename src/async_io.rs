@@ -5,7 +5,7 @@
 //! [wepoll]: https://github.com/piscisaureus/wepoll
 
 use std::future::Future;
-use std::io::{self, Read, Write};
+use std::io::{self, IoSlice, IoSliceMut, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream, ToSocketAddrs, UdpSocket};
 #[cfg(windows)]
 use std::os::windows::io::{AsRawSocket, IntoRawSocket, RawSocket};
@@ -14,7 +14,6 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 #[cfg(unix)]
 use std::{
-    io::{IoSlice, IoSliceMut},
     os::unix::io::{AsRawFd, IntoRawFd, RawFd},
     os::unix::net::{SocketAddr as UnixSocketAddr, UnixDatagram, UnixListener, UnixStream},
     path::Path,
