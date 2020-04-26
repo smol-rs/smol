@@ -1,5 +1,5 @@
 use criterion::*;
-use futures::{future, StreamExt};
+use futures::StreamExt;
 use rand::prelude::*;
 use ring::{
     digest,
@@ -23,9 +23,8 @@ pub fn bench(c: &mut Criterion) {
         b.iter(|| {
             smol::run(
                 futures::stream::iter(0..NUM_BATCHES).for_each_concurrent(None, |_| {
-                    smol::Task::blocking({
+                    smol::Task::blocking(async {
                         do_work();
-                        future::ready(())
                     })
                 }),
             );
