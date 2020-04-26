@@ -5,7 +5,7 @@
 //! [wepoll]: https://github.com/piscisaureus/wepoll
 
 use std::future::Future;
-use std::io::{self, Read, Write};
+use std::io::{self, IoSlice, IoSliceMut, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream, ToSocketAddrs, UdpSocket};
 #[cfg(windows)]
 use std::os::windows::io::{AsRawSocket, IntoRawSocket, RawSocket};
@@ -358,6 +358,14 @@ impl<T: Read> AsyncRead for Async<T> {
     ) -> Poll<io::Result<usize>> {
         poll_future(cx, self.with_mut(|io| io.read(buf)))
     }
+
+    fn poll_read_vectored(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        bufs: &mut [IoSliceMut<'_>],
+    ) -> Poll<io::Result<usize>> {
+        poll_future(cx, self.with_mut(|io| io.read_vectored(bufs)))
+    }
 }
 
 impl<T> AsyncRead for &Async<T>
@@ -371,6 +379,14 @@ where
     ) -> Poll<io::Result<usize>> {
         poll_future(cx, self.with(|io| (&*io).read(buf)))
     }
+
+    fn poll_read_vectored(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        bufs: &mut [IoSliceMut<'_>],
+    ) -> Poll<io::Result<usize>> {
+        poll_future(cx, self.with(|io| (&*io).read_vectored(bufs)))
+    }
 }
 
 impl<T: Write> AsyncWrite for Async<T> {
@@ -380,6 +396,14 @@ impl<T: Write> AsyncWrite for Async<T> {
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
         poll_future(cx, self.with_mut(|io| io.write(buf)))
+    }
+
+    fn poll_write_vectored(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        bufs: &[IoSlice<'_>],
+    ) -> Poll<io::Result<usize>> {
+        poll_future(cx, self.with_mut(|io| io.write_vectored(bufs)))
     }
 
     fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
@@ -401,6 +425,14 @@ where
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
         poll_future(cx, self.with(|io| (&*io).write(buf)))
+    }
+
+    fn poll_write_vectored(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        bufs: &[IoSlice<'_>],
+    ) -> Poll<io::Result<usize>> {
+        poll_future(cx, self.with(|io| (&*io).write_vectored(bufs)))
     }
 
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
