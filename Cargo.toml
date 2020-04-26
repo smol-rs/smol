@@ -3,8 +3,14 @@ name = "smol"
 version = "0.1.0"
 authors = ["Stjepan Glavina <stjepang@gmail.com>"]
 edition = "2018"
-description = "WIP"
-license = "MIT OR Apache-2.0"
+description = "A small and fast async runtime"
+license = "Apache-2.0 OR MIT"
+repository = "https://github.com/stjepang/smol"
+homepage = "https://github.com/stjepang/smol"
+documentation = "https://docs.rs/smol"
+keywords = ["async", "await", "future", "io", "networking"]
+categories = ["asynchronous", "concurrency", "network-programming"]
+readme = "README.md"
 
 [features]
 # Optional feature for seamless integration with crates depending on tokio.
