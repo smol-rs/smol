@@ -18,7 +18,7 @@ jobs:
             toolchain: ${{ matrix.rust }}
             override: true
 
-      - name: Instal LLVM
+      - name: Install LLVM
         run: choco install -y llvm
         if: runner.os == 'Windows'
 
