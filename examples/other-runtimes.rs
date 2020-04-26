@@ -1,8 +1,14 @@
 //! Demonstrates how to use `async-std`, `tokio`, `surf`, and `request`.
 //!
-//! Note that `smol` needs to have the `tokio02` feature to be enabled so that the tokio runtime is
-//! automatically started. You can see that this feature is enabled in `Cargo.toml` in the
-//! `dev-dependencies` section.
+//! There is an optional feature for seamless integration with crates depending on tokio.
+//! It creates a global tokio runtime and sets up its context inside smol.
+//!
+//! Enable the feature as follows:
+//!
+//! ```toml
+//! [dependencies]
+//! smol = { version = "1", features = ["tokio02"] }
+//! ```
 //!
 //! Run with:
 //!
@@ -22,7 +28,7 @@ fn main() -> Result<()> {
         async_std::task::sleep(Duration::from_secs(1)).await;
         println!("Woke up after {:?}", start.elapsed());
 
-        // Sleep using tokio.
+        // Sleep using tokio (the `tokio02` feature must be enabled).
         let start = Instant::now();
         println!("Sleeping using tokio...");
         tokio::time::delay_for(Duration::from_secs(1)).await;
@@ -35,7 +41,7 @@ fn main() -> Result<()> {
             .map_err(Error::msg)?;
         println!("Body from surf: {:?}", body);
 
-        // Make a GET request using reqwest.
+        // Make a GET request using reqwest (the `tokio02` feature must be enabled).
         let resp = reqwest::get("https://www.rust-lang.org").await?;
         let body = resp.text().await?;
         println!("Body from reqwest: {:?}", body);
