@@ -2,8 +2,9 @@
 //!
 //! This is equivalent to [`futures::executor::block_on()`], but slightly more efficient.
 //!
-//! The following blog post explains it in detail:
-//! - https://stjepang.github.io/2020/01/25/build-your-own-block-on.html
+//! The implementation is explained in detail in [*Build your own block_on()*][blog-post].
+//!
+//! [blog-post]: https://stjepang.github.io/2020/01/25/build-your-own-block-on.html
 
 use std::cell::RefCell;
 use std::future::Future;

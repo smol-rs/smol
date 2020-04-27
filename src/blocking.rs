@@ -165,7 +165,7 @@ impl BlockingExecutor {
 ///
 /// # Examples
 ///
-/// Read a file to string:
+/// Read a file into a string:
 ///
 /// ```no_run
 /// use smol::blocking;
@@ -289,7 +289,7 @@ pub fn iter<T: Send + 'static>(
 ///
 /// # Examples
 ///
-/// Create an async reader that reads a file:
+/// Read from a file:
 ///
 /// ```no_run
 /// use futures::prelude::*;
@@ -400,7 +400,7 @@ pub fn reader(reader: impl Read + Send + 'static) -> impl AsyncRead + Send + Unp
 ///
 /// # Examples
 ///
-/// Create an async writer that writes into a file:
+/// Write into a file:
 ///
 /// ```no_run
 /// use futures::prelude::*;
