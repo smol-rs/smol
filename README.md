@@ -40,6 +40,16 @@ macOS/iOS/BSD, and [wepoll] on Windows.
 * Tasks that support cancelation.
 * Userspace timers.
 
+## Examples
+
+Go into the [examples] directory and see what's there:
+
+```terminal
+$ cd examples
+$ ls
+$ cargo run --example ctrl-c
+```
+
 ## Compatibility
 
 See [this example](./examples/other-runtimes.rs) for how to use smol with

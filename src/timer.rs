@@ -34,8 +34,9 @@ use crate::reactor::Reactor;
 /// Set a timeout on an I/O operation:
 ///
 /// ```
-/// use futures::prelude::*;
+/// use futures::future::Either;
 /// use futures::io::{self, BufReader};
+/// use futures::prelude::*;
 /// use smol::Timer;
 /// use std::time::Duration;
 ///
@@ -43,9 +44,10 @@ use crate::reactor::Reactor;
 ///     dur: Duration,
 ///     f: impl Future<Output = io::Result<T>>,
 /// ) -> io::Result<T> {
-///     futures::select! {
-///         t = f.fuse() => t,
-///         _ = Timer::after(dur).fuse() => Err(io::ErrorKind::TimedOut.into()),
+///     futures::pin_mut!(f);
+///     match future::select(f, Timer::after(dur)).await {
+///         Either::Left((out, _)) => out,
+///         Either::Right(_) => Err(io::ErrorKind::TimedOut.into()),
 ///     }
 /// }
 ///

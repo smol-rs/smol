@@ -1,13 +1,12 @@
-# Examples of how to use `smol`
+## smol examples
 
-Running examples:
+You need to be in this directory to run examples:
 
+```terminal
+$ cd examples
+$ ls
+$ cargo run --example ctrl-c
 ```
-cd examples
-cargo run --example $name
 
-```
-
-A good starting point for the examples would be `simple-client`
-
-If you've got an example you'd like to see here, please feel free to open an issue. Otherwise if you've got an example you'd like to add, please feel free to make a PR!
+If you've got an example you'd like to see here,
+please feel free to open an issue or submit a PR!
