@@ -1,6 +1,6 @@
 [package]
 name = "smol"
-version = "0.1.0"
+version = "0.1.1"
 authors = ["Stjepan Glavina <stjepang@gmail.com>"]
 edition = "2018"
 description = "A small and fast async runtime"
@@ -69,7 +69,7 @@ reqwest = "0.10.4"
 scraper = "0.11.0"
 signal-hook = "0.1.13"
 smol = { path = ".", features = ["tokio02"] }
-surf = { version = "1.0.3", default-features = false, features = ["h1-client"] }
+surf = { version = "2.0.0-alpha.1", default-features = false, features = ["h1-client"] }
 tempfile = "3.1.0"
 tokio = { version = "0.2.19", default-features = false }
 tungstenite = "0.10.1"
