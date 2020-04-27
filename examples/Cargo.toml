@@ -1,11 +1,8 @@
 [package]
-name = "smol examples"
+name = "smol-examples"
 version = "0.0.0"
 authors = ["Stjepan Glavina <stjepang@gmail.com>"]
 edition = "2018"
-publish = false
-autoexamples = false
-autobins = false
 
 [target.'cfg(windows)'.dev-dependencies]
 uds_windows = "0.1.4"
@@ -14,7 +11,9 @@ uds_windows = "0.1.4"
 inotify = { version = "0.8.2", default-features = false }
 timerfd = "1.1.1"
 
-[dev-dependencies]
+[dependencies]
+futures = "0.3.4"
+piper = "0.1.1"
 anyhow = "1.0.28"
 async-h1 = "1.1.2"
 async-native-tls = "0.3.3"
@@ -52,6 +51,10 @@ path = "chat-client.rs"
 [[example]]
 name = "chat-server"
 path = "chat-server.rs"
+
+[[example]]
+name = "ctrl-c"
+path = "ctrl-c.rs"
 
 [[example]]
 name = "hyper-client"
@@ -112,10 +115,6 @@ path = "websocket-client.rs"
 [[example]]
 name = "websocket-server"
 path = "websocket-server.rs"
-
-[[example]]
-name = "simple-client"
-path = "simple-client.rs"
 
 [[example]]
 name = "windows-uds"
