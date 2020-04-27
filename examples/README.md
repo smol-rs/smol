@@ -2,7 +2,7 @@
 
 You need to be in this directory to run examples:
 
-```terminal
+```console
 $ cd examples
 $ ls
 $ cargo run --example ctrl-c
