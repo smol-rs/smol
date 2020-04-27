@@ -8,7 +8,8 @@ https://github.com/stjepang/smol)
 https://crates.io/crates/smol)
 [![Documentation](https://docs.rs/smol/badge.svg)](
 https://docs.rs/smol)
-[![Chat](https://discord.gg/x6m5Vvt)
+[![Chat](https://img.shields.io/discord/598880689856970762.svg?logo=discord)](
+https://discord.gg/x6m5Vvt)
 
 A small and fast async runtime for Rust.
 
