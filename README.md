@@ -42,7 +42,7 @@ macOS/iOS/BSD, and [wepoll] on Windows.
 
 ## Examples
 
-You need to be in the  [examples] directory to run them:
+You need to be in the [examples] directory to run them:
 
 ```terminal
 $ cd examples
