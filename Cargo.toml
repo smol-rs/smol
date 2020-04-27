@@ -11,6 +11,7 @@ documentation = "https://docs.rs/smol"
 keywords = ["async", "await", "future", "io", "networking"]
 categories = ["asynchronous", "concurrency", "network-programming"]
 readme = "README.md"
+autoexamples = false
 
 [features]
 # Optional feature for seamless integration with crates depending on tokio.
@@ -45,35 +46,10 @@ nix = "0.17.0"
 [target.'cfg(windows)'.dependencies]
 wepoll-binding = "2.0.0"
 
-[target.'cfg(windows)'.dev-dependencies]
-uds_windows = "0.1.4"
-
-[target.'cfg(target_os = "linux")'.dev-dependencies]
-inotify = { version = "0.8.2", default-features = false }
-timerfd = "1.1.1"
-
 [dev-dependencies]
-anyhow = "1.0.28"
-async-h1 = "1.1.2"
-async-native-tls = "0.3.3"
-async-std = "1.5.0"
-async-tungstenite = { version = "0.4.2", features = ["async-native-tls"] }
-base64 = "0.12.0"
-ctrlc = "3.1.4"
-http = "0.2.1"
-http-types = "1.2.0"
-hyper = { version = "0.13.5", default-features = false, features = ["stream"] }
-native-tls = "0.2.4"
+futures = "0.3.4"
+piper = "0.1.1"
 num_cpus = "1.13.0"
-reqwest = "0.10.4"
-scraper = "0.11.0"
-signal-hook = "0.1.13"
-smol = { path = ".", features = ["tokio02"] }
-surf = { version = "2.0.0-alpha.1", default-features = false, features = ["h1-client"] }
-tempfile = "3.1.0"
-tokio = { version = "0.2.19", default-features = false }
-tungstenite = "0.10.1"
-url = "2.1.1"
 
 [workspace]
 members = [
