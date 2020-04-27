@@ -161,7 +161,7 @@ impl BlockingExecutor {
 /// Spawns blocking code onto a thread.
 ///
 /// Note that `blocking!(expr)` is just syntax sugar for
-/// `Task::blocking(async move { foo }).await`.
+/// `Task::blocking(async move { expr }).await`.
 ///
 /// # Examples
 ///
