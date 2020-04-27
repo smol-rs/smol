@@ -51,7 +51,7 @@ Enable the feature as follows:
 
 ```toml
 [dependencies]
-smol = { version = "1", features = ["tokio02"] }
+smol = { version = "0.1", features = ["tokio02"] }
 ```
 
 [async-std]: https://docs.rs/async-std
