@@ -7,7 +7,7 @@
 //!
 //! ```toml
 //! [dependencies]
-//! smol = { version = "1", features = ["tokio02"] }
+//! smol = { version = "0.1", features = ["tokio02"] }
 //! ```
 //!
 //! Run with:
