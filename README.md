@@ -107,15 +107,11 @@ My personal crate recommendation list:
 
 ## TLS certificate
 
-Some code examples are using TLS for authentication.
-
-To access HTTPS servers from your browser, you'll first need to import the
-certificate from this repository (Chrome/Firefox):
-
-1. Open browser settings and go to the certificate *Authorities* list.
-2. Click *Import* and select `certificate.pem`.
-3. Enable *Trust this CA to identify websites* and click *OK*.
-4. Restart the browser (yes, you have to!) and go to [https://127.0.0.1:8001](https://127.0.0.1:8001)
+Some code examples are using TLS for authentication. The repository
+contains a self-signed certificate usable for testing. It should *not*
+be used for real world scenarios. Browsers and tools like curl will
+show this certificate as insecure. In browsers, accept the security
+prompt or use `curl -k` on the command line to bypass security warnings.
 
 The certificate file was generated using
 [minica](https://github.com/jsha/minica) and
