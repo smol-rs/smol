@@ -1,6 +1,6 @@
 name: Security audit
 
-on: [push]
+on: [push, pull_request]
 
 jobs:
   security_audit:
