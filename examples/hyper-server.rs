@@ -9,9 +9,9 @@
 //! Open in the browser any of these addresses:
 //!
 //! - http://localhost:8000/
-//! - https://localhost:8001/ (you'll need to import the TLS certificate first!)
+//! - https://localhost:8001/ (accept the security prompt in the browser)
 //!
-//! Refer to `README.md` to see how to import or generate the TLS certificate.
+//! Refer to `README.md` to see how to the TLS certificate was generated.
 
 use std::io;
 use std::net::{Shutdown, TcpListener, TcpStream};
@@ -29,7 +29,7 @@ use smol::{Async, Task};
 /// Serves a request and returns a response.
 async fn serve(req: Request<Body>, host: String) -> Result<Response<Body>> {
     println!("Serving {}{}", host, req.uri());
-    Ok(Response::new(Body::from("Hello World!")))
+    Ok(Response::new(Body::from("Hello from hyper!")))
 }
 
 /// Listens for incoming connections and serves them.
@@ -55,7 +55,7 @@ async fn listen(listener: Async<TcpListener>, tls: Option<TlsAcceptor>) -> Resul
 
 fn main() -> Result<()> {
     // Initialize TLS with the local certificate, private key, and password.
-    let identity = Identity::from_pkcs12(include_bytes!("../identity.pfx"), "password")?;
+    let identity = Identity::from_pkcs12(include_bytes!("identity.pfx"), "password")?;
     let tls = TlsAcceptor::from(native_tls::TlsAcceptor::new(identity)?);
 
     // Create an executor thread pool.
@@ -111,9 +111,10 @@ impl hyper::server::accept::Accept for SmolListener {
                 // In case of HTTPS, start establishing a secure TLS connection.
                 let tls = tls.clone();
                 SmolStream::Handshake(Box::pin(async move {
-                    tls.accept(stream)
-                        .await
-                        .map_err(|err| io::Error::new(io::ErrorKind::Other, Box::new(err)))
+                    tls.accept(stream).await.map_err(|err| {
+                        println!("Failed to establish secure TLS connection: {:#?}", err);
+                        io::Error::new(io::ErrorKind::Other, Box::new(err))
+                    })
                 }))
             }
         };

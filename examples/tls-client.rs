@@ -24,7 +24,7 @@ use smol::Async;
 fn main() -> Result<()> {
     // Initialize TLS with the local certificate.
     let mut builder = native_tls::TlsConnector::builder();
-    builder.add_root_certificate(Certificate::from_pem(include_bytes!("../certificate.pem"))?);
+    builder.add_root_certificate(Certificate::from_pem(include_bytes!("certificate.pem"))?);
     let tls = TlsConnector::from(builder);
 
     smol::run(async {

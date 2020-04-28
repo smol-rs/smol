@@ -9,9 +9,9 @@
 //! Open in the browser any of these addresses:
 //!
 //! - http://localhost:8000/
-//! - https://localhost:8001/ (you'll need to import the TLS certificate first!)
+//! - https://localhost:8001/ (accept the security prompt in the browser)
 //!
-//! Refer to `README.md` to see how to import or generate the TLS certificate.
+//! Refer to `README.md` to see how to the TLS certificate was generated.
 
 use std::net::TcpListener;
 use std::thread;
@@ -55,13 +55,16 @@ async fn listen(listener: Async<TcpListener>, tls: Option<TlsAcceptor>) -> Resul
             }
             Some(tls) => {
                 // In case of HTTPS, establish a secure TLS connection first.
-                let stream = tls.accept(stream).await;
-                if let Err(e) = stream {
-                    println!("Failed to establish secure TLS connection: {:#?}", e);
-                    continue;
-                };
-                let stream = Arc::new(Mutex::new(stream.unwrap()));
-                Task::spawn(async move { async_h1::accept(&host, stream, serve).await })
+                match tls.accept(stream).await {
+                    Ok(stream) => {
+                        let stream = Arc::new(Mutex::new(stream));
+                        Task::spawn(async move { async_h1::accept(&host, stream, serve).await })
+                    }
+                    Err(err) => {
+                        println!("Failed to establish secure TLS connection: {:#?}", err);
+                        continue;
+                    }
+                }
             }
         };
 
@@ -72,7 +75,7 @@ async fn listen(listener: Async<TcpListener>, tls: Option<TlsAcceptor>) -> Resul
 
 fn main() -> Result<()> {
     // Initialize TLS with the local certificate, private key, and password.
-    let identity = Identity::from_pkcs12(include_bytes!("../identity.pfx"), "password")?;
+    let identity = Identity::from_pkcs12(include_bytes!("identity.pfx"), "password")?;
     let tls = TlsAcceptor::from(native_tls::TlsAcceptor::new(identity)?);
 
     // Create an executor thread pool.
