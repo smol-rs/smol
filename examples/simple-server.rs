@@ -72,7 +72,7 @@ async fn listen(listener: Async<TcpListener>, tls: Option<TlsAcceptor>) -> Resul
 
 fn main() -> Result<()> {
     // Initialize TLS with the local certificate, private key, and password.
-    let identity = Identity::from_pkcs12(include_bytes!("../identity.pfx"), "password")?;
+    let identity = Identity::from_pkcs12(include_bytes!("identity.pfx"), "password")?;
     let tls = TlsAcceptor::from(native_tls::TlsAcceptor::new(identity)?);
 
     // Create an executor thread pool.
