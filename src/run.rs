@@ -71,7 +71,7 @@ use crate::work_stealing::WorkStealingExecutor;
 /// let mut threads = Vec::new();
 ///
 /// // Create an executor thread pool.
-/// for _ in 0..num_cpus::get().max(1) {
+/// for _ in 0..num_threads {
 ///     // Spawn an executor thread that waits for the shutdown signal.
 ///     let r = r.clone();
 ///     threads.push(thread::spawn(move || smol::run(r.recv())));
