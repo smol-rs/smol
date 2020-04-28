@@ -3,12 +3,14 @@
 //! First start a server:
 //!
 //! ```
+//! cd examples  # make sure to be in this directory
 //! cargo run --example chat-server
 //! ```
 //!
 //! Then start clients:
 //!
 //! ```
+//! cd examples  # make sure to be in this directory
 //! cargo run --example chat-client
 //! ```
 

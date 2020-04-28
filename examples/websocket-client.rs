@@ -3,12 +3,14 @@
 //! First start a server:
 //!
 //! ```
+//! cd examples  # make sure to be in this directory
 //! cargo run --example websocket-server
 //! ```
 //!
 //! Then start a client:
 //!
 //! ```
+//! cd examples  # make sure to be in this directory
 //! cargo run --example websocket-client
 //! ```
 
