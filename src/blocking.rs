@@ -167,7 +167,7 @@ impl BlockingExecutor {
 ///
 /// Read a file into a string:
 ///
-/// ```no_run
+/// ```
 /// use smol::blocking;
 /// use std::fs;
 ///
@@ -178,7 +178,7 @@ impl BlockingExecutor {
 ///
 /// Spawn a process:
 ///
-/// ```no_run
+/// ```
 /// use smol::blocking;
 /// use std::process::Command;
 ///
@@ -202,7 +202,7 @@ macro_rules! blocking {
 ///
 /// List files in the current directory:
 ///
-/// ```no_run
+/// ```
 /// use futures::stream::StreamExt;
 /// use smol::{blocking, iter};
 /// use std::fs;
@@ -291,7 +291,7 @@ pub fn iter<T: Send + 'static>(
 ///
 /// Read from a file:
 ///
-/// ```no_run
+/// ```
 /// use futures::prelude::*;
 /// use smol::{blocking, reader};
 /// use std::fs::File;
@@ -309,7 +309,7 @@ pub fn iter<T: Send + 'static>(
 ///
 /// Read output from a process:
 ///
-/// ```no_run
+/// ```
 /// use futures::prelude::*;
 /// use smol::reader;
 /// use std::process::{Command, Stdio};
@@ -402,7 +402,7 @@ pub fn reader(reader: impl Read + Send + 'static) -> impl AsyncRead + Send + Unp
 ///
 /// Write into a file:
 ///
-/// ```no_run
+/// ```
 /// use futures::prelude::*;
 /// use smol::{blocking, writer};
 /// use std::fs::File;
@@ -420,7 +420,7 @@ pub fn reader(reader: impl Read + Send + 'static) -> impl AsyncRead + Send + Unp
 ///
 /// Write into standard output:
 ///
-/// ```no_run
+/// ```
 /// use futures::prelude::*;
 /// use smol::writer;
 ///

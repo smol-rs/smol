@@ -34,7 +34,7 @@ use crate::work_stealing::WorkStealingExecutor;
 ///
 /// Multi-threaded executor:
 ///
-/// ```no_run
+/// ```
 /// use futures::future;
 /// use smol::Task;
 /// use std::thread;

@@ -40,7 +40,7 @@
 //!
 //! Connect to a HTTP website, make a GET request, and pipe the response to the standard output:
 //!
-//! ```no_run
+//! ```
 //! use futures::prelude::*;
 //! use smol::Async;
 //! use std::net::TcpStream;

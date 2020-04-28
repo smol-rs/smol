@@ -111,7 +111,7 @@ impl<T: Send + 'static> Task<T> {
     ///
     /// Read a line from the standard input:
     ///
-    /// ```no_run
+    /// ```
     /// use smol::Task;
     /// use std::io::stdin;
     ///
@@ -191,7 +191,7 @@ impl Task<()> {
     ///
     /// # Examples
     ///
-    /// ```no_run
+    /// ```
     /// use smol::{Task, Timer};
     /// use std::time::Duration;
     ///
