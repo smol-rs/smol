@@ -18,8 +18,8 @@ and is only 1500 lines of code long.
 
 [std]: https://docs.rs/std
 
-Reading the [docs] or looking at the [examples] is a good way of starting to
-learn async Rust.
+Reading the [docs] or looking at the [examples] is a great way to start learning
+async Rust.
 
 [docs]: https://docs.rs/smol
 [examples]: ./examples
