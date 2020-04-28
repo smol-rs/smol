@@ -1,3 +1,7 @@
+# Version 0.1.4
+
+- Fix a bug in UDS async connect
+
 # Version 0.1.3
 
 - Fix the writability check in async connect
