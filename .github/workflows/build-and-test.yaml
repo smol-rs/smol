@@ -63,4 +63,3 @@ jobs:
 
     - name: test
       run: cross test --target ${{ matrix.target }}
-
