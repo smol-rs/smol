@@ -82,7 +82,7 @@ impl IoEvent {
                 if self.0.flag.load(Ordering::SeqCst) {
                     Ok(())
                 } else {
-                    Err(io::Error::new(io::ErrorKind::WouldBlock, ""))
+                    Err(io::ErrorKind::WouldBlock.into())
                 }
             })
             .await
