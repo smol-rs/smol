@@ -860,7 +860,15 @@ impl Async<UnixStream> {
 
         // Begin async connect and ignore the inevitable "not yet connected" error.
         socket.set_nonblocking(true)?;
-        let _ = socket.connect(&socket2::SockAddr::unix(path)?);
+        socket
+            .connect(&socket2::SockAddr::unix(path)?)
+            .or_else(|err| {
+                if err.kind() == io::ErrorKind::NotConnected {
+                    Ok(())
+                } else {
+                    Err(err)
+                }
+            })?;
         let stream = Async::new(socket.into_unix_stream())?;
 
         // Wait for connect to complete.
