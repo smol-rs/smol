@@ -57,7 +57,10 @@ jobs:
         override: true
 
     - name: Install cross
-      run: cargo install cross
+      uses: actions-rs/install@v0.1
+      with:
+        crate: cross
+        use-tool-cache: true
 
     - name: check
       run: cross check --target ${{ matrix.target }}

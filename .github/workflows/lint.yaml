@@ -26,7 +26,10 @@ jobs:
       - uses: actions/checkout@v2
       
       - name: Install cargo-count
-        run: cargo install cargo-count
+        uses: actions-rs/install@v0.1
+        with:
+          crate: cargo-count
+          use-tool-cache: true
 
       - name: Run cargo count
         # '-a --exclude=$(cat .gitignore)' necessary to work around:
