@@ -16,3 +16,15 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           args: --all-features
+  loc:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      
+      - name: Install cargo-count
+        run: cargo install cargo-count
+
+      - name: Run cargo count
+        # '-a --exclude=$(cat .gitignore)' necessary to work around:
+        # https://github.com/kbknapp/cargo-count/issues/36
+        run: cargo count -l rs -a --exclude=$(cat .gitignore) src
