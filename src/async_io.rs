@@ -464,7 +464,7 @@ impl Async<TcpListener> {
         let addr = addr
             .to_string()
             .parse::<SocketAddr>()
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
         Ok(Async::new(TcpListener::bind(addr)?)?)
     }
 
@@ -557,7 +557,7 @@ impl Async<TcpStream> {
         // Wait for connect to complete.
         let wait_connect = |mut stream: &TcpStream| match stream.write(&[]) {
             Err(err) if err.kind() == io::ErrorKind::NotConnected => {
-                Err(io::Error::new(io::ErrorKind::WouldBlock, ""))
+                Err(io::ErrorKind::WouldBlock.into())
             }
             res => res.map(|_| ()),
         };
@@ -609,7 +609,7 @@ impl Async<UdpSocket> {
         let addr = addr
             .to_string()
             .parse::<SocketAddr>()
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
         Ok(Async::new(UdpSocket::bind(addr)?)?)
     }
 
@@ -874,7 +874,7 @@ impl Async<UnixStream> {
         // Wait for connect to complete.
         let wait_connect = |mut stream: &UnixStream| match stream.write(&[]) {
             Err(err) if err.kind() == io::ErrorKind::NotConnected => {
-                Err(io::Error::new(io::ErrorKind::WouldBlock, ""))
+                Err(io::ErrorKind::WouldBlock.into())
             }
             res => res.map(|_| ()),
         };
