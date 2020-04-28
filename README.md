@@ -108,10 +108,12 @@ My personal crate recommendation list:
 ## TLS certificate
 
 Some code examples are using TLS for authentication. The repository
-contains a self-signed certificate usable for testing. It should *not*
-be used for real world scenarios. Browsers and tools like curl will
-show this certificate as insecure. In browsers, accept the security
-prompt or use `curl -k` on the command line to bypass security warnings.
+contains a self-signed certificate usable for testing, but it should **not**
+be used for real-world scenarios. Browsers and tools like curl will
+show this certificate as insecure.
+
+In browsers, accept the security prompt or use `curl -k` on the
+command line to bypass security warnings.
 
 The certificate file was generated using
 [minica](https://github.com/jsha/minica) and

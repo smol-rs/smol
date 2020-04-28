@@ -9,9 +9,9 @@
 //! Open in the browser any of these addresses:
 //!
 //! - http://localhost:8000/
-//! - https://localhost:8001/ (you'll need to import the TLS certificate first!)
+//! - https://localhost:8001/ (accept the security prompt in the browser)
 //!
-//! Refer to `README.md` to see how to import or generate the TLS certificate.
+//! Refer to `README.md` to see how to the TLS certificate was generated.
 
 use std::net::{TcpListener, TcpStream};
 use std::thread;
@@ -40,11 +40,14 @@ async fn serve(mut stream: Async<TcpStream>, tls: Option<TlsAcceptor>) -> Result
             println!("Serving https://{}", stream.get_ref().local_addr()?);
 
             // In case of HTTPS, establish a secure TLS connection first.
-            let mut stream = tls.accept(stream).await?;
-
-            stream.write_all(RESPONSE).await?;
-            stream.flush().await?;
-            stream.close().await?;
+            match tls.accept(stream).await {
+                Ok(mut stream) => {
+                    stream.write_all(RESPONSE).await?;
+                    stream.flush().await?;
+                    stream.close().await?;
+                }
+                Err(err) => println!("Failed to establish secure TLS connection: {:#?}", err),
+            }
         }
     }
     Ok(())
