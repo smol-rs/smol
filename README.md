@@ -2,6 +2,8 @@
 
 [![Build](https://github.com/stjepang/smol/workflows/Build%20and%20test/badge.svg)](
 https://travis-ci.org/stjepang/smol)
+[![Coverage Status](https://coveralls.io/repos/github/stjepang/smol/badge.svg?branch=master)](
+https://coveralls.io/github/stjepang/smol?branch=master)
 [![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](
 https://github.com/stjepang/smol)
 [![Cargo](https://img.shields.io/crates/v/smol.svg)](
