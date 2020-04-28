@@ -554,15 +554,15 @@ impl Async<TcpStream> {
         let _ = socket.connect(&addr.into());
         let stream = Async::new(socket.into_tcp_stream())?;
 
-        // Returns the peer address, or `WouldBlock` if not connected.
-        let peer_addr = |stream: &TcpStream| match stream.peer_addr() {
+        // Wait for connect to complete.
+        let wait_connect = |mut stream: &TcpStream| match stream.write(&[]) {
             Err(err) if err.kind() == io::ErrorKind::NotConnected => {
                 Err(io::Error::new(io::ErrorKind::WouldBlock, ""))
             }
-            res => res,
+            res => res.map(|_| ()),
         };
-        // Wait until there is a peer address.
-        stream.with(|io| peer_addr(io)).await?;
+        // The stream becomes writable when connected.
+        stream.with(|io| wait_connect(io)).await?;
 
         Ok(stream)
     }
@@ -863,15 +863,15 @@ impl Async<UnixStream> {
         let _ = socket.connect(&socket2::SockAddr::unix(path)?);
         let stream = Async::new(socket.into_unix_stream())?;
 
-        // Returns the peer address, or `WouldBlock` if not connected.
-        let peer_addr = |stream: &UnixStream| match stream.peer_addr() {
+        // Wait for connect to complete.
+        let wait_connect = |mut stream: &UnixStream| match stream.write(&[]) {
             Err(err) if err.kind() == io::ErrorKind::NotConnected => {
                 Err(io::Error::new(io::ErrorKind::WouldBlock, ""))
             }
-            res => res,
+            res => res.map(|_| ()),
         };
-        // Wait until there is a peer address.
-        stream.with(|io| peer_addr(io)).await?;
+        // The stream becomes writable when connected.
+        stream.with(|io| wait_connect(io)).await?;
 
         Ok(stream)
     }
