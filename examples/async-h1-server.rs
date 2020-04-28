@@ -55,8 +55,12 @@ async fn listen(listener: Async<TcpListener>, tls: Option<TlsAcceptor>) -> Resul
             }
             Some(tls) => {
                 // In case of HTTPS, establish a secure TLS connection first.
-                let stream = tls.accept(stream).await?;
-                let stream = Arc::new(Mutex::new(stream));
+                let stream = tls.accept(stream).await;
+                if let Err(e) = stream {
+                    println!("Failed to establish secure TLS connection: {:#?}", e);
+                    continue;
+                };
+                let stream = Arc::new(Mutex::new(stream.unwrap()));
                 Task::spawn(async move { async_h1::accept(&host, stream, serve).await })
             }
         };
