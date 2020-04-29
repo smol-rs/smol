@@ -52,14 +52,22 @@ async fn listen(listener: Async<TcpListener>, tls: Option<TlsAcceptor>) -> Resul
         let task = match &tls {
             None => {
                 let stream = Arc::new(stream);
-                Task::spawn(async move { async_h1::accept(&host, stream, serve).await })
+                Task::spawn(async move {
+                    if let Err(err) = async_h1::accept(&host, stream, serve).await {
+                        println!("Connection error: {:#?}", err);
+                    }
+                })
             }
             Some(tls) => {
                 // In case of HTTPS, establish a secure TLS connection first.
                 match tls.accept(stream).await {
                     Ok(stream) => {
                         let stream = Arc::new(Mutex::new(stream));
-                        Task::spawn(async move { async_h1::accept(&host, stream, serve).await })
+                        Task::spawn(async move {
+                            if let Err(err) = async_h1::accept(&host, stream, serve).await {
+                                println!("Connection error: {:#?}", err);
+                            }
+                        })
                     }
                     Err(err) => {
                         println!("Failed to establish secure TLS connection: {:#?}", err);
@@ -70,7 +78,7 @@ async fn listen(listener: Async<TcpListener>, tls: Option<TlsAcceptor>) -> Resul
         };
 
         // Detach the task to let it run in the background.
-        task.unwrap().detach();
+        task.detach();
     }
 }
 
