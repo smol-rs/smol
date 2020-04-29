@@ -65,9 +65,15 @@ async fn listen(listener: Async<TcpListener>, tls: Option<TlsAcceptor>) -> Resul
     loop {
         // Accept the next connection.
         let (stream, _) = listener.accept().await?;
+        let tls = tls.clone();
 
         // Spawn a background task serving this connection.
-        Task::spawn(serve(stream, tls.clone())).unwrap().detach();
+        Task::spawn(async move {
+            if let Err(err) = serve(stream, tls).await {
+                println!("Connection error: {:#?}", err);
+            }
+        })
+        .detach();
     }
 }
 
