@@ -65,12 +65,12 @@ fn main() -> Result<()> {
     }
 
     // Start HTTP and HTTPS servers.
-    smol::run(Task::spawn(async {
+    smol::block_on(async {
         let http = listen(Async::<TcpListener>::bind("127.0.0.1:8000")?, None);
         let https = listen(Async::<TcpListener>::bind("127.0.0.1:8001")?, Some(tls));
         future::try_join(http, https).await?;
         Ok(())
-    }))
+    })
 }
 
 /// Spawns futures.
