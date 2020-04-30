@@ -59,6 +59,7 @@ use crate::reactor::Reactor;
 /// let mut line = String::new();
 /// timeout(Duration::from_secs(5), stdin.read_line(&mut line)).await?;
 /// # io::Result::Ok(()) });
+/// ```
 #[derive(Debug)]
 pub struct Timer {
     /// This timer's ID.
