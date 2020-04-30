@@ -4,6 +4,7 @@
 //!
 //! The implementation is explained in detail in [*Build your own block_on()*][blog-post].
 //!
+//! [`futures::executor::block_on()`]: https://docs.rs/futures/0.3/futures/executor/fn.block_on.html
 //! [blog-post]: https://stjepang.github.io/2020/01/25/build-your-own-block-on.html
 
 use std::cell::RefCell;
