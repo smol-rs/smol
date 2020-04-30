@@ -15,6 +15,22 @@ jobs:
         os: [ubuntu-latest, windows-latest, macos-latest]
         rust: [nightly, beta, stable]
     steps:
+      - name: Cache cargo registry
+        uses: actions/cache@v1
+        with:
+          path: ~/.cargo/registry
+          key: ${{ matrix.rust }}-${{ matrix.os }}-cargo-registry
+      - name: Cache cargo index
+        uses: actions/cache@v1
+        with:
+          path: ~/.cargo/git
+          key: ${{ matrix.rust }}-${{ matrix.os }}-cargo-index
+      - name: Cache cargo build
+        uses: actions/cache@v1
+        with:
+          path: target
+          key: ${{ matrix.rust }}-${{ matrix.os }}-cargo-build-target
+
       - uses: actions/checkout@v2
       - name: Install latest ${{ matrix.rust }}
         uses: actions-rs/toolchain@v1
@@ -48,6 +64,22 @@ jobs:
           - arm-linux-androideabi
 
     steps:
+    - name: Cache cargo registry
+      uses: actions/cache@v1
+      with:
+        path: ~/.cargo/registry
+        key: ${{ matrix.rust }}-${{ matrix.os }}-${{ matrix.target }}-cargo-registry
+    - name: Cache cargo index
+      uses: actions/cache@v1
+      with:
+        path: ~/.cargo/git
+        key: ${{ matrix.rust }}-${{ matrix.os }}-${{ matrix.target }}-cargo-index
+    - name: Cache cargo build
+      uses: actions/cache@v1
+      with:
+        path: target
+        key: ${{ matrix.rust }}-${{ matrix.os }}-${{ matrix.target }}-cargo-build-target
+
     - uses: actions/checkout@master
 
     - name: Install nightly
