@@ -79,7 +79,7 @@ impl WorkStealingExecutor {
         &'static self,
         future: impl Future<Output = T> + Send + 'static,
     ) -> Task<T> {
-        // The function that schedules a runnable task.
+        // The function that schedules a runnable task when it gets woken up.
         let schedule = move |runnable| {
             if WORKER.is_set() {
                 // If scheduling from a worker thread, push into the worker's queue.
@@ -93,7 +93,7 @@ impl WorkStealingExecutor {
             }
         };
 
-        // Create a task, schedule it, and return its `Task` handle.
+        // Create a task, push it into the queue by scheduling it, and return its `Task` handle.
         let (runnable, handle) = async_task::spawn(future, schedule, ());
         runnable.schedule();
         Task(Some(handle))

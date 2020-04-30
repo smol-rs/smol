@@ -19,7 +19,9 @@ use crate::work_stealing::WorkStealingExecutor;
 /// 1. an `async_task::Task<()>`, which we refer to as a `Runnable`
 /// 2. an `async_task::JoinHandle<T, ()>`, which is wrapped inside a `Task<T>`
 ///
-/// Once a `Runnable` is run, it "vanishes" and only reappears when its future is woken.
+/// Once a `Runnable` is run, it "vanishes" and only reappears when its future is woken. When it's
+/// woken up, its schedule function is called; in smol, that means that `Runnable` will be pushed
+/// onto a queue in an executor.
 pub(crate) type Runnable = async_task::Task<()>;
 
 /// A spawned future.
