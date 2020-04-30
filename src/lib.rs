@@ -9,7 +9,10 @@
 //! 3. Blocking executor for tasks created by [`Task::blocking()`], [`blocking!`], [`iter()`],
 //!    [`reader()`] and [`writer()`].
 //!
-//! Blocking executor is the only one that spawns threads.
+//! Blocking executor is the only one that spawns threads on its own.
+//!
+//! See [here](fn.run.html#examples) for how to run executors on a single thread or on a thread
+//! pool.
 //!
 //! # Reactor
 //!
