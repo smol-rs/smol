@@ -77,7 +77,7 @@ impl ThreadLocalExecutor {
             let event = ex.event.clone();
             let id = thread_id();
 
-            // The function that schedules a runnable task.
+            // The function that schedules a runnable task when it gets woken up.
             let schedule = move |runnable| {
                 if thread_id() == id {
                     // If scheduling from the original thread, push into the main queue.
@@ -93,7 +93,7 @@ impl ThreadLocalExecutor {
                 event.notify();
             };
 
-            // Create a task, schedule it, and return its `Task` handle.
+            // Create a task, push it into the queue by scheduling it, and return its `Task` handle.
             let (runnable, handle) = async_task::spawn_local(future, schedule, ());
             runnable.schedule();
             Task(Some(handle))
