@@ -25,6 +25,11 @@ jobs:
         with:
           path: ~/.cargo/git
           key: ${{ matrix.rust }}-${{ matrix.os }}-cargo-index
+      - name: Cache cargo binaries
+        uses: actions/cache@v1
+        with:
+          path: ~/.cargo/bin
+          key: ${{ matrix.rust }}-${{ matrix.os }}-cargo-binaries
       - name: Cache cargo build
         uses: actions/cache@v1
         with:
@@ -68,19 +73,24 @@ jobs:
       uses: actions/cache@v1
       with:
         path: ~/.cargo/registry
-        key: ${{ matrix.rust }}-${{ matrix.os }}-${{ matrix.target }}-cargo-registry
+        key: ${{ matrix.rust }}-${{ matrix.os }}-cargo-registry
     - name: Cache cargo index
       uses: actions/cache@v1
       with:
         path: ~/.cargo/git
-        key: ${{ matrix.rust }}-${{ matrix.os }}-${{ matrix.target }}-cargo-index
+        key: ${{ matrix.rust }}-${{ matrix.os }}-cargo-index
+    - name: Cache cargo binaries
+      uses: actions/cache@v1
+      with:
+        path: ~/.cargo/bin
+        key: ${{ matrix.rust }}-${{ matrix.os }}-cargo-binaries
     - name: Cache cargo build
       uses: actions/cache@v1
       with:
         path: target
         key: ${{ matrix.rust }}-${{ matrix.os }}-${{ matrix.target }}-cargo-build-target
 
-    - uses: actions/checkout@master
+    - uses: actions/checkout@v2
 
     - name: Install nightly
       uses: actions-rs/toolchain@v1
