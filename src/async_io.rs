@@ -1097,4 +1097,36 @@ mod tests {
             Ok(())
         })
     }
+
+    #[test]
+    fn udp_send_recv() -> io::Result<()> {
+        crate::run(async {
+            let socket1 = Async::<UdpSocket>::bind("127.0.0.1:8000")?;
+            let socket2 = Async::<UdpSocket>::bind("127.0.0.1:9000")?;
+            socket1.get_ref().connect(socket2.get_ref().local_addr()?)?;
+
+            let mut buf = [0u8; 1024];
+
+            socket1.send(LOREM_IPSUM).await?;
+            let n = socket2.peek(&mut buf).await?;
+            assert_eq!(&buf[..n], LOREM_IPSUM);
+            let n = socket2.recv(&mut buf).await?;
+            assert_eq!(&buf[..n], LOREM_IPSUM);
+
+            socket2.send_to(LOREM_IPSUM, socket1.get_ref().local_addr()?).await?;
+            let n = socket1.peek_from(&mut buf).await?.0;
+            assert_eq!(&buf[..n], LOREM_IPSUM);
+            let n = socket1.recv_from(&mut buf).await?.0;
+            assert_eq!(&buf[..n], LOREM_IPSUM);
+            
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn uds() -> io::Result<()> {
+        crate::run(async {
+            Ok(())
+        })
+    }
 }
