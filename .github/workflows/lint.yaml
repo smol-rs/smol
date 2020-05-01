@@ -42,7 +42,7 @@ jobs:
           key: cargo-binaries-${{ env.CURRENT_WEEK }}-loc
       
       - name: Install cargo-count
-        run: cargo install cargo-count
+        run: cargo install cargo-count || true
 
       - name: Run cargo count
         # '-a --exclude=$(cat .gitignore)' necessary to work around:
