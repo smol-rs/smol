@@ -15,28 +15,37 @@ jobs:
         os: [ubuntu-latest, windows-latest, macos-latest]
         rust: [nightly, beta, stable]
     steps:
+      - uses: actions/checkout@v2
+      
+      - name: Set current week of the year in environnement
+        if: ${{ startsWith(matrix.os, "ubuntu") || startsWith(matrix.os, "macos") }}
+        run: echo "::set-env name=CURRENT_WEEK::$((date +%V))"
+      
+      - name: Set current week of the year in environnement
+        if: ${{ startsWith(matrix.os, "windows") }}
+        run: echo "::set-env name=CURRENT_WEEK::$((Get-Date -UFormat %V))"
+
       - name: Cache cargo registry
         uses: actions/cache@v1
         with:
           path: ~/.cargo/registry
-          key: ${{ matrix.rust }}-${{ matrix.os }}-cargo-registry
+          key: ${{ matrix.rust }}-${{ matrix.os }}-cargo-registry-${{ env.CURRENT_WEEK }}-build_and_test
       - name: Cache cargo index
         uses: actions/cache@v1
         with:
           path: ~/.cargo/git
-          key: ${{ matrix.rust }}-${{ matrix.os }}-cargo-index
+          key: ${{ matrix.rust }}-${{ matrix.os }}-cargo-index-${{ env.CURRENT_WEEK }}-build_and_test
       - name: Cache cargo binaries
         uses: actions/cache@v1
         with:
           path: ~/.cargo/bin
-          key: ${{ matrix.rust }}-${{ matrix.os }}-cargo-binaries
+          key: ${{ matrix.rust }}-${{ matrix.os }}-cargo-binaries-${{ env.CURRENT_WEEK }}-build_and_test
       - name: Cache cargo build
         uses: actions/cache@v1
         with:
           path: target
-          key: ${{ matrix.rust }}-${{ matrix.os }}-cargo-build-target
+          key: ${{ matrix.rust }}-${{ matrix.os }}-cargo-build-target-${{ env.CURRENT_WEEK }}-build_and_test
 
-      - uses: actions/checkout@v2
       - name: Install latest ${{ matrix.rust }}
         uses: actions-rs/toolchain@v1
         with:
@@ -69,28 +78,31 @@ jobs:
           - arm-linux-androideabi
 
     steps:
+    - uses: actions/checkout@v2
+    
+    - name: Set current week of the year in environnement
+      run: echo "::set-env name=CURRENT_WEEK::$((date +%V))"
+    
     - name: Cache cargo registry
       uses: actions/cache@v1
       with:
         path: ~/.cargo/registry
-        key: ${{ matrix.rust }}-${{ matrix.os }}-cargo-registry
+        key: ${{ matrix.rust }}-${{ matrix.os }}-cargo-registry-${{ env.CURRENT_WEEK }}-cross
     - name: Cache cargo index
       uses: actions/cache@v1
       with:
         path: ~/.cargo/git
-        key: ${{ matrix.rust }}-${{ matrix.os }}-cargo-index
+        key: ${{ matrix.rust }}-${{ matrix.os }}-cargo-index-${{ env.CURRENT_WEEK }}-cross
     - name: Cache cargo binaries
       uses: actions/cache@v1
       with:
         path: ~/.cargo/bin
-        key: ${{ matrix.rust }}-${{ matrix.os }}-cargo-binaries
+        key: ${{ matrix.rust }}-${{ matrix.os }}-cargo-binaries-${{ env.CURRENT_WEEK }}-cross
     - name: Cache cargo build
       uses: actions/cache@v1
       with:
         path: target
-        key: ${{ matrix.rust }}-${{ matrix.os }}-${{ matrix.target }}-cargo-build-target
-
-    - uses: actions/checkout@v2
+        key: ${{ matrix.rust }}-${{ matrix.os }}-${{ matrix.target }}-cargo-build-target-${{ env.CURRENT_WEEK }}-cross
 
     - name: Install nightly
       uses: actions-rs/toolchain@v1
