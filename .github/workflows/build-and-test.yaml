@@ -87,22 +87,22 @@ jobs:
       uses: actions/cache@v1
       with:
         path: ~/.cargo/registry
-        key: ${{ matrix.rust }}-${{ matrix.os }}-cargo-registry-${{ env.CURRENT_WEEK }}-cross
+        key: ${{ matrix.rust }}-cargo-registry-${{ env.CURRENT_WEEK }}-cross
     - name: Cache cargo index
       uses: actions/cache@v1
       with:
         path: ~/.cargo/git
-        key: ${{ matrix.rust }}-${{ matrix.os }}-cargo-index-${{ env.CURRENT_WEEK }}-cross
+        key: ${{ matrix.rust }}-cargo-index-${{ env.CURRENT_WEEK }}-cross
     - name: Cache cargo binaries
       uses: actions/cache@v1
       with:
         path: ~/.cargo/bin
-        key: ${{ matrix.rust }}-${{ matrix.os }}-cargo-binaries-${{ env.CURRENT_WEEK }}-cross
+        key: ${{ matrix.rust }}-cargo-binaries-${{ env.CURRENT_WEEK }}-cross
     - name: Cache cargo build
       uses: actions/cache@v1
       with:
         path: target
-        key: ${{ matrix.rust }}-${{ matrix.os }}-${{ matrix.target }}-cargo-build-target-${{ env.CURRENT_WEEK }}-cross
+        key: ${{ matrix.rust }}-${{ matrix.target }}-cargo-build-target-${{ env.CURRENT_WEEK }}-cross
 
     - name: Install nightly
       uses: actions-rs/toolchain@v1
@@ -111,7 +111,7 @@ jobs:
         override: true
 
     - name: Install cross
-      run: cargo install cross
+      run: cargo install cross || true
 
     - name: check
       run: cross check --target ${{ matrix.target }}
