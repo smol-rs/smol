@@ -40,6 +40,11 @@ jobs:
         with:
           path: ~/.cargo/bin
           key: ${{ matrix.rust }}-${{ matrix.os }}-cargo-binaries-${{ env.CURRENT_WEEK }}-build_and_test
+      - name: Cache .rustup
+        uses: actions/cache@v1
+        with:
+          path: ~/.rustup
+          key: ${{ matrix.rust }}-${{ matrix.os }}-rustup-${{ env.CURRENT_WEEK }}-build_and_test
       - name: Cache cargo build
         uses: actions/cache@v1
         with:
@@ -98,6 +103,11 @@ jobs:
       with:
         path: ~/.cargo/bin
         key: cargo-binaries-${{ env.CURRENT_WEEK }}-cross
+    - name: Cache .rustup
+      uses: actions/cache@v1
+      with:
+        path: ~/.rustup
+        key: rustup-${{ env.CURRENT_WEEK }}-cross
     - name: Cache cargo build
       uses: actions/cache@v1
       with:
