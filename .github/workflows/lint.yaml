@@ -25,6 +25,15 @@ jobs:
     steps:
       - uses: actions/checkout@v2
       
+      - name: Set current week of the year in environnement
+        run: echo "::set-env name=CURRENT_WEEK::$(date +%V)"
+
+      - name: Cache cargo binaries
+        uses: actions/cache@v1
+        with:
+          path: ~/.cargo/bin
+          key: ${{ matrix.rust }}-${{ matrix.os }}-cargo-binaries-${{ env.CURRENT_WEEK }}-loc
+      
       - name: Install cargo-count
         run: cargo install cargo-count
 
