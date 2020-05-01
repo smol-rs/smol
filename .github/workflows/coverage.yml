@@ -50,17 +50,19 @@ jobs:
         id: coverage
         uses: actions-rs/grcov@v0.1
       - name: Coveralls upload
-        uses: coverallsapp/github-action@v1.1.0
+        uses: coverallsapp/github-action@v1.1.1
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           path-to-lcov: ${{ steps.coverage.outputs.report }}
+          flag-name: test-${{ matrix.os }}
+          parallel: true
 
   grcov_finalize:
     runs-on: ubuntu-latest
     needs: grcov
     steps:
       - name: Finalize Coveralls upload
-        uses: coverallsapp/github-action@v1.1.0
+        uses: coverallsapp/github-action@v1.1.1
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           parallel-finished: true
