@@ -1047,3 +1047,54 @@ impl Async<UnixDatagram> {
         self.with(|io| io.send(buf)).await
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use futures::prelude::*;
+
+    const LOREM_IPSUM: &[u8] = b"
+    Lorem ipsum dolor sit amet, consectetur adipiscing elit.
+    Donec pretium ante erat, vitae sodales mi varius quis.
+    Etiam vestibulum lorem vel urna tempor, eu fermentum odio aliquam.
+    Aliquam consequat urna vitae ipsum pulvinar, in blandit purus eleifend.
+    ";
+
+    #[test]
+    fn tcp_connection() -> io::Result<()> {
+        crate::run(async {
+            let listener = Async::<TcpListener>::bind("127.0.0.1:8080")?;
+            let addr = listener.get_ref().local_addr()?;
+            let task = Task::spawn(async move { listener.accept().await });
+
+            let stream2 = Async::<TcpStream>::connect(&addr).await?;
+            let stream1 = task.await?.0;
+
+            assert_eq!(stream1.get_ref().peer_addr()?, stream2.get_ref().local_addr()?);
+            assert_eq!(stream2.get_ref().peer_addr()?, stream1.get_ref().local_addr()?);
+
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn tcp_peek_read() -> io::Result<()> {
+        crate::run(async {
+            let listener = Async::<TcpListener>::bind("127.0.0.1:8081")?;
+            
+            let mut stream = Async::<TcpStream>::connect("127.0.0.1:8081").await?;
+            stream.write_all(LOREM_IPSUM).await?;
+
+            let mut buf = vec![0; 1024];
+            let mut incoming = listener.incoming();
+            let mut stream = incoming.next().await.unwrap()?;
+            
+            let n = stream.peek(&mut buf).await?;
+            assert_eq!(&buf[..n], LOREM_IPSUM);
+            let n = stream.read(&mut buf).await?;
+            assert_eq!(&buf[..n], LOREM_IPSUM);
+
+            Ok(())
+        })
+    }
+}
