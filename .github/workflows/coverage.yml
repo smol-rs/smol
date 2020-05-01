@@ -30,6 +30,12 @@ jobs:
           path: ~/.rustup
           key: ${{ matrix.os }}-rustup-${{ env.CURRENT_WEEK }}-grcov
       
+      - name: Cache cargo binaries
+        uses: actions/cache@v1
+        with:
+          path: ~/.cargo/bin
+          key: ${{ matrix.os }}-cargo-binaries-${{ env.CURRENT_WEEK }}-grcov
+      
       - name: Install latest nightly
         uses: actions-rs/toolchain@v1
         with:
