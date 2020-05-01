@@ -47,7 +47,6 @@ nix = "0.17.0"
 wepoll-binding = "2.0.0"
 
 [dev-dependencies]
-piper = "0.1.1"
 num_cpus = "1.13.0"
 
 [workspace]
