@@ -35,8 +35,8 @@
 //! [here](fn.run.html#examples) for an example.
 //!
 //! There is also [`block_on()`], which blocks the current thread until a future completes, but it
-//! doesn't poll the reactor or run executors. Note that async I/O and timers will not work unless
-//! at least one thread is calling [`run()`].
+//! doesn't poll the reactor or run executors. When using [`block_on()`], make sure at least one
+//! thread is calling [`run()`], or else I/O and timers will not work!
 //!
 //! Blocking tasks run in the background on a dedicated thread pool.
 //!
