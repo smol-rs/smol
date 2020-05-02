@@ -1,10 +1,12 @@
 use futures::{AsyncReadExt, AsyncWriteExt, StreamExt};
 use smol::{Async, Task};
+#[cfg(unix)]
+use std::os::unix::net::{UnixDatagram, UnixListener, UnixStream};
 use std::{
     io,
     net::{TcpListener, TcpStream, UdpSocket},
-    os::unix::net::{UnixDatagram, UnixListener, UnixStream},
 };
+#[cfg(unix)]
 use tempfile::tempdir;
 
 const LOREM_IPSUM: &[u8] = b"
