@@ -1052,6 +1052,7 @@ impl Async<UnixDatagram> {
 mod tests {
     use super::*;
     use futures::prelude::*;
+    use tempfile::tempdir;
 
     const LOREM_IPSUM: &[u8] = b"
     Lorem ipsum dolor sit amet, consectetur adipiscing elit.
@@ -1085,7 +1086,7 @@ mod tests {
             let mut stream = Async::<TcpStream>::connect("127.0.0.1:8081").await?;
             stream.write_all(LOREM_IPSUM).await?;
 
-            let mut buf = vec![0; 1024];
+            let mut buf = [0; 1024];
             let mut incoming = listener.incoming();
             let mut stream = incoming.next().await.unwrap()?;
             
@@ -1123,9 +1124,55 @@ mod tests {
         })
     }
 
+    #[cfg(unix)]
     #[test]
-    fn uds() -> io::Result<()> {
+    fn uds_connection() -> io::Result<()> {
         crate::run(async {
+            let listener = Async::<UnixListener>::bind("127.0.0.1:8080")?;
+            
+            let mut stream = Async::<UnixStream>::connect("127.0.0.1:8080").await?;
+            stream.write_all(LOREM_IPSUM).await?;
+
+            let mut buf = [0; 1024];
+            let mut incoming = listener.incoming();
+            let mut stream = incoming.next().await.unwrap()?;
+            
+            let n = stream.read(&mut buf).await?;
+            assert_eq!(&buf[..n], LOREM_IPSUM);
+
+            Ok(())
+        })
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn uds_send_recv() -> io::Result<()> {
+        crate::run(async {
+            let (socket1, socket2) = Async::<UnixDatagram>::pair()?;
+
+            socket1.send(LOREM_IPSUM).await?;
+            let mut buf = [0; 1024];
+            let n = socket2.recv(&mut buf).await?;
+            assert_eq!(&buf[..n], LOREM_IPSUM);
+
+            Ok(())
+        })
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn uds_send_to_recv_from() -> io::Result<()> {
+        crate::run(async {
+            let dir = tempdir()?;
+            let path = dir.path().join("socket");
+            let socket1 = Async::<UnixDatagram>::bind(&path)?;
+            let socket2 = Async::<UnixDatagram>::unbound()?;
+
+            socket2.send_to(LOREM_IPSUM, &path).await?;
+            let mut buf = [0; 1024];
+            let n = socket1.recv_from(&mut buf).await?.0;
+            assert_eq!(&buf[..n], LOREM_IPSUM);
+
             Ok(())
         })
     }
