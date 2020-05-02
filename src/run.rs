@@ -27,6 +27,7 @@ use crate::work_stealing::WorkStealingExecutor;
 /// Single-threaded executor:
 ///
 /// ```
+/// // Run the thread-local and work-stealing executor on the current thread.
 /// smol::run(async {
 ///     println!("Hello from the smol executor!");
 /// });
@@ -42,7 +43,7 @@ use crate::work_stealing::WorkStealingExecutor;
 /// // Same number of threads as there are CPU cores.
 /// let num_threads = num_cpus::get().max(1);
 ///
-/// // Create an executor thread pool.
+/// // Run the thread-local and work-stealing executor on a thread pool.
 /// for _ in 0..num_threads {
 ///     // A pending future is one that simply yields forever.
 ///     thread::spawn(|| smol::run(future::pending::<()>()));

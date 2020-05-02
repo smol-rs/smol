@@ -9,7 +9,10 @@
 //! 3. Blocking executor for tasks created by [`Task::blocking()`], [`blocking!`], [`iter()`],
 //!    [`reader()`] and [`writer()`].
 //!
-//! Blocking executor is the only one that spawns threads.
+//! Blocking executor is the only one that spawns threads on its own.
+//!
+//! See [here](fn.run.html#examples) for how to run executors on a single thread or on a thread
+//! pool.
 //!
 //! # Reactor
 //!
@@ -31,8 +34,9 @@
 //! If you want a multithreaded runtime, just call [`run()`] from multiple threads. See
 //! [here](fn.run.html#examples) for an example.
 //!
-//! There is also [`block_on()`], which blocks the thread until a future completes, but it doesn't
-//! do anything else besides that.
+//! There is also [`block_on()`], which blocks the current thread until a future completes, but it
+//! doesn't poll the reactor or run executors. When using [`block_on()`], make sure at least one
+//! thread is calling [`run()`], or else I/O and timers will not work!
 //!
 //! Blocking tasks run in the background on a dedicated thread pool.
 //!
