@@ -34,8 +34,9 @@
 //! If you want a multithreaded runtime, just call [`run()`] from multiple threads. See
 //! [here](fn.run.html#examples) for an example.
 //!
-//! There is also [`block_on()`], which blocks the thread until a future completes, but it doesn't
-//! do anything else besides that.
+//! There is also [`block_on()`], which blocks the current thread until a future completes, but it
+//! doesn't poll the reactor or run executors. Note that async I/O and timers will not work unless
+//! at least one thread is calling [`run()`].
 //!
 //! Blocking tasks run in the background on a dedicated thread pool.
 //!
