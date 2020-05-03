@@ -3,8 +3,7 @@
 //! Run with:
 //!
 //! ```
-//! cd examples  # make sure to be in this directory
-//! cargo run --example hyper-client
+//! cargo run --bin hyper-client
 //! ```
 
 use std::io;

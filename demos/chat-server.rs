@@ -3,15 +3,13 @@
 //! First start a server:
 //!
 //! ```
-//! cd examples  # make sure to be in this directory
-//! cargo run --example chat-server
+//! cargo run --bin chat-server
 //! ```
 //!
 //! Then start clients:
 //!
 //! ```
-//! cd examples  # make sure to be in this directory
-//! cargo run --example chat-client
+//! cargo run --bin chat-client
 //! ```
 
 use std::collections::HashMap;

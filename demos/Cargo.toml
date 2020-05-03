@@ -1,19 +1,19 @@
 [package]
-name = "smol-examples"
+name = "smol-demos"
 version = "0.0.0"
 authors = ["Stjepan Glavina <stjepang@gmail.com>"]
 edition = "2018"
 publish = false
 
-[target.'cfg(windows)'.dev-dependencies]
+[target.'cfg(windows)'.dependencies]
 uds_windows = "0.1.4"
 
-[target.'cfg(target_os = "linux")'.dev-dependencies]
+[target.'cfg(target_os = "linux")'.dependencies]
 inotify = { version = "0.8.2", default-features = false }
 nix = "0.17.0"
 timerfd = "1.1.1"
 
-[dev-dependencies]
+[dependencies]
 anyhow = "1.0.28"
 async-h1 = "1.1.2"
 async-native-tls = "0.3.3"
@@ -38,86 +38,82 @@ tokio = { version = "0.2.18", default-features = false }
 tungstenite = "0.10.1"
 url = "2.1.1"
 
-[[example]]
-name = "async-h1-client"
-path = "async-h1-client.rs"
-
-[[example]]
+[[bin]]
 name = "async-h1-server"
 path = "async-h1-server.rs"
 
-[[example]]
+[[bin]]
 name = "chat-client"
 path = "chat-client.rs"
 
-[[example]]
+[[bin]]
 name = "chat-server"
 path = "chat-server.rs"
 
-[[example]]
+[[bin]]
 name = "ctrl-c"
 path = "ctrl-c.rs"
 
-[[example]]
+[[bin]]
 name = "hyper-client"
 path = "hyper-client.rs"
 
-[[example]]
+[[bin]]
 name = "hyper-server"
 path = "hyper-server.rs"
 
-[[example]]
+[[bin]]
 name = "linux-inotify"
 path = "linux-inotify.rs"
 
-[[example]]
+[[bin]]
 name = "linux-timerfd"
 path = "linux-timerfd.rs"
 
-[[example]]
+[[bin]]
 name = "other-runtimes"
 path = "other-runtimes.rs"
 
-[[example]]
+[[bin]]
 name = "simple-client"
 path = "simple-client.rs"
 
-[[example]]
+[[bin]]
 name = "simple-server"
 path = "simple-server.rs"
 
-[[example]]
+[[bin]]
 name = "tcp-client"
 path = "tcp-client.rs"
 
-[[example]]
+[[bin]]
 name = "tcp-server"
 path = "tcp-server.rs"
 
-[[example]]
+[[bin]]
 name = "tls-client"
 path = "tls-client.rs"
 
-[[example]]
+[[bin]]
 name = "tls-server"
 path = "tls-server.rs"
 
-[[example]]
+[[bin]]
 name = "unix-signal"
 path = "unix-signal.rs"
 
-[[example]]
+[[bin]]
 name = "web-crawler"
 path = "web-crawler.rs"
 
-[[example]]
+[[bin]]
 name = "websocket-client"
 path = "websocket-client.rs"
 
-[[example]]
+[[bin]]
 name = "websocket-server"
 path = "websocket-server.rs"
 
-[[example]]
+[[bin]]
 name = "windows-uds"
 path = "windows-uds.rs"

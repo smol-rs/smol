@@ -3,8 +3,7 @@
 //! Run with:
 //!
 //! ```
-//! cd examples  # make sure to be in this directory
-//! cargo run --example linux-timerfd
+//! cargo run --bin linux-timerfd
 //! ```
 
 #[cfg(target_os = "linux")]

@@ -3,8 +3,7 @@
 //! Run with:
 //!
 //! ```
-//! cd examples  # make sure to be in this directory
-//! cargo run --example linux-inotify
+//! cargo run --bin linux-inotify
 //! ```
 
 #[cfg(target_os = "linux")]

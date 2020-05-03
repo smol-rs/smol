@@ -3,7 +3,7 @@
 //! Run with:
 //!
 //! ```
-//! cargo run --example simple-client
+//! cargo run --bin simple-client
 //! ```
 
 use std::net::TcpStream;

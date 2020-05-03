@@ -3,8 +3,7 @@
 //! Run with:
 //!
 //! ```
-//! cd examples  # make sure to be in this directory
-//! cargo run --example async-h1-server
+//! cargo run --bin async-h1-server
 //! ```
 //!
 //! Open in the browser any of these addresses:

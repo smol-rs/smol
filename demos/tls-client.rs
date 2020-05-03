@@ -3,15 +3,13 @@
 //! First start a server:
 //!
 //! ```
-//! cd examples  # make sure to be in this directory
-//! cargo run --example tls-server
+//! cargo run --bin tls-server
 //! ```
 //!
 //! Then start a client:
 //!
 //! ```
-//! cd examples  # make sure to be in this directory
-//! cargo run --example tls-client
+//! cargo run --bin tls-client
 //! ```
 
 use std::net::TcpStream;

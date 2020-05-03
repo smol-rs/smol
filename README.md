@@ -20,11 +20,11 @@ and is only 1500 lines of code long.
 
 [std]: https://docs.rs/std
 
-Reading the [docs] or looking at the [examples] is a great way to start learning
+Reading the [docs] or looking at the [demos] is a great way to start learning
 async Rust.
 
 [docs]: https://docs.rs/smol
-[examples]: ./examples
+[demos]: ./demos
 
 Async I/O is implemented using [epoll] on Linux/Android, [kqueue] on
 macOS/iOS/BSD, and [wepoll] on Windows.
@@ -42,14 +42,14 @@ macOS/iOS/BSD, and [wepoll] on Windows.
 * Tasks that support cancelation.
 * Userspace timers.
 
-## Examples
+## Demos
 
-You need to be in the [examples] directory to run them:
+There is a number of demos in the Git repo,
+and you can run them with the `--bin` option,
+example...
 
 ```terminal
-$ cd examples
-$ ls
-$ cargo run --example ctrl-c
+$ cargo run --bin ctrl-c
 ```
 
 ## Compatibility

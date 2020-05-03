@@ -3,8 +3,7 @@
 //! Run with:
 //!
 //! ```
-//! cd examples  # make sure to be in this directory
-//! cargo run --example simple-server
+//! cargo run --bin simple-server
 //! ```
 //!
 //! Open in the browser any of these addresses:

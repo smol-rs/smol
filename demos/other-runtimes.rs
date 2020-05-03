@@ -13,8 +13,7 @@
 //! Run with:
 //!
 //! ```
-//! cd examples  # make sure to be in this directory
-//! cargo run --example other-runtimes
+//! cargo run --bin other-runtimes
 //! ```
 
 use std::time::{Duration, Instant};

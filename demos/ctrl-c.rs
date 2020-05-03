@@ -3,8 +3,7 @@
 //! Run with:
 //!
 //! ```
-//! cd examples  # make sure to be in this directory
-//! cargo run --example ctrl-c
+//! cargo run --bin ctrl-c
 //! ```
 
 use futures::prelude::*;

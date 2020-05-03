@@ -3,15 +3,13 @@
 //! First start a server:
 //!
 //! ```
-//! cd examples  # make sure to be in this directory
-//! cargo run --example websocket-server
+//! cargo run --bin websocket-server
 //! ```
 //!
-//! Then start a client:
+//! Then start clients:
 //!
 //! ```
-//! cd examples  # make sure to be in this directory
-//! cargo run --example websocket-client
+//! cargo run --bin websocket-client
 //! ```
 
 use std::net::TcpStream;

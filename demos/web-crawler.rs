@@ -3,8 +3,7 @@
 //! Run with:
 //!
 //! ```
-//! cd examples  # make sure to be in this directory
-//! cargo run --example web-crawler
+//! cargo run --bin web-crawler
 //! ```
 
 use std::collections::{HashSet, VecDeque};

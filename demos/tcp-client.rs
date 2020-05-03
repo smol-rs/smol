@@ -3,15 +3,13 @@
 //! First start a server:
 //!
 //! ```
-//! cd examples  # make sure to be in this directory
-//! cargo run --example tcp-server
+//! cargo run --bin tcp-server
 //! ```
 //!
 //! Then start a client:
 //!
 //! ```
-//! cd examples  # make sure to be in this directory
-//! cargo run --example tcp-client
+//! cargo run --bin tcp-client
 //! ```
 
 use std::net::TcpStream;

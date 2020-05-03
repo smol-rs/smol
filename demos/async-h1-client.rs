@@ -1,10 +1,8 @@
 //! An HTTP+TLS client based on `async-h1` and `async-native-tls`.
-//!
 //! Run with:
 //!
 //! ```
-//! cd examples  # make sure to be in this directory
-//! cargo run --example async-h1-client
+//! cargo run --bin async-h1-client
 //! ```
 
 use std::net::TcpStream;
