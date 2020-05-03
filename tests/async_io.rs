@@ -91,9 +91,12 @@ fn udp_send_recv() -> io::Result<()> {
 #[test]
 fn uds_connection() -> io::Result<()> {
     smol::run(async {
-        let listener = Async::<UnixListener>::bind("127.0.0.1:8080")?;
+        let dir = tempdir()?;
+        let path = dir.path().join("socket");
 
-        let mut stream = Async::<UnixStream>::connect("127.0.0.1:8080").await?;
+        let listener = Async::<UnixListener>::bind(&path)?;
+
+        let mut stream = Async::<UnixStream>::connect(&path).await?;
         stream.write_all(LOREM_IPSUM).await?;
 
         let mut buf = [0; 1024];
