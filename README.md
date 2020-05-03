@@ -29,6 +29,9 @@ async Rust.
 Async I/O is implemented using [epoll] on Linux/Android, [kqueue] on
 macOS/iOS/BSD, and [wepoll] on Windows.
 
+What makes smol different from [async-std] and [tokio]? 
+Read this [blog post](https://stjepang.github.io/2020/04/03/why-im-building-a-new-async-runtime.html).
+
 [epoll]: https://en.wikipedia.org/wiki/Epoll
 [kqueue]: https://en.wikipedia.org/wiki/Kqueue
 [wepoll]: https://github.com/piscisaureus/wepoll
