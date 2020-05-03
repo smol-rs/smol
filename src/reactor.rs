@@ -497,10 +497,10 @@ mod sys {
             Ok(())
         }
         pub fn wait(&self, events: &mut Events, timeout: Option<Duration>) -> io::Result<usize> {
-            let timeout_ms: Option<usize> = timeout.and_then(|t| t.as_millis().try_into().ok());
-            let timeout = timeout_ms.map(|ms| libc::timespec {
-                tv_sec: (ms / 1000) as libc::time_t,
-                tv_nsec: ((ms % 1000) * 1_000_000) as libc::c_long,
+            let timeout_us: Option<usize> = timeout.and_then(|t| t.as_micros().try_into().ok());
+            let timeout = timeout_us.map(|us| libc::timespec {
+                tv_sec: (us / 1_000_000) as libc::time_t,
+                tv_nsec: ((us % 1_000_000) * 1_000) as libc::c_long,
             });
             events.len = kevent_ts(self.0, &[], &mut events.list, timeout).map_err(io_err)?;
             Ok(events.len)
