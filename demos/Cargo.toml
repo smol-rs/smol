@@ -16,7 +16,7 @@ timerfd = "1.1.1"
 [dependencies]
 anyhow = "1.0.28"
 async-h1 = "1.1.2"
-async-native-tls = "0.3.3"
+async-native-tls = { version = "0.3.3", features = ["vendored"] }
 async-std = "1.5.0"
 async-tungstenite = { version = "0.4.2", features = ["async-native-tls"] }
 base64 = "0.12.0"
