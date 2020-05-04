@@ -1,4 +1,4 @@
-//! Throttle tasks if they poll too many I/O operations without yielding.
+//! Throttle tasks if they perform too many I/O operations without yielding.
 //!
 //! This is used to prevent futures from running forever. Once a certain number of I/O operation is
 //! hit in a single run, I/O operations will begin returning
@@ -35,12 +35,22 @@ pub(crate) fn setup<T>(poll: impl FnOnce() -> T) -> T {
 ///
 /// [`Poll::Pending`]: `std::task::Poll::Pending`
 pub(crate) fn poll(cx: &mut Context<'_>) -> Poll<()> {
-    // Decrement the budget and check if it was zero.
-    if BUDGET.is_set() && BUDGET.with(|b| b.replace(b.get().saturating_sub(1))) == 0 {
+    // Check if the budget is zero.
+    if BUDGET.is_set() && BUDGET.with(|b| b.get()) == 0 {
         // Make sure to wake the current task. The task is not *really* pending, we're just
-        // artificially throttling it to let other tasks be run.
+        // artificially throttling it to let other tasks run.
         cx.waker().wake_by_ref();
         return Poll::Pending;
     }
     Poll::Ready(())
+}
+
+/// Consumes a unit of budget.
+///
+/// This function is called by successful I/O operation.
+pub(crate) fn bump() {
+    if BUDGET.is_set() {
+        // Decrement the budget.
+        BUDGET.with(|b| b.replace(b.get().saturating_sub(1)));
+    }
 }

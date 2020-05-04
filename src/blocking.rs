@@ -273,6 +273,11 @@ pub fn iter<T: Send + 'static>(
                         *self = State::Idle(Some(iter));
                     }
 
+                    if opt.is_some() {
+                        // Consume a unit of I/O budget.
+                        throttle::bump();
+                    }
+
                     Poll::Ready(opt)
                 }
             }
@@ -377,6 +382,11 @@ pub fn reader(reader: impl Read + Send + 'static) -> impl AsyncRead + Send + Unp
                         // Make sure to move into the idle state before reporting errors.
                         *self = State::Idle(Some(io));
                         res?;
+                    }
+
+                    if n > 0 {
+                        // Consume a unit of I/O budget.
+                        throttle::bump();
                     }
 
                     Poll::Ready(Ok(n))
@@ -496,7 +506,16 @@ pub fn writer(writer: impl Write + Send + 'static) -> impl AsyncWrite + Send + U
                     }
 
                     // The writer is busy - write more bytes into the pipe.
-                    State::Busy(Some(writer), _) => return Pin::new(writer).poll_write(cx, buf),
+                    State::Busy(Some(writer), _) => {
+                        let res = futures::ready!(Pin::new(writer).poll_write(cx, buf));
+                        if let Ok(n) = &res {
+                            if *n > 0 {
+                                // Consume a unit of I/O budget.
+                                throttle::bump();
+                            }
+                        }
+                        return Poll::Ready(res);
+                    }
                 }
             }
         }
@@ -524,6 +543,11 @@ pub fn writer(writer: impl Write + Send + 'static) -> impl AsyncWrite + Send + U
                         let (res, io) = futures::ready!(Pin::new(task).poll(cx));
                         // Make sure to move into the idle state before reporting errors.
                         *self = State::Idle(Some(io));
+
+                        if res.is_ok() {
+                            // Consume a unit of I/O budget.
+                            throttle::bump();
+                        }
                         return Poll::Ready(res);
                     }
                 }

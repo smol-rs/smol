@@ -343,7 +343,13 @@ impl Source {
             // Attempt the non-blocking operation.
             match op() {
                 Err(err) if err.kind() == io::ErrorKind::WouldBlock => {}
-                res => return Poll::Ready(res),
+                res => {
+                    // Consume a unit of I/O budget.
+                    if res.is_ok() {
+                        throttle::bump();
+                    }
+                    return Poll::Ready(res);
+                }
             }
 
             // Lock the waker list and retry the non-blocking operation.
