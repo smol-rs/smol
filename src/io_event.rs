@@ -11,9 +11,16 @@ use std::net::SocketAddr;
 use std::sync::atomic::{self, AtomicBool, Ordering};
 use std::sync::Arc;
 
+#[cfg(not(target_os = "linux"))]
 use socket2::{Domain, Socket, Type};
 
 use crate::async_io::Async;
+
+#[cfg(not(target_os = "linux"))]
+type Notifier = Socket;
+
+#[cfg(target_os = "linux")]
+type Notifier = linux::EventFd;
 
 /// A self-pipe.
 struct Inner {
@@ -21,10 +28,10 @@ struct Inner {
     flag: AtomicBool,
 
     /// The writer side, emptied by `clear()`.
-    writer: Socket,
+    writer: Notifier,
 
     /// The reader side, filled by `notify()`.
-    reader: Async<Socket>,
+    reader: Async<Notifier>,
 }
 
 /// A flag that that triggers an I/O event whenever it is set.
@@ -34,9 +41,7 @@ pub(crate) struct IoEvent(Arc<Inner>);
 impl IoEvent {
     /// Creates a new `IoEvent`.
     pub fn new() -> io::Result<IoEvent> {
-        let (writer, reader) = socket_pair()?;
-        writer.set_send_buffer_size(1)?;
-        reader.set_recv_buffer_size(1)?;
+        let (writer, reader) = notifier()?;
 
         Ok(IoEvent(Arc::new(Inner {
             flag: AtomicBool::new(false),
@@ -55,7 +60,7 @@ impl IoEvent {
             // If this thread sets it...
             if !self.0.flag.swap(true, Ordering::SeqCst) {
                 // Trigger an I/O event by writing a byte into the sending socket.
-                let _ = (&self.0.writer).write(&[1]);
+                let _ = (&self.0.writer).write(&1u64.to_ne_bytes());
                 let _ = (&self.0.writer).flush();
             }
         }
@@ -91,17 +96,79 @@ impl IoEvent {
 }
 
 /// Creates a pair of connected sockets.
-#[cfg(unix)]
-fn socket_pair() -> io::Result<(Socket, Socket)> {
+#[cfg(all(unix, not(target_os = "linux")))]
+fn notifier() -> io::Result<(Socket, Socket)> {
     let (sock1, sock2) = Socket::pair(Domain::unix(), Type::stream(), None)?;
     sock1.set_nonblocking(true)?;
     sock2.set_nonblocking(true)?;
+
+    sock1.set_send_buffer_size(1)?;
+    sock2.set_recv_buffer_size(1)?;
+
+    Ok((sock1, sock2))
+}
+
+#[cfg(target_os = "linux")]
+mod linux {
+    use super::*;
+    use nix::sys::eventfd::{eventfd, EfdFlags};
+    use std::os::unix::io::AsRawFd;
+
+    #[derive(Clone)]
+    pub(crate) struct EventFd(std::os::unix::io::RawFd);
+
+    impl EventFd {
+        pub fn new() -> Result<Self, std::io::Error> {
+            let fd = eventfd(0, EfdFlags::EFD_CLOEXEC | EfdFlags::EFD_NONBLOCK).map_err(io_err)?;
+            Ok(EventFd(fd))
+        }
+    }
+
+    impl AsRawFd for EventFd {
+        fn as_raw_fd(&self) -> i32 {
+            self.0
+        }
+    }
+
+    fn io_err(err: nix::Error) -> io::Error {
+        match err {
+            nix::Error::Sys(code) => code.into(),
+            err => io::Error::new(io::ErrorKind::Other, Box::new(err)),
+        }
+    }
+
+    impl Read for &EventFd {
+        #[inline]
+        fn read(&mut self, buf: &mut [u8]) -> std::result::Result<usize, std::io::Error> {
+            nix::unistd::read(self.0, buf).map_err(io_err)
+        }
+    }
+
+    impl Write for &EventFd {
+        #[inline]
+        fn write(&mut self, buf: &[u8]) -> std::result::Result<usize, std::io::Error> {
+            nix::unistd::write(self.0, buf).map_err(io_err)
+        }
+
+        #[inline]
+        fn flush(&mut self) -> std::result::Result<(), std::io::Error> {
+            Ok(())
+        }
+    }
+}
+
+/// Creates eventfd on linux.
+#[cfg(target_os = "linux")]
+fn notifier() -> io::Result<(Notifier, Notifier)> {
+    use linux::EventFd;
+    let sock1 = EventFd::new()?;
+    let sock2 = sock1.clone();
     Ok((sock1, sock2))
 }
 
 /// Creates a pair of connected sockets.
 #[cfg(windows)]
-fn socket_pair() -> io::Result<(Socket, Socket)> {
+fn notifier() -> io::Result<(Socket, Socket)> {
     // Create a temporary listener.
     let listener = Socket::new(Domain::ipv4(), Type::stream(), None)?;
     listener.bind(&SocketAddr::from(([127, 0, 0, 1], 0)).into())?;
@@ -117,6 +184,9 @@ fn socket_pair() -> io::Result<(Socket, Socket)> {
     let (sock2, _) = listener.accept()?;
     sock2.set_nonblocking(true)?;
     let _ = sock2.set_nodelay(true)?;
+
+    sock1.set_send_buffer_size(1)?;
+    sock2.set_recv_buffer_size(1)?;
 
     Ok((sock1, sock2))
 }
