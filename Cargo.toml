@@ -49,9 +49,14 @@ wepoll-binding = "2.0.0"
 [dev-dependencies]
 num_cpus = "1.13.0"
 tempfile = "3.1.0"
+criterion = "0.3"
 
 [workspace]
 members = [
   ".",
   "examples",
 ]
+
+[[bench]]
+name = "spawn"
+harness = false
