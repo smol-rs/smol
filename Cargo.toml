@@ -54,4 +54,3 @@ members = [
   ".",
   "demos",
 ]
-default-members = [ "demos" ]
