@@ -26,6 +26,7 @@ use socket2::{Domain, Protocol, Socket, Type};
 
 use crate::reactor::{Reactor, Source};
 use crate::task::Task;
+use nix::libc;
 
 /// Async I/O.
 ///
@@ -551,7 +552,13 @@ impl Async<TcpStream> {
 
         // Begin async connect and ignore the inevitable "not yet connected" error.
         socket.set_nonblocking(true)?;
-        let _ = socket.connect(&addr.into());
+        socket.connect(&addr.into()).or_else(|err| {
+            if err.raw_os_error() == Some(libc::EINPROGRESS) {
+                Ok(())
+            } else {
+                Err(err)
+            }
+        })?;
         let stream = Async::new(socket.into_tcp_stream())?;
 
         // Wait for connect to complete.
