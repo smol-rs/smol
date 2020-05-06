@@ -375,14 +375,18 @@ fn io_err(err: nix::Error) -> io::Error {
 /// Raw bindings to epoll (Linux, Android, illumos).
 #[cfg(any(target_os = "linux", target_os = "android", target_os = "illumos"))]
 mod sys {
-    use std::convert::TryInto;
     use std::io;
     use std::os::unix::io::RawFd;
     use std::time::Duration;
 
+    use nix::libc::{itimerspec, timerfd_create, timerfd_settime, CLOCK_REALTIME, TFD_CLOEXEC};
     use nix::sys::epoll::{
         epoll_create1, epoll_ctl, epoll_wait, EpollCreateFlags, EpollEvent, EpollFlags, EpollOp,
     };
+    use nix::errno::Errno;
+    use nix::sys::time::{TimeSpec, TimeValLike};
+    use nix::unistd::read;
+    use once_cell::sync::Lazy;
 
     use super::io_err;
 
@@ -403,9 +407,28 @@ mod sys {
             epoll_ctl(self.0, EpollOp::EpollCtlDel, fd, None).map_err(io_err)
         }
         pub fn wait(&self, events: &mut Events, timeout: Option<Duration>) -> io::Result<usize> {
-            let timeout_ms = timeout
-                .and_then(|t| t.as_millis().try_into().ok())
-                .unwrap_or(-1);
+            let timeout_ms = match timeout {
+                // If Duration is zero, there's no need for timerfd. (also because it means disarming timer)
+                Some(t) if t.as_nanos() == 0 => 0,
+                // Otherwise, set timerfd with nanosecond precision
+                Some(t) => unsafe {
+                    static TFD: Lazy<i32> =
+                        Lazy::new(|| unsafe { timerfd_create(CLOCK_REALTIME, TFD_CLOEXEC) });
+                    let timespec = *TimeSpec::nanoseconds(t.as_nanos() as i64).as_ref();
+                    let new_value = itimerspec {
+                        it_interval: timespec,
+                        it_value: timespec,
+                    };
+                    // Start a relative timer
+                    let res = timerfd_settime(*TFD, 0, &new_value, std::ptr::null_mut());
+                    Errno::result(res).map(|r| r as usize).map_err(io_err)?;
+                    // TFD_NONBLOCK isn't set, so this will wait for the first timeout.
+                    // And we pass an u8 slice here, because the buffer will return an unsigned 8-byte integer as counts.
+                    read(*TFD, &mut [0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8]).map_err(io_err)?;
+                    0
+                },
+                None => -1,
+            };
             events.len = epoll_wait(self.0, &mut events.list, timeout_ms).map_err(io_err)?;
             Ok(events.len)
         }
