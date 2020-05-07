@@ -552,16 +552,17 @@ impl Async<TcpStream> {
         };
         let socket = Socket::new(domain, Type::stream(), Some(Protocol::tcp()))?;
 
-        // Begin async connect and ignore the inevitable "not yet connected" error.
+        // Begin async connect and ignore the inevitable "in progress" error.
         socket.set_nonblocking(true)?;
         socket.connect(&addr.into()).or_else(|err| {
-            //Ignore error EINPROGRESS on Unix or WSAEWOULDBLOCK on windows, as it means connection in progress.
+            // Check for EINPROGRESS on Unix and WSAEWOULDBLOCK on Windows.
             #[cfg(unix)]
-            let conn_in_prog_err = err.raw_os_error() == Some(libc::EINPROGRESS);
+            let in_progress = err.raw_os_error() == Some(libc::EINPROGRESS);
             #[cfg(windows)]
-            let conn_in_prog_err = err.kind() == io::ErrorKind::WouldBlock;
+            let in_progress = err.kind() == io::ErrorKind::WouldBlock;
 
-            if conn_in_prog_err {
+            // If connect results with an "in progress" error, that's not an error.
+            if in_progress {
                 Ok(())
             } else {
                 Err(err)
