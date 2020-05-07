@@ -553,7 +553,10 @@ impl Async<TcpStream> {
         // Begin async connect and ignore the inevitable "not yet connected" error.
         socket.set_nonblocking(true)?;
         socket.connect(&addr.into()).or_else(|err| {
-            if err.raw_os_error() == Some(libc::EINPROGRESS) {
+            //Ignore error EINPROGRESS on Unix or WSAEWOULDBLOCK on windows, as it means connection in progress.
+            if err.raw_os_error() == Some(libc::EINPROGRESS)
+                || err.kind() == io::ErrorKind::WouldBlock
+            {
                 Ok(())
             } else {
                 Err(err)
