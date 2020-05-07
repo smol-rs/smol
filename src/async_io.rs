@@ -26,6 +26,8 @@ use socket2::{Domain, Protocol, Socket, Type};
 
 use crate::reactor::{Reactor, Source};
 use crate::task::Task;
+
+#[cfg(unix)]
 use nix::libc;
 
 /// Async I/O.
