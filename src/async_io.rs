@@ -556,9 +556,12 @@ impl Async<TcpStream> {
         socket.set_nonblocking(true)?;
         socket.connect(&addr.into()).or_else(|err| {
             //Ignore error EINPROGRESS on Unix or WSAEWOULDBLOCK on windows, as it means connection in progress.
-            if err.raw_os_error() == Some(libc::EINPROGRESS)
-                || err.kind() == io::ErrorKind::WouldBlock
-            {
+            #[cfg(unix)]
+            let conn_in_prog_err = err.raw_os_error() == Some(libc::EINPROGRESS);
+            #[cfg(windows)]
+            let conn_in_prog_err = err.kind() == io::ErrorKind::WouldBlock;
+
+            if conn_in_prog_err {
                 Ok(())
             } else {
                 Err(err)
