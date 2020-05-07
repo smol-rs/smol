@@ -22,13 +22,12 @@ use std::{
 use futures::future;
 use futures::io::{AsyncRead, AsyncWrite};
 use futures::stream::{self, Stream};
+#[cfg(unix)]
+use nix::libc;
 use socket2::{Domain, Protocol, Socket, Type};
 
 use crate::reactor::{Reactor, Source};
 use crate::task::Task;
-
-#[cfg(unix)]
-use nix::libc;
 
 /// Async I/O.
 ///
@@ -874,12 +873,12 @@ impl Async<UnixStream> {
         // Create a socket.
         let socket = Socket::new(Domain::unix(), Type::stream(), None)?;
 
-        // Begin async connect and ignore the inevitable "not yet connected" error.
+        // Begin async connect and ignore the inevitable "in progress" error.
         socket.set_nonblocking(true)?;
         socket
             .connect(&socket2::SockAddr::unix(path)?)
             .or_else(|err| {
-                if err.kind() == io::ErrorKind::NotConnected {
+                if err.raw_os_error() == Some(libc::EINPROGRESS) {
                     Ok(())
                 } else {
                     Err(err)
