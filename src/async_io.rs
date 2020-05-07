@@ -27,6 +27,9 @@ use socket2::{Domain, Protocol, Socket, Type};
 use crate::reactor::{Reactor, Source};
 use crate::task::Task;
 
+#[cfg(unix)]
+use nix::libc;
+
 /// Async I/O.
 ///
 /// This type converts a blocking I/O type into an async type, provided it is supported by
@@ -551,7 +554,19 @@ impl Async<TcpStream> {
 
         // Begin async connect and ignore the inevitable "not yet connected" error.
         socket.set_nonblocking(true)?;
-        let _ = socket.connect(&addr.into());
+        socket.connect(&addr.into()).or_else(|err| {
+            //Ignore error EINPROGRESS on Unix or WSAEWOULDBLOCK on windows, as it means connection in progress.
+            #[cfg(unix)]
+            let conn_in_prog_err = err.raw_os_error() == Some(libc::EINPROGRESS);
+            #[cfg(windows)]
+            let conn_in_prog_err = err.kind() == io::ErrorKind::WouldBlock;
+
+            if conn_in_prog_err {
+                Ok(())
+            } else {
+                Err(err)
+            }
+        })?;
         let stream = Async::new(socket.into_tcp_stream())?;
 
         // Wait for connect to complete.
