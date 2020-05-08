@@ -16,6 +16,41 @@ jobs:
         rust: [nightly, beta, stable]
     steps:
       - uses: actions/checkout@v2
+      
+      - name: Set current week of the year in environnement
+        if: startsWith(matrix.os, 'ubuntu') || startsWith(matrix.os, 'macOS')
+        run: echo "::set-env name=CURRENT_WEEK::$(date +%V)"
+      
+      - name: Set current week of the year in environnement
+        if: startsWith(matrix.os, 'windows')
+        run: echo "::set-env name=CURRENT_WEEK::$(Get-Date -UFormat %V)"
+
+      - name: Cache cargo registry
+        uses: actions/cache@v1
+        with:
+          path: ~/.cargo/registry
+          key: ${{ matrix.rust }}-${{ matrix.os }}-cargo-registry-${{ env.CURRENT_WEEK }}-build_and_test
+      - name: Cache cargo index
+        uses: actions/cache@v1
+        with:
+          path: ~/.cargo/git
+          key: ${{ matrix.rust }}-${{ matrix.os }}-cargo-index-${{ env.CURRENT_WEEK }}-build_and_test
+      - name: Cache cargo binaries
+        uses: actions/cache@v1
+        with:
+          path: ~/.cargo/bin
+          key: ${{ matrix.rust }}-${{ matrix.os }}-cargo-binaries-${{ env.CURRENT_WEEK }}-build_and_test
+      - name: Cache .rustup
+        uses: actions/cache@v1
+        with:
+          path: ~/.rustup
+          key: ${{ matrix.rust }}-${{ matrix.os }}-rustup-${{ env.CURRENT_WEEK }}-build_and_test
+      - name: Cache cargo build
+        uses: actions/cache@v1
+        with:
+          path: target
+          key: ${{ matrix.rust }}-${{ matrix.os }}-cargo-build-target-${{ env.CURRENT_WEEK }}-build_and_test
+
       - name: Install latest ${{ matrix.rust }}
         uses: actions-rs/toolchain@v1
         with:
@@ -38,6 +73,7 @@ jobs:
     name: Cross compile
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         target:
           - i686-unknown-linux-gnu
@@ -48,7 +84,36 @@ jobs:
           - arm-linux-androideabi
 
     steps:
-    - uses: actions/checkout@master
+    - uses: actions/checkout@v2
+    
+    - name: Set current week of the year in environnement
+      run: echo "::set-env name=CURRENT_WEEK::$(date +%V)"
+    
+    - name: Cache cargo registry
+      uses: actions/cache@v1
+      with:
+        path: ~/.cargo/registry
+        key: cargo-registry-${{ env.CURRENT_WEEK }}-cross
+    - name: Cache cargo index
+      uses: actions/cache@v1
+      with:
+        path: ~/.cargo/git
+        key: cargo-index-${{ env.CURRENT_WEEK }}-cross
+    - name: Cache cargo binaries
+      uses: actions/cache@v1
+      with:
+        path: ~/.cargo/bin
+        key: cargo-binaries-${{ env.CURRENT_WEEK }}-cross
+    - name: Cache .rustup
+      uses: actions/cache@v1
+      with:
+        path: ~/.rustup
+        key: rustup-${{ env.CURRENT_WEEK }}-cross
+    - name: Cache cargo build
+      uses: actions/cache@v1
+      with:
+        path: target
+        key: ${{ matrix.target }}-cargo-build-target-${{ env.CURRENT_WEEK }}-cross
 
     - name: Install nightly
       uses: actions-rs/toolchain@v1
@@ -57,7 +122,7 @@ jobs:
         override: true
 
     - name: Install cross
-      run: cargo install cross
+      run: cargo install cross || true
 
     - name: check
       run: cross check --target ${{ matrix.target }}

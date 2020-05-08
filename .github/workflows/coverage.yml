@@ -15,6 +15,27 @@ jobs:
         os: [ubuntu-latest, windows-latest, macos-latest]
     steps:
       - uses: actions/checkout@v2
+      
+      - name: Set current week of the year in environnement
+        if: startsWith(matrix.os, 'ubuntu') || startsWith(matrix.os, 'macOS')
+        run: echo "::set-env name=CURRENT_WEEK::$(date +%V)"
+      
+      - name: Set current week of the year in environnement
+        if: startsWith(matrix.os, 'windows')
+        run: echo "::set-env name=CURRENT_WEEK::$(Get-Date -UFormat %V)"
+      
+      - name: Cache .rustup
+        uses: actions/cache@v1
+        with:
+          path: ~/.rustup
+          key: ${{ matrix.os }}-rustup-${{ env.CURRENT_WEEK }}-grcov
+      
+      - name: Cache cargo binaries
+        uses: actions/cache@v1
+        with:
+          path: ~/.cargo/bin
+          key: ${{ matrix.os }}-cargo-binaries-${{ env.CURRENT_WEEK }}-grcov
+      
       - name: Install latest nightly
         uses: actions-rs/toolchain@v1
         with:
