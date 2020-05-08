@@ -440,7 +440,6 @@ mod sys {
     target_os = "dragonfly",
 ))]
 mod sys {
-    use std::convert::TryInto;
     use std::io;
     use std::os::unix::io::RawFd;
     use std::time::Duration;
@@ -497,10 +496,9 @@ mod sys {
             Ok(())
         }
         pub fn wait(&self, events: &mut Events, timeout: Option<Duration>) -> io::Result<usize> {
-            let timeout_us: Option<usize> = timeout.and_then(|t| t.as_micros().try_into().ok());
-            let timeout = timeout_us.map(|us| libc::timespec {
-                tv_sec: (us / 1_000_000) as libc::time_t,
-                tv_nsec: ((us % 1_000_000) * 1_000) as libc::c_long,
+            let timeout = timeout.map(|t| libc::timespec {
+                tv_sec: t.as_secs() as libc::time_t,
+                tv_nsec: t.subsec_nanos() as libc::c_long,
             });
             events.len = kevent_ts(self.0, &[], &mut events.list, timeout).map_err(io_err)?;
             Ok(events.len)
