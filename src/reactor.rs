@@ -22,7 +22,7 @@ use std::fmt::Debug;
 use std::io;
 use std::mem;
 #[cfg(unix)]
-use std::os::unix::io::RawFd;
+use std::os::unix::io::{AsRawFd, RawFd};
 #[cfg(windows)]
 use std::os::windows::io::{FromRawSocket, RawSocket};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -40,6 +40,64 @@ use socket2::Socket;
 
 use crate::io_event::IoEvent;
 use crate::throttle;
+
+#[cfg(all(unix, not(any(target_os = "macos", target_os = "ios"))))]
+pub(crate) type RawIO = RawFd;
+
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+pub type RawMachPort = nix::libc::c_uint;
+
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
+pub(crate) enum RawIO {
+    File(RawFd),
+    MachPort(RawMachPort),
+}
+
+#[cfg(windows)]
+pub(crate) type RawIO = RawSocket;
+
+#[cfg(unix)]
+pub(crate) fn as_raw_io(file: &impl AsRawFd) -> RawIO {
+    #[cfg(all(unix, not(any(target_os = "macos", target_os = "ios"))))]
+    {
+        return file.as_raw_fd();
+    }
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    {
+        return RawIO::File(file.as_raw_fd());
+    }
+}
+
+macro_rules! match_io_type {
+    (
+        $raw:expr, {
+            $fd:ident : RawFd => $fd_value:expr,
+            $port:ident : RawMachPort => $port_value:expr,
+            $socket:ident : RawSocket => $socket_value:expr,
+        }
+    ) => {{
+        let result;
+        #[cfg(all(unix, not(any(target_os = "macos", target_os = "ios"))))]
+        {
+            let $fd = $raw;
+            result = $fd_value;
+        }
+        #[cfg(any(target_os = "macos", target_os = "ios"))]
+        {
+            result = match $raw {
+                RawIO::File($fd) => $fd_value,
+                RawIO::MachPort($port) => $port_value,
+            };
+        }
+        #[cfg(windows)]
+        {
+            let $socket = $raw;
+            result = $socket_value;
+        }
+        result
+    }};
+}
 
 /// The reactor.
 ///
@@ -92,26 +150,25 @@ impl Reactor {
     }
 
     /// Registers an I/O source in the reactor.
-    pub fn insert_io(
-        &self,
-        #[cfg(unix)] raw: RawFd,
-        #[cfg(windows)] raw: RawSocket,
-    ) -> io::Result<Arc<Source>> {
+    pub fn insert_io(&self, raw: RawIO) -> io::Result<Arc<Source>> {
         let mut sources = self.sources.lock();
         let vacant = sources.vacant_entry();
 
         // Put the I/O handle in non-blocking mode.
-        #[cfg(unix)]
-        {
-            let flags = fcntl(raw, FcntlArg::F_GETFL).map_err(io_err)?;
-            let flags = OFlag::from_bits_truncate(flags) | OFlag::O_NONBLOCK;
-            fcntl(raw, FcntlArg::F_SETFL(flags)).map_err(io_err)?;
-        }
-        #[cfg(windows)]
-        {
-            let socket = unsafe { Socket::from_raw_socket(raw) };
-            mem::ManuallyDrop::new(socket).set_nonblocking(true)?;
-        }
+        match_io_type!(raw, {
+            fd: RawFd => {
+                let flags = fcntl(fd, FcntlArg::F_GETFL).map_err(io_err)?;
+                let flags = OFlag::from_bits_truncate(flags) | OFlag::O_NONBLOCK;
+                fcntl(fd, FcntlArg::F_SETFL(flags)).map_err(io_err)?;
+            },
+            _mach_port: RawMachPort => {
+                // Mach ports can't, and don't have to, be set to nonblocking.
+            },
+            socket: RawSocket => {
+                let socket = unsafe { Socket::from_raw_socket(socket) };
+                mem::ManuallyDrop::new(socket).set_nonblocking(true)?;
+            },
+        });
 
         // Create a source and register it.
         let source = Arc::new(Source {
@@ -308,13 +365,7 @@ enum TimerOp {
 /// A registered source of I/O events.
 #[derive(Debug)]
 pub(crate) struct Source {
-    /// Raw file descriptor on Unix platforms.
-    #[cfg(unix)]
-    pub(crate) raw: RawFd,
-
-    /// Raw socket handle on Windows.
-    #[cfg(windows)]
-    pub(crate) raw: RawSocket,
+    pub(crate) raw: RawIO,
 
     /// The ID of this source obtain during registration.
     key: usize,
@@ -449,7 +500,7 @@ mod sys {
     use nix::libc;
     use nix::sys::event::{kevent_ts, kqueue, EventFilter, EventFlag, FilterFlag, KEvent};
 
-    use super::io_err;
+    use super::{io_err, RawIO};
 
     pub struct Reactor(RawFd);
     impl Reactor {
@@ -458,42 +509,70 @@ mod sys {
             fcntl(fd, FcntlArg::F_SETFD(FdFlag::FD_CLOEXEC)).map_err(io_err)?;
             Ok(Reactor(fd))
         }
-        pub fn register(&self, fd: RawFd, key: usize) -> io::Result<()> {
-            let flags = EventFlag::EV_CLEAR | EventFlag::EV_RECEIPT | EventFlag::EV_ADD;
-            let udata = key as _;
-            let changelist = [
-                KEvent::new(fd as _, EventFilter::EVFILT_WRITE, flags, FFLAGS, 0, udata),
-                KEvent::new(fd as _, EventFilter::EVFILT_READ, flags, FFLAGS, 0, udata),
-            ];
-            let mut eventlist = changelist;
-            kevent_ts(self.0, &changelist, &mut eventlist, None).map_err(io_err)?;
-            for ev in &eventlist {
-                // See https://github.com/tokio-rs/mio/issues/582
-                let (flags, data) = (ev.flags(), ev.data());
-                if flags.contains(EventFlag::EV_ERROR) && data != 0 && data != Errno::EPIPE as _ {
-                    return Err(io::Error::from_raw_os_error(data as _));
-                }
-            }
-            Ok(())
-        }
-        pub fn reregister(&self, _fd: RawFd, _key: usize) -> io::Result<()> {
-            Ok(())
-        }
-        pub fn deregister(&self, fd: RawFd) -> io::Result<()> {
-            let flags = EventFlag::EV_RECEIPT | EventFlag::EV_DELETE;
-            let changelist = [
-                KEvent::new(fd as _, EventFilter::EVFILT_WRITE, flags, FFLAGS, 0, 0),
-                KEvent::new(fd as _, EventFilter::EVFILT_READ, flags, FFLAGS, 0, 0),
-            ];
-            let mut eventlist = changelist;
-            kevent_ts(self.0, &changelist, &mut eventlist, None).map_err(io_err)?;
-            for ev in &eventlist {
+        fn kevent_change(
+            &self,
+            raw: RawIO,
+            flags: EventFlag,
+            udata: isize,
+            ignore_epipe: bool,
+        ) -> io::Result<()> {
+            let mut change_buffer = [KEvent::new(
+                0,
+                EventFilter::EVFILT_USER,
+                EventFlag::empty(),
+                FFLAGS,
+                0,
+                0,
+            ); 2];
+            let change_count = match_io_type!(raw, {
+                fd: RawFd => {
+                    change_buffer = [
+                        KEvent::new(fd as _, EventFilter::EVFILT_WRITE, flags, FFLAGS, 0, udata),
+                        KEvent::new(fd as _, EventFilter::EVFILT_READ, flags, FFLAGS, 0, udata),
+                    ];
+                    2
+                },
+                port: RawMachPort => {
+                    change_buffer[0] =
+                        KEvent::new(port as _, EventFilter::EVFILT_MACHPORT, flags, FFLAGS, 0, udata);
+                    1
+                },
+                socket: RawSocket => compile_error!("unreachable"),
+            });
+            let mut event_buffer = change_buffer;
+            let event_count = kevent_ts(
+                self.0,
+                &change_buffer[..change_count],
+                &mut event_buffer,
+                None,
+            )
+            .map_err(io_err)?;
+            for ev in &event_buffer[..event_count] {
                 let (flags, data) = (ev.flags(), ev.data());
                 if flags.contains(EventFlag::EV_ERROR) && data != 0 {
+                    // See https://github.com/tokio-rs/mio/issues/582
+                    if ignore_epipe && data == Errno::EPIPE as _ {
+                        continue;
+                    }
                     return Err(io::Error::from_raw_os_error(data as _));
                 }
             }
             Ok(())
+        }
+
+        pub(super) fn register(&self, raw: RawIO, key: usize) -> io::Result<()> {
+            self.kevent_change(
+                raw,
+                EventFlag::EV_CLEAR | EventFlag::EV_RECEIPT | EventFlag::EV_ADD,
+                key as _,
+                true,
+            )
+        }
+        pub(super) fn reregister(&self, _raw: RawIO, _key: usize) -> io::Result<()> {
+            Ok(())
+        }
+        pub(super) fn deregister(&self, raw: RawIO) -> io::Result<()> {
+            self.kevent_change(raw, EventFlag::EV_RECEIPT | EventFlag::EV_DELETE, 0, false)
         }
         pub fn wait(&self, events: &mut Events, timeout: Option<Duration>) -> io::Result<usize> {
             let timeout = timeout.map(|t| libc::timespec {

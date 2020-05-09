@@ -24,7 +24,12 @@ use futures::io::{AsyncRead, AsyncWrite};
 use futures::stream::{self, Stream};
 use socket2::{Domain, Protocol, Socket, Type};
 
+#[cfg(unix)]
+use crate::reactor::as_raw_io;
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+use crate::reactor::{RawIO, RawMachPort};
 use crate::reactor::{Reactor, Source};
+
 use crate::task::Task;
 
 /// Async I/O.
@@ -140,7 +145,7 @@ impl<T: AsRawFd> Async<T> {
     /// ```
     pub fn new(io: T) -> io::Result<Async<T>> {
         Ok(Async {
-            source: Reactor::get().insert_io(io.as_raw_fd())?,
+            source: Reactor::get().insert_io(as_raw_io(&io))?,
             io: Some(Box::new(io)),
         })
     }
@@ -149,7 +154,7 @@ impl<T: AsRawFd> Async<T> {
 #[cfg(unix)]
 impl<T: AsRawFd> AsRawFd for Async<T> {
     fn as_raw_fd(&self) -> RawFd {
-        self.source.raw
+        self.get_ref().as_raw_fd()
     }
 }
 
@@ -159,6 +164,17 @@ impl<T: IntoRawFd> IntoRawFd for Async<T> {
         self.into_inner().unwrap().into_raw_fd()
     }
 }
+
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+impl Async<RawMachPort> {
+    pub fn mach_port(port: RawMachPort) -> io::Result<Async<RawMachPort>> {
+        Ok(Async {
+            source: Reactor::get().insert_io(RawIO::MachPort(port))?,
+            io: Some(Box::new(port)),
+        })
+    }
+}
+
 #[cfg(windows)]
 impl<T: AsRawSocket> Async<T> {
     /// Creates an async I/O handle.
