@@ -129,7 +129,6 @@ mod io_event;
 mod reactor;
 #[cfg(not(target_arch = "wasm32"))]
 mod run;
-#[cfg(not(target_arch = "wasm32"))]
 mod task;
 #[cfg(not(target_arch = "wasm32"))]
 mod thread_local;
@@ -137,6 +136,8 @@ mod thread_local;
 mod throttle;
 #[cfg(not(target_arch = "wasm32"))]
 mod timer;
+#[cfg(target_arch = "wasm32")]
+mod web;
 #[cfg(not(target_arch = "wasm32"))]
 mod work_stealing;
 
@@ -148,7 +149,6 @@ pub use block_on::block_on;
 pub use blocking::{iter, reader, writer};
 #[cfg(not(target_arch = "wasm32"))]
 pub use run::run;
-#[cfg(not(target_arch = "wasm32"))]
 pub use task::Task;
 #[cfg(not(target_arch = "wasm32"))]
 pub use timer::Timer;
