@@ -115,22 +115,40 @@
 
 #![warn(missing_docs, missing_debug_implementations, rust_2018_idioms)]
 
+#[cfg(not(target_arch = "wasm32"))]
 mod async_io;
+#[cfg(not(target_arch = "wasm32"))]
 mod block_on;
+#[cfg(not(target_arch = "wasm32"))]
 mod blocking;
+#[cfg(not(target_arch = "wasm32"))]
 mod context;
+#[cfg(not(target_arch = "wasm32"))]
 mod io_event;
+#[cfg(not(target_arch = "wasm32"))]
 mod reactor;
+#[cfg(not(target_arch = "wasm32"))]
 mod run;
+#[cfg(not(target_arch = "wasm32"))]
 mod task;
+#[cfg(not(target_arch = "wasm32"))]
 mod thread_local;
+#[cfg(not(target_arch = "wasm32"))]
 mod throttle;
+#[cfg(not(target_arch = "wasm32"))]
 mod timer;
+#[cfg(not(target_arch = "wasm32"))]
 mod work_stealing;
 
+#[cfg(not(target_arch = "wasm32"))]
 pub use async_io::Async;
+#[cfg(not(target_arch = "wasm32"))]
 pub use block_on::block_on;
+#[cfg(not(target_arch = "wasm32"))]
 pub use blocking::{iter, reader, writer};
+#[cfg(not(target_arch = "wasm32"))]
 pub use run::run;
+#[cfg(not(target_arch = "wasm32"))]
 pub use task::Task;
+#[cfg(not(target_arch = "wasm32"))]
 pub use timer::Timer;
