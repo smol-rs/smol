@@ -80,13 +80,20 @@ pub(crate) struct Reactor {
 impl Reactor {
     /// Returns a reference to the reactor.
     pub fn get() -> &'static Reactor {
-        static REACTOR: Lazy<Reactor> = Lazy::new(|| Reactor {
-            sys: sys::Reactor::new().expect("cannot initialize I/O event notification"),
-            sources: piper::Mutex::new(Slab::new()),
-            events: piper::Lock::new(sys::Events::new()),
-            timers: piper::Mutex::new(BTreeMap::new()),
-            timer_ops: ArrayQueue::new(1000),
-            timer_event: Lazy::new(|| IoEvent::new().expect("cannot create an `IoEvent`")),
+        static REACTOR: Lazy<Reactor> = Lazy::new(|| {
+            let reactor = Reactor {
+                sys: sys::Reactor::new().expect("cannot initialize I/O event notification"),
+                sources: piper::Mutex::new(Slab::new()),
+                events: piper::Lock::new(sys::Events::new()),
+                timers: piper::Mutex::new(BTreeMap::new()),
+                timer_ops: ArrayQueue::new(1000),
+                timer_event: Lazy::new(|| IoEvent::new().expect("cannot create an `IoEvent`")),
+            };
+            #[cfg(any(target_os = "linux"))]
+            reactor
+                .insert_io(reactor.sys.timer_fd())
+                .expect("timerfd failed");
+            reactor
         });
         &REACTOR
     }
@@ -433,7 +440,6 @@ fn io_err(err: nix::Error) -> io::Error {
 /// Raw bindings to epoll (Linux, Android, illumos).
 #[cfg(any(target_os = "linux", target_os = "android", target_os = "illumos"))]
 mod sys {
-    use std::convert::TryInto;
     use std::io;
     use std::os::unix::io::RawFd;
     use std::time::Duration;
@@ -444,15 +450,75 @@ mod sys {
 
     use super::io_err;
 
-    pub struct Reactor(RawFd);
+    #[cfg(target_os = "linux")]
+    mod linux {
+        use nix::libc::{
+            self, itimerspec, timerfd_create, timerfd_settime, timespec, CLOCK_MONOTONIC,
+            TFD_CLOEXEC, TFD_NONBLOCK,
+        };
+        use std::io;
+        use std::os::unix::io::{AsRawFd, RawFd};
+        use std::time::Duration;
+
+        pub struct TimerFd(RawFd);
+
+        impl AsRawFd for TimerFd {
+            fn as_raw_fd(&self) -> RawFd {
+                self.0
+            }
+        }
+
+        impl TimerFd {
+            pub fn new() -> io::Result<Self> {
+                let res = unsafe { timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC | TFD_NONBLOCK) };
+                if res < 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(TimerFd(res))
+            }
+
+            pub fn set(&self, duration: Option<Duration>) -> io::Result<()> {
+                let value = itimerspec {
+                    it_interval: timespec {
+                        tv_sec: 0,
+                        tv_nsec: 0,
+                    },
+                    it_value: timespec {
+                        tv_sec: duration.as_ref().map(Duration::as_secs).unwrap_or(0)
+                            as libc::time_t,
+                        tv_nsec: duration.as_ref().map(Duration::subsec_nanos).unwrap_or(0)
+                            as libc::c_long,
+                    },
+                };
+                let res = unsafe { timerfd_settime(self.0, 0, &value, std::ptr::null_mut()) };
+                if res < 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            }
+        }
+    }
+
+    pub struct Reactor {
+        epoll_fd: RawFd,
+        #[cfg(target_os = "linux")]
+        timer_fd: linux::TimerFd,
+    }
     impl Reactor {
+        #[cfg(not(target_os = "linux"))]
         pub fn new() -> io::Result<Reactor> {
             let epoll_fd = epoll_create1(EpollCreateFlags::EPOLL_CLOEXEC).map_err(io_err)?;
-            Ok(Reactor(epoll_fd))
+            Ok(Reactor { epoll_fd })
+        }
+        #[cfg(target_os = "linux")]
+        pub fn new() -> io::Result<Reactor> {
+            let epoll_fd = epoll_create1(EpollCreateFlags::EPOLL_CLOEXEC).map_err(io_err)?;
+            let timer_fd = linux::TimerFd::new()?;
+            Ok(Reactor { epoll_fd, timer_fd })
         }
         pub fn register(&self, fd: RawFd, key: usize) -> io::Result<()> {
             let ev = &mut EpollEvent::new(EpollFlags::empty(), key as u64);
-            epoll_ctl(self.0, EpollOp::EpollCtlAdd, fd, Some(ev)).map_err(io_err)
+            epoll_ctl(self.epoll_fd, EpollOp::EpollCtlAdd, fd, Some(ev)).map_err(io_err)
         }
         pub fn reregister(&self, fd: RawFd, key: usize, read: bool, write: bool) -> io::Result<()> {
             let mut flags = EpollFlags::EPOLLONESHOT;
@@ -463,12 +529,26 @@ mod sys {
                 flags |= write_flags();
             }
             let ev = &mut EpollEvent::new(flags, key as u64);
-            epoll_ctl(self.0, EpollOp::EpollCtlMod, fd, Some(ev)).map_err(io_err)
+            epoll_ctl(self.epoll_fd, EpollOp::EpollCtlMod, fd, Some(ev)).map_err(io_err)
         }
         pub fn deregister(&self, fd: RawFd) -> io::Result<()> {
-            epoll_ctl(self.0, EpollOp::EpollCtlDel, fd, None).map_err(io_err)
+            epoll_ctl(self.epoll_fd, EpollOp::EpollCtlDel, fd, None).map_err(io_err)
         }
-        pub fn wait(&self, events: &mut Events, timeout: Option<Duration>) -> io::Result<usize> {
+        #[cfg(target_os = "linux")]
+        fn set_timeout(&self, timeout: Option<Duration>) -> io::Result<isize> {
+            let is_zero = timeout
+                .map(|timeout| timeout == Duration::from_secs(0))
+                .unwrap_or(false);
+
+            if !is_zero {
+                self.timer_fd.set(timeout)?;
+                Ok(-1)
+            } else {
+                Ok(0)
+            }
+        }
+        #[cfg(not(target_os = "linux"))]
+        fn set_timeout(&self, timeout: Option<Duration>) -> io::Result<isize> {
             let timeout_ms = timeout
                 .map(|t| {
                     if t == Duration::from_millis(0) {
@@ -479,8 +559,17 @@ mod sys {
                 })
                 .and_then(|t| t.as_millis().try_into().ok())
                 .unwrap_or(-1);
-            events.len = epoll_wait(self.0, &mut events.list, timeout_ms).map_err(io_err)?;
+            Ok(timeout_ms)
+        }
+        pub fn wait(&self, events: &mut Events, timeout: Option<Duration>) -> io::Result<usize> {
+            let timeout_ms = self.set_timeout(timeout)?;
+            events.len = epoll_wait(self.epoll_fd, &mut events.list, timeout_ms).map_err(io_err)?;
             Ok(events.len)
+        }
+        #[cfg(target_os = "linux")]
+        pub fn timer_fd(&self) -> RawFd {
+            use std::os::unix::io::AsRawFd;
+            self.timer_fd.as_raw_fd()
         }
     }
     fn read_flags() -> EpollFlags {

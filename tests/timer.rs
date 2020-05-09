@@ -3,23 +3,34 @@ use std::time::{Duration, Instant};
 
 #[test]
 fn timer_at() {
-    let before = smol::run(async {
+    let duration = smol::run(async {
         let now = Instant::now();
         let when = now + Duration::from_secs(1);
         Timer::at(when).await;
-        now
+        now.elapsed()
     });
 
-    assert!(before.elapsed() >= Duration::from_secs(1));
+    assert!(duration >= Duration::from_secs(1));
 }
 
 #[test]
 fn timer_after() {
-    let before = smol::run(async {
+    let duration = smol::run(async {
         let now = Instant::now();
         Timer::after(Duration::from_secs(1)).await;
-        now
+        now.elapsed()
     });
 
-    assert!(before.elapsed() >= Duration::from_secs(1));
+    assert!(duration >= Duration::from_secs(1));
+}
+
+#[test]
+fn timer_submilli() {
+    let duration = smol::run(async {
+        let now = Instant::now();
+        Timer::after(Duration::from_micros(5100)).await;
+        now.elapsed()
+    });
+
+    assert!(duration >= Duration::from_micros(5100));
 }
