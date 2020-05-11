@@ -2,13 +2,21 @@
 //!
 //! A [`Task`] handle represents a spawned future that is run by the executor.
 
-use std::fmt::Debug;
-use std::future::Future;
-use std::pin::Pin;
-use std::task::{Context, Poll};
+use core::fmt::Debug;
+use core::future::Future;
+use core::pin::Pin;
+use core::task::{Context, Poll};
 
+#[cfg(target_arch = "wasm32")]
+use core::marker::PhantomData;
+
+#[cfg(not(target_arch = "wasm32"))]
 use crate::blocking::BlockingExecutor;
+#[cfg(target_arch = "wasm32")]
+use crate::web::WebExecutor;
+#[cfg(not(target_arch = "wasm32"))]
 use crate::thread_local::ThreadLocalExecutor;
+#[cfg(not(target_arch = "wasm32"))]
 use crate::work_stealing::WorkStealingExecutor;
 
 /// A runnable future, ready for execution.
@@ -57,7 +65,17 @@ pub(crate) type Runnable = async_task::Task<()>;
 /// [`run()`]: crate::run()
 #[must_use = "tasks get canceled when dropped, use `.detach()` to run them in the background"]
 #[derive(Debug)]
-pub struct Task<T>(pub(crate) Option<async_task::JoinHandle<T, ()>>);
+#[cfg(not(target_arch = "wasm32"))]
+pub struct Task<T>(
+    pub(crate) Option<async_task::JoinHandle<T, ()>>
+);
+
+#[must_use = "tasks get canceled when dropped, use `.detach()` to run them in the background"]
+#[derive(Debug)]
+#[cfg(target_arch = "wasm32")]
+pub struct Task<T>(
+    pub(crate) PhantomData<T>
+);
 
 impl<T: 'static> Task<T> {
     /// Spawns a future onto the thread-local executor.
@@ -76,8 +94,14 @@ impl<T: 'static> Task<T> {
     /// ```
     ///
     /// [`run()`]: crate::run()
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn local(future: impl Future<Output = T> + 'static) -> Task<T> {
         ThreadLocalExecutor::spawn(future)
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub fn local(future: impl Future<Output = T> + 'static) -> Task<T> {
+        WebExecutor::spawn(future)
     }
 }
 
@@ -98,8 +122,14 @@ impl<T: Send + 'static> Task<T> {
     /// ```
     ///
     /// [`run()`]: crate::run()
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn spawn(future: impl Future<Output = T> + Send + 'static) -> Task<T> {
         WorkStealingExecutor::get().spawn(future)
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub fn spawn(future: impl Future<Output = T> + Send + 'static) -> Task<T> {
+        Task::local(future)
     }
 
     /// Spawns a future onto the blocking executor.
@@ -132,8 +162,14 @@ impl<T: Send + 'static> Task<T> {
     /// [`iter()`]: `crate::iter()`
     /// [`reader()`]: `crate::reader()`
     /// [`writer()`]: `crate::writer()`
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn blocking(future: impl Future<Output = T> + Send + 'static) -> Task<T> {
         BlockingExecutor::get().spawn(future)
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub fn blocking(future: impl Future<Output = T> + Send + 'static) -> Task<T> {
+        Task::local(future)
     }
 }
 
@@ -160,6 +196,7 @@ where
     /// .await;
     /// # })
     /// ```
+    #[cfg(not(target_arch="wasm32"))]
     pub fn unwrap(self) -> Task<T> {
         Task::spawn(async { self.await.unwrap() })
     }
@@ -182,6 +219,7 @@ where
     /// .await;
     /// # })
     /// ```
+    #[cfg(not(target_arch="wasm32"))]
     pub fn expect(self, msg: &str) -> Task<T> {
         let msg = msg.to_owned();
         Task::spawn(async move { self.await.expect(&msg) })
@@ -207,9 +245,13 @@ impl Task<()> {
     /// .detach();
     /// # })
     /// ```
+    #[cfg(not(target_arch="wasm32"))]
     pub fn detach(mut self) {
         self.0.take().unwrap();
     }
+
+    #[cfg(target_arch="wasm32")]
+    pub fn detach(self) { }
 }
 
 impl<T> Task<T> {
@@ -239,6 +281,7 @@ impl<T> Task<T> {
     /// task.cancel().await;
     /// # })
     /// ```
+    #[cfg(not(target_arch="wasm32"))]
     pub async fn cancel(self) -> Option<T> {
         // There's a bug in rustdoc causing it to render `mut self` as `__arg0: Self`, so we just
         // do `{ self }` here to avoid marking `self` as mutable.
@@ -248,6 +291,7 @@ impl<T> Task<T> {
     }
 }
 
+#[cfg(not(target_arch="wasm32"))]
 impl<T> Drop for Task<T> {
     fn drop(&mut self) {
         if let Some(handle) = &self.0 {
@@ -256,6 +300,7 @@ impl<T> Drop for Task<T> {
     }
 }
 
+#[cfg(not(target_arch="wasm32"))]
 impl<T> Future for Task<T> {
     type Output = T;
 
@@ -267,6 +312,7 @@ impl<T> Future for Task<T> {
     }
 }
 
+#[cfg(not(target_arch="wasm32"))]
 impl<T> Into<async_task::JoinHandle<T, ()>> for Task<T> {
     fn into(mut self) -> async_task::JoinHandle<T, ()> {
         self.0
