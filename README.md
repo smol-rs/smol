@@ -42,7 +42,7 @@ Read this [blog post](https://stjepang.github.io/2020/04/03/why-im-building-a-ne
 * Thread-local executor for `!Send` futures.
 * Work-stealing executor that adapts to uneven workloads.
 * Blocking executor for files, processes, and standard I/O.
-* Tasks that support cancelation.
+* Tasks that support cancellation.
 * Userspace timers.
 
 ## Examples
