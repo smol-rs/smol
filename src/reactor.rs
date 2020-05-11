@@ -404,6 +404,13 @@ mod sys {
         }
         pub fn wait(&self, events: &mut Events, timeout: Option<Duration>) -> io::Result<usize> {
             let timeout_ms = timeout
+                .map(|t| {
+                    if t == Duration::from_millis(0) {
+                        t
+                    } else {
+                        t.max(Duration::from_millis(1))
+                    }
+                })
                 .and_then(|t| t.as_millis().try_into().ok())
                 .unwrap_or(-1);
             events.len = epoll_wait(self.0, &mut events.list, timeout_ms).map_err(io_err)?;
@@ -552,6 +559,13 @@ mod sys {
             Ok(())
         }
         pub fn wait(&self, events: &mut Events, timeout: Option<Duration>) -> io::Result<usize> {
+            let timeout = timeout.map(|t| {
+                if t == Duration::from_millis(0) {
+                    t
+                } else {
+                    t.max(Duration::from_millis(1))
+                }
+            });
             events.0.clear();
             self.0.poll(&mut events.0, timeout)
         }
