@@ -128,9 +128,9 @@ mod throttle;
 mod timer;
 mod work_stealing;
 
+pub use self::blocking::{iter, reader, writer};
 pub use async_io::Async;
 pub use block_on::block_on;
-pub use blocking::{iter, reader, writer};
 pub use run::run;
 pub use task::Task;
 pub use timer::Timer;

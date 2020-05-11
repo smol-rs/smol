@@ -26,6 +26,7 @@ tokio02 = ["tokio"]
 
 [dependencies]
 async-task = "3.0.0"
+blocking = { path = "../blocking" }
 crossbeam = "0.7.3"
 futures = { version = "0.3.4", default-features = false, features = ["std"] }
 once_cell = "1.3.1"

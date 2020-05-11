@@ -7,7 +7,6 @@ use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-use crate::blocking::BlockingExecutor;
 use crate::thread_local::ThreadLocalExecutor;
 use crate::work_stealing::WorkStealingExecutor;
 
@@ -20,8 +19,8 @@ use crate::work_stealing::WorkStealingExecutor;
 /// 2. an `async_task::JoinHandle<T, ()>`, which is wrapped inside a `Task<T>`
 ///
 /// Once a `Runnable` is run, it "vanishes" and only reappears when its future is woken. When it's
-/// woken up, its schedule function is called; in smol, that means that `Runnable` will be pushed
-/// onto a queue in an executor.
+/// woken up, its schedule function is called, which means the `Runnable` gets pushed into a task
+/// queue in an executor.
 pub(crate) type Runnable = async_task::Task<()>;
 
 /// A spawned future.
@@ -133,7 +132,8 @@ impl<T: Send + 'static> Task<T> {
     /// [`reader()`]: `crate::reader()`
     /// [`writer()`]: `crate::writer()`
     pub fn blocking(future: impl Future<Output = T> + Send + 'static) -> Task<T> {
-        BlockingExecutor::get().spawn(future)
+        let closure = || crate::block_on(future);
+        Task::spawn(::blocking::Blocking::new(closure))
     }
 }
 
