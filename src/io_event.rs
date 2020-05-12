@@ -168,7 +168,7 @@ fn notifier() -> io::Result<(Notifier, Notifier)> {
 
 /// Creates a pair of connected sockets.
 #[cfg(windows)]
-fn notifier() -> io::Result<(Socket, Socket)> {
+fn notifier() -> io::Result<(Notifier, Notifier)> {
     // Create a temporary listener.
     let listener = Socket::new(Domain::ipv4(), Type::stream(), None)?;
     listener.bind(&SocketAddr::from(([127, 0, 0, 1], 0)).into())?;
