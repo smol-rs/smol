@@ -396,7 +396,7 @@ mod sys {
             let ev = &mut EpollEvent::new(flags(), key as u64);
             epoll_ctl(self.0, EpollOp::EpollCtlAdd, fd, Some(ev)).map_err(io_err)
         }
-        pub fn reregister(&self, _raw: RawFd, _key: usize) -> io::Result<()> {
+        pub fn reregister(&self, _fd: RawFd, _key: usize) -> io::Result<()> {
             Ok(())
         }
         pub fn deregister(&self, fd: RawFd) -> io::Result<()> {
