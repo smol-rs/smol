@@ -1,3 +1,11 @@
+# Version 0.1.5
+
+- Use `blocking` crate for blocking I/O.
+- Fix a re-registration bug when in oneshot mode.
+- Use timerfd on Linux.
+- More tests.
+- Fix timeout rounding error in epoll/wepoll.
+
 # Version 0.1.4
 
 - Fix a bug in UDS async connect
