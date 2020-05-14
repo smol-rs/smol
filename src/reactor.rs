@@ -272,9 +272,6 @@ impl ReactorLock<'_> {
                     let sources = self.reactor.sources.lock();
 
                     for source in self.events.iter().filter_map(|i| sources.get(i)) {
-                        // I/O events may deregister sources, so we need to re-register.
-                        self.reactor.sys.reregister(source.raw, source.key)?;
-
                         // Bump the ticker.
                         let mut wakers = source.wakers.lock();
                         let tick = source.tick.load(Ordering::Acquire);
@@ -356,6 +353,11 @@ impl Source {
 
             // If there were no new notifications, register and return.
             if self.tick.load(Ordering::Acquire) == tick {
+                if wakers.is_empty() {
+                    // Re-register the I/O handle if it's in oneshot mode.
+                    Reactor::get().sys.reregister(self.raw, self.key)?;
+                }
+
                 wakers.push(cx.waker().clone());
                 return Poll::Pending;
             }
