@@ -1,7 +1,7 @@
 //! The blocking executor.
 //!
-//! Tasks created by [`Task::blocking()`] go into this executor. This executor is independent of
-//! [`run()`][`crate::run()`] - it does not need to be driven.
+//! Tasks created by [`Task::blocking()`][`crate::Task::blocking()`] go into this executor. This
+//! executor is independent of [`run()`][`crate::run()`] - it does not need to be driven.
 //!
 //! Blocking tasks are allowed to block without restrictions. However, the executor puts a limit on
 //! the number of concurrently running tasks. Once that limit is hit, a task will need to complete
@@ -14,7 +14,7 @@
 //!
 //! This module also implements convenient adapters:
 //!
-//! - [`blocking!`] as syntax sugar around [`Task::blocking()`]
+//! - [`blocking!`] as syntax sugar around [`Task::blocking()`][`crate::Task::blocking()`]
 //! - [`iter()`] converts an [`Iterator`] into a [`Stream`]
 //! - [`reader()`] converts a [`Read`] into an [`AsyncRead`]
 //! - [`writer()`] converts a [`Write`] into an [`AsyncWrite`]
