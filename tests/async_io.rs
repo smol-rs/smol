@@ -35,6 +35,9 @@ fn tcp_connection() -> io::Result<()> {
             stream1.get_ref().local_addr()?
         );
 
+        // Now that the listener is closed, connect should fail.
+        Async::<TcpStream>::connect(&addr).await.unwrap_err();
+
         Ok(())
     })
 }
