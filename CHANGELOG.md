@@ -2,7 +2,7 @@
 
 - Use `blocking` crate for blocking I/O.
 - Fix a re-registration bug when in oneshot mode.
-- Use timerfd on Linux.
+- Use eventfd on Linux.
 - More tests.
 - Fix timeout rounding error in epoll/wepoll.
 
