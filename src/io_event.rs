@@ -71,6 +71,7 @@ impl IoEvent {
         // Read all available bytes from the receiving socket.
         while self.0.reader.get_ref().read(&mut [0; 64]).is_ok() {}
         let value = self.0.flag.swap(false, Ordering::SeqCst);
+        let _ = self.0.reader.reregister();
 
         // Publish all in-memory changes after clearing the flag.
         atomic::fence(Ordering::SeqCst);
