@@ -21,8 +21,8 @@
 
 use std::io::{Read, Write};
 
-use futures::io::{AsyncRead, AsyncWrite};
-use futures::stream::Stream;
+use futures_io::{AsyncRead, AsyncWrite};
+use futures_util::stream::Stream;
 
 /// Spawns blocking code onto a thread.
 ///

@@ -6,7 +6,7 @@ use std::future::Future;
 use std::task::{Context, Poll};
 use std::thread;
 
-use futures::future::{self, Either};
+use futures_util::future::{self, Either};
 
 use crate::block_on;
 use crate::context;
@@ -105,7 +105,7 @@ pub fn run<T>(future: impl Future<Output = T>) -> T {
     let ev = local.event().clone();
     let waker = async_task::waker_fn(move || ev.notify());
     let cx = &mut Context::from_waker(&waker);
-    futures::pin_mut!(future);
+    futures_util::pin_mut!(future);
 
     // Set up tokio (if enabled) and the thread-locals before execution begins.
     let enter = context::enter;
@@ -184,8 +184,8 @@ pub fn run<T>(future: impl Future<Output = T>) -> T {
             // event whenever it finds a runnable task.
             let lock = reactor.lock();
             let notified = local.event().notified();
-            futures::pin_mut!(lock);
-            futures::pin_mut!(notified);
+            futures_util::pin_mut!(lock);
+            futures_util::pin_mut!(notified);
 
             // Block until either the reactor is locked or `local.event()` is triggered.
             if let Either::Left((reactor_lock, _)) = block_on(future::select(lock, notified)) {
