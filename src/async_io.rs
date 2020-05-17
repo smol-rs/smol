@@ -308,6 +308,7 @@ impl<T> Async<T> {
     ///
     /// The closure passed to this function attempts an I/O operation and must return
     /// [`io::ErrorKind::WouldBlock`] if it's not ready. The current task then gets notified by the
+    /// reactor when the I/O handle is ready again and the closure retries the operation.
     ///
     /// The closure gets a mutable reference to the inner I/O handle.
     ///
