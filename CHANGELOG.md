@@ -1,3 +1,7 @@
+# Version 0.1.6
+
+- Fix a deadlock by always re-registering `IoEvent`.
+
 # Version 0.1.5
 
 - Use `blocking` crate for blocking I/O.
