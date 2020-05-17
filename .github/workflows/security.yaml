@@ -15,18 +15,6 @@ jobs:
       - name: Set current week of the year in environnement
         run: echo "::set-env name=CURRENT_WEEK::$(date +%V)"
       
-      - name: Cache .rustup
-        uses: actions/cache@v1
-        with:
-          path: ~/.rustup
-          key: rustup-${{ env.CURRENT_WEEK }}-security_audit
-      
-      - name: Cache cargo binaries
-        uses: actions/cache@v1
-        with:
-          path: ~/.cargo/bin
-          key: cargo-binaries-${{ env.CURRENT_WEEK }}-security_audit
-      
       - uses: actions-rs/audit-check@v1
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
