@@ -324,6 +324,13 @@ pub(crate) struct Source {
 }
 
 impl Source {
+    /// Reregisters the I/O handle is registered in the reactor.
+    ///
+    /// This is a useful method when the reactor is used in oneshot mode.
+    pub(crate) fn reregister(&self) -> io::Result<()> {
+        Reactor::get().sys.reregister(self.raw, self.key)
+    }
+
     /// Attempts a non-blocking I/O operation and registers a waker if it errors with `WouldBlock`.
     pub fn poll_io<R>(
         &self,
@@ -355,7 +362,7 @@ impl Source {
             if self.tick.load(Ordering::Acquire) == tick {
                 if wakers.is_empty() {
                     // Re-register the I/O handle if it's in oneshot mode.
-                    Reactor::get().sys.reregister(self.raw, self.key)?;
+                    self.reregister()?;
                 }
 
                 wakers.push(cx.waker().clone());

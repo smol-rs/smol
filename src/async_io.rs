@@ -217,6 +217,13 @@ impl<T: IntoRawSocket> IntoRawSocket for Async<T> {
 }
 
 impl<T> Async<T> {
+    /// Reregisters the I/O handle is registered in the reactor.
+    ///
+    /// This is a useful method when the reactor is used in oneshot mode.
+    pub(crate) fn reregister(&self) -> io::Result<()> {
+        self.source.reregister()
+    }
+
     /// Gets a reference to the inner I/O handle.
     ///
     /// # Examples
