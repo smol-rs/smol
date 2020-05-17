@@ -61,7 +61,7 @@ pub fn block_on<T>(future: impl Future<Output = T>) -> T {
 
         // If enabled, set up tokio before execution begins.
         context::enter(|| {
-            futures::pin_mut!(future);
+            futures_util::pin_mut!(future);
             let cx = &mut Context::from_waker(&waker);
 
             loop {

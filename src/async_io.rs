@@ -19,9 +19,9 @@ use std::{
     path::Path,
 };
 
-use futures::future;
-use futures::io::{AsyncRead, AsyncWrite};
-use futures::stream::{self, Stream};
+use futures_util::future;
+use futures_io::{AsyncRead, AsyncWrite};
+use futures_util::stream::{self, Stream};
 use socket2::{Domain, Protocol, Socket, Type};
 
 use crate::reactor::{Reactor, Source};
@@ -354,7 +354,7 @@ impl<T> Drop for Async<T> {
 
 /// Pins a future and then polls it.
 fn poll_future<T>(cx: &mut Context<'_>, fut: impl Future<Output = T>) -> Poll<T> {
-    futures::pin_mut!(fut);
+    futures_util::pin_mut!(fut);
     fut.poll(cx)
 }
 

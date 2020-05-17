@@ -338,7 +338,7 @@ impl Source {
         mut op: impl FnMut() -> io::Result<R>,
     ) -> Poll<io::Result<R>> {
         // Throttle if the current task did too many I/O operations without yielding.
-        futures::ready!(throttle::poll(cx));
+        futures_util::ready!(throttle::poll(cx));
 
         loop {
             // This number is bumped just before I/O notifications while wakers are locked.
