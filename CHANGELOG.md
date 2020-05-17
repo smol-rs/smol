@@ -1,3 +1,8 @@
+# Version 0.1.7
+
+- Update `blocking` to `0.4.2`.
+- Make `Task::blocking()` work without `run()`.
+
 # Version 0.1.6
 
 - Fix a deadlock by always re-registering `IoEvent`.
