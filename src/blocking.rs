@@ -87,7 +87,7 @@ macro_rules! blocking {
 pub fn iter<T: Send + 'static>(
     iter: impl Iterator<Item = T> + Send + 'static,
 ) -> impl Stream<Item = T> + Send + Unpin + 'static {
-    ::blocking::Blocking::new(iter)
+    ::blocking::Unblock::new(iter)
 }
 
 /// Creates an async reader that runs on a thread.
@@ -133,7 +133,7 @@ pub fn iter<T: Send + 'static>(
 /// # std::io::Result::Ok(()) });
 /// ```
 pub fn reader(reader: impl Read + Send + 'static) -> impl AsyncRead + Send + Unpin + 'static {
-    ::blocking::Blocking::new(reader)
+    ::blocking::Unblock::new(reader)
 }
 
 /// Creates an async writer that runs on a thread.
@@ -179,5 +179,5 @@ pub fn reader(reader: impl Read + Send + 'static) -> impl AsyncRead + Send + Unp
 /// # std::io::Result::Ok(()) });
 /// ```
 pub fn writer(writer: impl Write + Send + 'static) -> impl AsyncWrite + Send + Unpin + 'static {
-    ::blocking::Blocking::new(writer)
+    ::blocking::Unblock::new(writer)
 }

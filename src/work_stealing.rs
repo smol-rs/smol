@@ -96,7 +96,7 @@ impl WorkStealingExecutor {
         // Create a task, push it into the queue by scheduling it, and return its `Task` handle.
         let (runnable, handle) = async_task::spawn(future, schedule, ());
         runnable.schedule();
-        Task(Some(handle))
+        Task::from_handle(handle)
     }
 
     /// Registers a new worker.
