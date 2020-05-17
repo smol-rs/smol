@@ -150,8 +150,12 @@ impl Reactor {
             self.fire_timers();
         }
 
-        // Notify that a timer was added.
-        self.timer_event.notify();
+        if let Some(_reactor_lock) = self.try_lock() {
+            // Since we got the lock, no one else has it, so we don't need to wake up the reactor.
+        } else {
+            // Notify that a timer was added.
+            self.timer_event.notify();
+        }
 
         id
     }
