@@ -225,7 +225,14 @@ impl Task<()> {
             Inner::Handle(handle) => {
                 handle.take().unwrap();
             }
-            Inner::Blocking(..) => {}
+            inner @ Inner::Blocking(..) => {
+                // As Task implements drop, we have to leave it in a state that is droppable
+                // but has no side-effects on drop.
+                let inner = std::mem::replace(inner, Inner::Handle(None));
+                if let Inner::Blocking(task) = inner {
+                    Task::spawn(task).detach();
+                }
+            }
         }
     }
 }

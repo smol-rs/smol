@@ -19,8 +19,8 @@ use std::{
     path::Path,
 };
 
-use futures_util::future;
 use futures_io::{AsyncRead, AsyncWrite};
+use futures_util::future;
 use futures_util::stream::{self, Stream};
 use socket2::{Domain, Protocol, Socket, Type};
 
