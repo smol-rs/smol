@@ -1,3 +1,7 @@
+# Version 0.1.8
+
+- Revert the use of `blocking` crate.
+
 # Version 0.1.7
 
 - Update `blocking` to `0.4.2`.
