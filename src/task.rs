@@ -2,11 +2,12 @@
 //!
 //! A [`Task`] handle represents a spawned future that is run by the executor.
 
-use std::fmt::{self, Debug};
+use std::fmt::Debug;
 use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
+use crate::blocking::BlockingExecutor;
 use crate::thread_local::ThreadLocalExecutor;
 use crate::work_stealing::WorkStealingExecutor;
 
@@ -55,21 +56,8 @@ pub(crate) type Runnable = async_task::Task<()>;
 ///
 /// [`run()`]: crate::run()
 #[must_use = "tasks get canceled when dropped, use `.detach()` to run them in the background"]
-pub struct Task<T>(Inner<T>);
-
-enum Inner<T> {
-    /// A regular task.
-    Handle(Option<async_task::JoinHandle<T, ()>>),
-
-    /// A blocking task.
-    Blocking(Pin<Box<dyn Future<Output = T> + Send>>),
-}
-
-impl<T> Task<T> {
-    pub(crate) fn from_handle(handle: async_task::JoinHandle<T, ()>) -> Task<T> {
-        Task(Inner::Handle(Some(handle)))
-    }
-}
+#[derive(Debug)]
+pub struct Task<T>(pub(crate) Option<async_task::JoinHandle<T, ()>>);
 
 impl<T: 'static> Task<T> {
     /// Spawns a future onto the thread-local executor.
@@ -145,8 +133,7 @@ impl<T: Send + 'static> Task<T> {
     /// [`reader()`]: `crate::reader()`
     /// [`writer()`]: `crate::writer()`
     pub fn blocking(future: impl Future<Output = T> + Send + 'static) -> Task<T> {
-        let future = ::blocking::unblock(|| crate::block_on(future));
-        Task(Inner::Blocking(Box::pin(future)))
+        BlockingExecutor::get().spawn(future)
     }
 }
 
@@ -221,12 +208,7 @@ impl Task<()> {
     /// # })
     /// ```
     pub fn detach(mut self) {
-        match &mut self.0 {
-            Inner::Handle(handle) => {
-                handle.take().unwrap();
-            }
-            Inner::Blocking(..) => {}
-        }
+        self.0.take().unwrap();
     }
 }
 
@@ -259,30 +241,18 @@ impl<T> Task<T> {
     /// ```
     pub async fn cancel(self) -> Option<T> {
         // There's a bug in rustdoc causing it to render `mut self` as `__arg0: Self`, so we just
-        // rebind the `self` argument.
-        let mut this = self;
-        match &mut this.0 {
-            Inner::Handle(handle) => {
-                let handle = handle.take().unwrap();
-                handle.cancel();
-                handle.await
-            }
-            Inner::Blocking(fut) => Some(fut.await),
-        }
+        // do `{ self }` here to avoid marking `self` as mutable.
+        let handle = { self }.0.take().unwrap();
+        handle.cancel();
+        handle.await
     }
 }
 
 impl<T> Drop for Task<T> {
     fn drop(&mut self) {
-        if let Inner::Handle(Some(handle)) = &self.0 {
+        if let Some(handle) = &self.0 {
             handle.cancel();
         }
-    }
-}
-
-impl<T> Debug for Task<T> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.pad("Task")
     }
 }
 
@@ -290,23 +260,17 @@ impl<T> Future for Task<T> {
     type Output = T;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        match &mut self.0 {
-            Inner::Handle(handle) => match Pin::new(&mut handle.as_mut().unwrap()).poll(cx) {
-                Poll::Pending => Poll::Pending,
-                Poll::Ready(output) => Poll::Ready(output.expect("task has failed")),
-            },
-            Inner::Blocking(fut) => fut.as_mut().poll(cx),
+        match Pin::new(&mut self.0.as_mut().unwrap()).poll(cx) {
+            Poll::Pending => Poll::Pending,
+            Poll::Ready(output) => Poll::Ready(output.expect("task has failed")),
         }
     }
 }
 
 impl<T> Into<async_task::JoinHandle<T, ()>> for Task<T> {
     fn into(mut self) -> async_task::JoinHandle<T, ()> {
-        match &mut self.0 {
-            Inner::Handle(handle) => handle
-                .take()
-                .expect("task was already canceled or has failed"),
-            Inner::Blocking(..) => panic!("cannot convert a blocking task into `JoinHandle`"),
-        }
+        self.0
+            .take()
+            .expect("task was already canceled or has failed")
     }
 }

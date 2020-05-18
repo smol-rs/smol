@@ -26,7 +26,6 @@ tokio02 = ["tokio"]
 
 [dependencies]
 async-task = "3.0.0"
-blocking = "0.4.2"
 crossbeam = "0.7.3"
 futures-util = { version = "0.3.5", default-features = false, features = ["std"] }
 futures-io = { version = "0.3.5", default-features = false, features = ["std"] }

@@ -96,7 +96,7 @@ impl ThreadLocalExecutor {
             // Create a task, push it into the queue by scheduling it, and return its `Task` handle.
             let (runnable, handle) = async_task::spawn_local(future, schedule, ());
             runnable.schedule();
-            Task::from_handle(handle)
+            Task(Some(handle))
         })
     }
 
