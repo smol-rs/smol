@@ -41,16 +41,22 @@ fn main() -> Result<()> {
         seen.insert(ROOT.to_string());
         queue.push_back(ROOT.to_string());
 
-        let (s, r) = piper::chan(100);
+        let (s, r) = piper::chan(200);
         let mut tasks = 0;
 
         // Loop while the queue is not empty or tasks are fetching pages.
         while queue.len() + tasks > 0 {
-            // Process URLs in the queue and fetch more pages.
-            while let Some(url) = queue.pop_front() {
-                println!("{}", url);
-                tasks += 1;
-                Task::spawn(fetch(url, s.clone())).detach();
+            // Limit the number of concurrent tasks.
+            while tasks < s.capacity() {
+                // Process URLs in the queue and fetch more pages.
+                match queue.pop_front() {
+                    None => break,
+                    Some(url) => {
+                        println!("{}", url);
+                        tasks += 1;
+                        Task::spawn(fetch(url, s.clone())).detach();
+                    }
+                }
             }
 
             // Get a fetched web page.
