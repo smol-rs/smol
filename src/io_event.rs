@@ -115,7 +115,6 @@ mod linux {
     use nix::sys::eventfd::{eventfd, EfdFlags};
     use std::os::unix::io::AsRawFd;
 
-    #[derive(Clone)]
     pub(crate) struct EventFd(std::os::unix::io::RawFd);
 
     impl EventFd {
@@ -123,11 +122,21 @@ mod linux {
             let fd = eventfd(0, EfdFlags::EFD_CLOEXEC | EfdFlags::EFD_NONBLOCK).map_err(io_err)?;
             Ok(EventFd(fd))
         }
+
+        pub fn try_clone(&self) -> Result<EventFd, io::Error> {
+            nix::unistd::dup(self.0).map(EventFd).map_err(io_err)
+        }
     }
 
     impl AsRawFd for EventFd {
         fn as_raw_fd(&self) -> i32 {
             self.0
+        }
+    }
+
+    impl Drop for EventFd {
+        fn drop(&mut self) {
+            let _ = nix::unistd::close(self.0);
         }
     }
 
@@ -163,7 +172,7 @@ mod linux {
 fn notifier() -> io::Result<(Notifier, Notifier)> {
     use linux::EventFd;
     let sock1 = EventFd::new()?;
-    let sock2 = sock1.clone();
+    let sock2 = sock1.try_clone()?;
     Ok((sock1, sock2))
 }
 
