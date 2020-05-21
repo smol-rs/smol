@@ -40,7 +40,7 @@ fn main() -> std::io::Result<()> {
         let task = Task::spawn(client(path));
 
         // Accept the client.
-        let (stream, _) = listener.with(|l| l.accept()).await?;
+        let (stream, _) = listener.read_with(|l| l.accept()).await?;
         println!("Accepted a client");
 
         // Send a message, drop the stream, and wait for the client.
