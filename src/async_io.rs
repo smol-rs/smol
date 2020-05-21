@@ -484,7 +484,7 @@ impl<T> Async<T> {
     /// use std::net::UdpSocket;
     ///
     /// # smol::run(async {
-    /// let socket = Async::<UdpSocket>::bind("127.0.0.1:9000")?;
+    /// let mut socket = Async::<UdpSocket>::bind("127.0.0.1:9000")?;
     /// socket.get_ref().connect("127.0.0.1:8000")?;
     ///
     /// let msg = b"hello";
