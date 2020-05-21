@@ -50,6 +50,23 @@ jobs:
         with:
           command: test
 
+  cross:
+    name: Cross compile
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - aarch64-apple-ios
+          - aarch64-linux-android
+          - aarch64-pc-windows-msvc
+          - x86_64-apple-darwin
+          - i686-unknown-linux-gnu
+          - powerpc64-unknown-linux-gnu
+          - powerpc64le-unknown-linux-gnu
+					- x86_64-unknown-freebsd
+          # - x86_64-unknown-illumos
+
     steps:
       - uses: actions/checkout@v2
 
@@ -67,6 +84,3 @@ jobs:
 
       - name: check
         run: cross check --target ${{ matrix.target }}
-
-      - name: test
-        run: cross test --target ${{ matrix.target }}
