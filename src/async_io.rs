@@ -744,7 +744,11 @@ impl Async<TcpStream> {
         // The stream becomes writable when connected.
         stream.writable().await?;
 
-        Ok(stream)
+        // Check if there was an error while connecting.
+        match stream.get_ref().take_error()? {
+            None => Ok(stream),
+            Some(err) => Err(err),
+        }
     }
 
     /// Reads data from the stream without removing it from the buffer.
