@@ -691,31 +691,23 @@ impl Async<TcpStream> {
         })?;
         let stream = Async::new(socket.into_tcp_stream())?;
 
-        // Wait for connect to complete.
+        // Waits for connect to complete.
         let wait_connect = |mut stream: &TcpStream| match stream.write(&[]) {
-            Err(err) if err.kind() == io::ErrorKind::NotConnected => {
-                // On other systems, if a non-blocking connect call fails, a
-                // sensible error code is returned by the send (write) call.
-                //
-                // But not on Windows. If a non-blocking connect call fails, the
-                // send call always returns NotConnected. We have to use
-                // take_error (i.e., getsockopt SO_ERROR) to find out whether
-                // the connect call has failed, and retrieve the error code if
-                // it has.
-                #[cfg(windows)]
-                {
-                    if let Some(e) = stream.take_error()? {
-                        return Err(e);
-                    }
-                }
-                Err(io::ErrorKind::WouldBlock.into())
-            }
+            Err(err) if err.kind() == io::ErrorKind::NotConnected => match stream.take_error()? {
+                Some(err) => Err(err),
+                None => Err(io::ErrorKind::WouldBlock.into()),
+            },
             res => res.map(|_| ()),
         };
-        // The stream becomes writable when connected.
-        stream.write_with(|io| wait_connect(io)).await?;
 
-        Ok(stream)
+        // The stream becomes writable when connected.
+        match stream.write_with(|io| wait_connect(io)).await {
+            Ok(()) => Ok(stream),
+            Err(err) => match stream.get_ref().take_error()? {
+                Some(err) => Err(err),
+                None => Err(err),
+            },
+        }
     }
 
     /// Reads data from the stream without removing it from the buffer.
@@ -1022,17 +1014,23 @@ impl Async<UnixStream> {
             })?;
         let stream = Async::new(socket.into_unix_stream())?;
 
-        // Wait for connect to complete.
+        // Waits for connect to complete.
         let wait_connect = |mut stream: &UnixStream| match stream.write(&[]) {
-            Err(err) if err.kind() == io::ErrorKind::NotConnected => {
-                Err(io::ErrorKind::WouldBlock.into())
-            }
+            Err(err) if err.kind() == io::ErrorKind::NotConnected => match stream.take_error()? {
+                Some(err) => Err(err),
+                None => Err(io::ErrorKind::WouldBlock.into()),
+            },
             res => res.map(|_| ()),
         };
-        // The stream becomes writable when connected.
-        stream.write_with(|io| wait_connect(io)).await?;
 
-        Ok(stream)
+        // The stream becomes writable when connected.
+        match stream.write_with(|io| wait_connect(io)).await {
+            Ok(()) => Ok(stream),
+            Err(err) => match stream.get_ref().take_error()? {
+                Some(err) => Err(err),
+                None => Err(err),
+            },
+        }
     }
 
     /// Creates an unnamed pair of connected UDS stream sockets.
