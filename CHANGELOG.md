@@ -1,3 +1,12 @@
+# Version 0.1.9
+
+- Switch to oneshot-style notifications on all platforms.
+- Fix a bug that caused 100% CPU usage on Windows.
+- Deprecate `Async::with()` and `Async::with_mut()`.
+- Add `Async::read_with()`, `Async::read_with_mut()`,
+  `Async::write_with()`, and `Async::write_with_mut()`.
+- Fix a bug where eventfd was not closed.
+
 # Version 0.1.8
 
 - Revert the use of `blocking` crate.
