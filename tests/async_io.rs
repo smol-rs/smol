@@ -114,6 +114,8 @@ fn udp_connect() -> io::Result<()> {
         Ok(())
     })
 }
+
+#[cfg(unix)]
 #[test]
 fn uds_connect() -> io::Result<()> {
     smol::run(async {
