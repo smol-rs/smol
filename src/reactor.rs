@@ -636,7 +636,7 @@ mod sys {
             self.list[..self.len].iter().map(|ev| Event {
                 readable: ev.filter() == EventFilter::EVFILT_READ,
                 writable: ev.filter() == EventFilter::EVFILT_WRITE,
-                key: ev.rdata() as usize,
+                key: ev.udata() as usize,
             })
         }
     }
