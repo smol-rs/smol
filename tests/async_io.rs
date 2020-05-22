@@ -1,11 +1,12 @@
-use futures::{AsyncReadExt, AsyncWriteExt, StreamExt};
-use smol::{Async, Task};
 #[cfg(unix)]
 use std::os::unix::net::{UnixDatagram, UnixListener, UnixStream};
 use std::{
     io,
     net::{TcpListener, TcpStream, UdpSocket},
 };
+
+use futures::{AsyncReadExt, AsyncWriteExt, StreamExt};
+use smol::{Async, Task};
 #[cfg(unix)]
 use tempfile::tempdir;
 
@@ -17,7 +18,7 @@ Aliquam consequat urna vitae ipsum pulvinar, in blandit purus eleifend.
 ";
 
 #[test]
-fn tcp_connection() -> io::Result<()> {
+fn tcp_connect() -> io::Result<()> {
     smol::run(async {
         let listener = Async::<TcpListener>::bind("127.0.0.1:8080")?;
         let addr = listener.get_ref().local_addr()?;
@@ -92,7 +93,7 @@ fn udp_send_recv() -> io::Result<()> {
 
 #[cfg(unix)]
 #[test]
-fn uds_connection() -> io::Result<()> {
+fn udp_connect() -> io::Result<()> {
     smol::run(async {
         let dir = tempdir()?;
         let path = dir.path().join("socket");
