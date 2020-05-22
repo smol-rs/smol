@@ -1,3 +1,7 @@
+# Version 0.1.10
+
+- Fix incorrectly reported error kind when connecting fails.
+
 # Version 0.1.9
 
 - Switch to oneshot-style notifications on all platforms.
