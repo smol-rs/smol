@@ -627,16 +627,16 @@ mod sys {
     impl Events {
         pub fn new() -> Events {
             let flags = EventFlag::empty();
-            let event = KEvent::new(0, EventFilter::EVFILT_USER, flags, FFLAGS, 0, 0);
+            let event = KEvent::new(0, EventFilter::empty(), flags, FFLAGS, 0, 0);
             let list = vec![event; 1000].into_boxed_slice();
             let len = 0;
             Events { list, len }
         }
         pub fn iter(&self) -> impl Iterator<Item = Event> + '_ {
             self.list[..self.len].iter().map(|ev| Event {
-                readable: ev.filter() != EventFilter::EVFILT_WRITE,
-                writable: ev.filter() != EventFilter::EVFILT_READ,
-                key: ev.data() as usize,
+                readable: ev.filter() == EventFilter::EVFILT_READ,
+                writable: ev.filter() == EventFilter::EVFILT_WRITE,
+                key: ev.udata() as usize,
             })
         }
     }
