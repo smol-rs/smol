@@ -691,7 +691,7 @@ impl Async<TcpStream> {
         })?;
         let stream = Async::new(socket.into_tcp_stream())?;
 
-        // Wait for connect to complete.
+        // Waits for connect to complete.
         let wait_connect = |mut stream: &TcpStream| match stream.write(&[]) {
             Err(err) if err.kind() == io::ErrorKind::NotConnected => {
                 // On other systems, if a non-blocking connect call fails, a
@@ -712,10 +712,15 @@ impl Async<TcpStream> {
             }
             res => res.map(|_| ()),
         };
-        // The stream becomes writable when connected.
-        stream.write_with(|io| wait_connect(io)).await?;
 
-        Ok(stream)
+        // The stream becomes writable when connected.
+        match stream.write_with(|io| wait_connect(io)).await {
+            Ok(()) => Ok(stream),
+            Err(err) => match stream.get_ref().take_error() {
+                Ok(Some(err)) => Err(err),
+                Ok(None) | Err(_) => Err(err),
+            },
+        }
     }
 
     /// Reads data from the stream without removing it from the buffer.
@@ -1022,17 +1027,22 @@ impl Async<UnixStream> {
             })?;
         let stream = Async::new(socket.into_unix_stream())?;
 
-        // Wait for connect to complete.
+        // Waits for connect to complete.
         let wait_connect = |mut stream: &UnixStream| match stream.write(&[]) {
             Err(err) if err.kind() == io::ErrorKind::NotConnected => {
                 Err(io::ErrorKind::WouldBlock.into())
             }
             res => res.map(|_| ()),
         };
-        // The stream becomes writable when connected.
-        stream.write_with(|io| wait_connect(io)).await?;
 
-        Ok(stream)
+        // The stream becomes writable when connected.
+        match stream.write_with(|io| wait_connect(io)).await {
+            Ok(()) => Ok(stream),
+            Err(err) => match stream.get_ref().take_error() {
+                Ok(Some(err)) => Err(err),
+                Ok(None) | Err(_) => Err(err),
+            },
+        }
     }
 
     /// Creates an unnamed pair of connected UDS stream sockets.
