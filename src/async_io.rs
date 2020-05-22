@@ -701,9 +701,13 @@ impl Async<TcpStream> {
         };
 
         // The stream becomes writable when connected.
-        stream.write_with(|io| wait_connect(io)).await?;
-
-        Ok(stream)
+        match stream.write_with(|io| wait_connect(io)).await {
+            Ok(()) => Ok(stream),
+            Err(err) => match stream.get_ref().take_error()? {
+                Some(err) => Err(err),
+                None => Err(err),
+            },
+        }
     }
 
     /// Reads data from the stream without removing it from the buffer.
@@ -1020,9 +1024,13 @@ impl Async<UnixStream> {
         };
 
         // The stream becomes writable when connected.
-        stream.write_with(|io| wait_connect(io)).await?;
-
-        Ok(stream)
+        match stream.write_with(|io| wait_connect(io)).await {
+            Ok(()) => Ok(stream),
+            Err(err) => match stream.get_ref().take_error()? {
+                Some(err) => Err(err),
+                None => Err(err),
+            },
+        }
     }
 
     /// Creates an unnamed pair of connected UDS stream sockets.
