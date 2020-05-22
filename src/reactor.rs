@@ -25,7 +25,7 @@ use std::mem;
 use std::os::unix::io::RawFd;
 #[cfg(windows)]
 use std::os::windows::io::{FromRawSocket, RawSocket};
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::task::{Poll, Waker};
 use std::time::{Duration, Instant};
@@ -50,9 +50,6 @@ use crate::io_event::IoEvent;
 pub(crate) struct Reactor {
     /// Raw bindings to epoll/kqueue/wepoll.
     sys: sys::Reactor,
-
-    /// Ticker bumped when polling or registering a source.
-    ticker: AtomicU64,
 
     /// Registered sources.
     sources: piper::Mutex<Slab<Arc<Source>>>,
@@ -85,7 +82,6 @@ impl Reactor {
     pub fn get() -> &'static Reactor {
         static REACTOR: Lazy<Reactor> = Lazy::new(|| Reactor {
             sys: sys::Reactor::new().expect("cannot initialize I/O event notification"),
-            ticker: AtomicU64::new(0),
             sources: piper::Mutex::new(Slab::new()),
             events: piper::Lock::new(sys::Events::new()),
             timers: piper::Mutex::new(BTreeMap::new()),
@@ -124,10 +120,7 @@ impl Reactor {
         let source = Arc::new(Source {
             raw,
             key,
-            reg_tick: self.ticker.fetch_add(1, Ordering::SeqCst),
             wakers: piper::Mutex::new(Wakers {
-                ticker_readable: 0,
-                ticker_writable: 0,
                 readers: Vec::new(),
                 writers: Vec::new(),
             }),
@@ -268,9 +261,6 @@ impl ReactorLock<'_> {
         };
 
         loop {
-            // Bump the ticker before polling I/O.
-            let tick = self.reactor.ticker.fetch_add(1, Ordering::SeqCst);
-
             // Block on I/O events.
             match self.reactor.sys.wait(&mut self.events, timeout) {
                 // The timeout was hit so fire ready timers.
@@ -289,37 +279,18 @@ impl ReactorLock<'_> {
                         if let Some(source) = sources.get(ev.key) {
                             let mut wakers = source.wakers.lock();
 
-                            // Check if the source was registered before polling.
-                            if source.reg_tick < tick {
-                                // Wake readers if a readability event was emitted.
-                                if ev.readable {
-                                    wakers.ticker_readable += 1;
-                                    for w in wakers.readers.drain(..) {
-                                        w.wake();
-                                    }
+                            // Wake readers if a readability event was emitted.
+                            if ev.readable {
+                                for w in wakers.readers.drain(..) {
+                                    w.wake();
                                 }
+                            }
 
-                                // Wake writers if a writability event was emitted.
-                                if ev.writable {
-                                    wakers.ticker_writable += 1;
-                                    for w in wakers.writers.drain(..) {
-                                        w.wake();
-                                    }
+                            // Wake writers if a writability event was emitted.
+                            if ev.writable {
+                                for w in wakers.writers.drain(..) {
+                                    w.wake();
                                 }
-                            } else {
-                                // If the source was potentially registered during or after
-                                // polling, we can't be sure whether this event belongs to the
-                                // source currently registered at this index or the source that was
-                                // previously at this index.
-                                //
-                                // Just to be on the safe side, let's reregister and wait for the
-                                // next round of events.
-                                self.reactor.sys.reregister(
-                                    source.raw,
-                                    source.key,
-                                    !wakers.readers.is_empty(),
-                                    !wakers.writers.is_empty(),
-                                )?;
                             }
                         }
                     }
@@ -354,9 +325,6 @@ pub(crate) struct Source {
     #[cfg(windows)]
     pub(crate) raw: RawSocket,
 
-    /// The reactor tick when this source was registered.
-    reg_tick: u64,
-
     /// The key of this source obtained during registration.
     key: usize,
 
@@ -367,12 +335,6 @@ pub(crate) struct Source {
 /// Tasks interested in events on a source.
 #[derive(Debug)]
 struct Wakers {
-    /// Number of delivered readability events.
-    ticker_readable: u64,
-
-    /// Number of delivered writability events.
-    ticker_writable: u64,
-
     /// Tasks waiting for the next readability event.
     readers: Vec<Waker>,
 
@@ -391,11 +353,15 @@ impl Source {
     }
 
     /// Waits until the I/O source is readable.
+    ///
+    /// This function may occasionally complete even if the I/O source is not readable.
     pub(crate) async fn readable(&self) -> io::Result<()> {
-        let mut tick = None;
+        let mut polled = false;
 
-        future::poll_fn(|cx| match tick {
-            None => {
+        future::poll_fn(|cx| {
+            if polled {
+                Poll::Ready(Ok(()))
+            } else {
                 let mut wakers = self.wakers.lock();
 
                 // If there are no other readers, re-register in the reactor.
@@ -413,27 +379,23 @@ impl Source {
                     wakers.readers.push(cx.waker().clone());
                 }
 
-                // Record the readability tick to wait for.
-                tick = Some(wakers.ticker_readable + 1);
+                polled = true;
                 Poll::Pending
-            }
-            Some(tick) => {
-                if self.wakers.lock().ticker_readable < tick {
-                    Poll::Pending
-                } else {
-                    Poll::Ready(Ok(()))
-                }
             }
         })
         .await
     }
 
     /// Waits until the I/O source is writable.
+    ///
+    /// This function may occasionally complete even if the I/O source is not writable.
     pub(crate) async fn writable(&self) -> io::Result<()> {
-        let mut tick = None;
+        let mut polled = false;
 
-        future::poll_fn(|cx| match tick {
-            None => {
+        future::poll_fn(|cx| {
+            if polled {
+                Poll::Ready(Ok(()))
+            } else {
                 let mut wakers = self.wakers.lock();
 
                 // If there are no other writers, re-register in the reactor.
@@ -451,16 +413,8 @@ impl Source {
                     wakers.writers.push(cx.waker().clone());
                 }
 
-                // Record the writability tick to wait for.
-                tick = Some(wakers.ticker_writable + 1);
+                polled = true;
                 Poll::Pending
-            }
-            Some(tick) => {
-                if self.wakers.lock().ticker_writable < tick {
-                    Poll::Pending
-                } else {
-                    Poll::Ready(Ok(()))
-                }
             }
         })
         .await
@@ -760,9 +714,11 @@ mod sys {
             Events(wepoll_binding::Events::with_capacity(1000))
         }
         pub fn iter(&self) -> impl Iterator<Item = Event> + '_ {
+            // wepoll doesn't report events so we have to assume both readability and writabilit
+            // events have been emitted.
             self.0.iter().map(|ev| Event {
-                readable: ev.flags().intersects(read_flags()),
-                writable: ev.flags().intersects(write_flags()),
+                readable: true,
+                writable: true,
                 key: ev.data() as usize,
             })
         }
