@@ -190,6 +190,9 @@ pub fn run<T>(future: impl Future<Output = T>) -> T {
             // Block until either the reactor is locked or `local.event()` is triggered.
             if let Either::Left((reactor_lock, _)) = block_on(future::select(lock, notified)) {
                 react(reactor_lock, &io_events, false);
+            } else {
+                // Clear `local.event()` because it was triggered.
+                local.event().clear();
             }
         }
     })
