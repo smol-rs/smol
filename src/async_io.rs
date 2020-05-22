@@ -19,8 +19,8 @@ use std::{
     path::Path,
 };
 
-use futures_util::future;
 use futures_io::{AsyncRead, AsyncWrite};
+use futures_util::future;
 use futures_util::stream::{self, Stream};
 use socket2::{Domain, Protocol, Socket, Type};
 
@@ -217,11 +217,9 @@ impl<T: IntoRawSocket> IntoRawSocket for Async<T> {
 }
 
 impl<T> Async<T> {
-    /// Reregisters the I/O handle is registered in the reactor.
-    ///
-    /// This is a useful method when the reactor is used in oneshot mode.
-    pub(crate) fn reregister(&self) -> io::Result<()> {
-        self.source.reregister()
+    /// Re-registers the I/O event to wake the poller.
+    pub(crate) fn reregister_io_event(&self) -> io::Result<()> {
+        self.source.reregister_io_event()
     }
 
     /// Gets a reference to the inner I/O handle.
@@ -277,16 +275,54 @@ impl<T> Async<T> {
         Ok(io)
     }
 
-    /// Performs an I/O operation asynchronously.
+    #[doc(hidden)]
+    #[deprecated(note = "use `read_with()` or `write_with()` instead")]
+    pub async fn with<R>(&self, op: impl FnMut(&T) -> io::Result<R>) -> io::Result<R> {
+        let mut op = op;
+        let io = self.io.as_ref().unwrap();
+        loop {
+            match op(io) {
+                Err(err) if err.kind() == io::ErrorKind::WouldBlock => {}
+                res => return res,
+            }
+
+            // Wait until the I/O handle is readable or writable.
+            let readable = self.source.readable();
+            let writable = self.source.writable();
+            futures_util::pin_mut!(readable);
+            futures_util::pin_mut!(writable);
+            let _ = future::select(readable, writable).await;
+        }
+    }
+
+    #[doc(hidden)]
+    #[deprecated(note = "use `read_with_mut()` or `write_with_mut()` instead")]
+    pub async fn with_mut<R>(&mut self, op: impl FnMut(&mut T) -> io::Result<R>) -> io::Result<R> {
+        let mut op = op;
+        let io = self.io.as_mut().unwrap();
+        loop {
+            match op(io) {
+                Err(err) if err.kind() == io::ErrorKind::WouldBlock => {}
+                res => return res,
+            }
+
+            // Wait until the I/O handle is readable or writable.
+            let readable = self.source.readable();
+            let writable = self.source.writable();
+            futures_util::pin_mut!(readable);
+            futures_util::pin_mut!(writable);
+            let _ = future::select(readable, writable).await;
+        }
+    }
+
+    /// Performs a read operation asynchronously.
     ///
-    /// This I/O handle is in non-blocking mode and is registered in the reactor. It gets notified
-    /// on every new event.
+    /// The I/O handle is registered in the reactor and put in non-blocking mode. This function
+    /// invokes the `op` closure in a loop until it succeeds or returns an error other than
+    /// [`io::ErrorKind::WouldBlock`]. In between iterations of the loop, it waits until the OS
+    /// sends a notification that the I/O handle is readable.
     ///
-    /// The closure passed to this function attempts an I/O operation and must return
-    /// [`io::ErrorKind::WouldBlock`] if it's not ready. The current task then gets notified by the
-    /// reactor when the I/O handle is ready again and the closure retries the operation.
-    ///
-    /// The closure gets a shared reference to the inner I/O handle.
+    /// The closure receives a shared reference to the I/O handle.
     ///
     /// # Examples
     ///
@@ -298,26 +334,28 @@ impl<T> Async<T> {
     /// let listener = Async::<TcpListener>::bind("127.0.0.1:80")?;
     ///
     /// // Accept a new client asynchronously.
-    /// let (stream, addr) = listener.with(|l| l.accept()).await?;
+    /// let (stream, addr) = listener.read_with(|l| l.accept()).await?;
     /// # std::io::Result::Ok(()) });
     /// ```
-    pub async fn with<R>(&self, op: impl FnMut(&T) -> io::Result<R>) -> io::Result<R> {
+    pub async fn read_with<R>(&self, op: impl FnMut(&T) -> io::Result<R>) -> io::Result<R> {
         let mut op = op;
-        let mut io = self.io.as_ref().unwrap();
-        let source = &self.source;
-        future::poll_fn(|cx| source.poll_io(cx, || op(&mut io))).await
+        loop {
+            match op(self.get_ref()) {
+                Err(err) if err.kind() == io::ErrorKind::WouldBlock => {}
+                res => return res,
+            }
+            self.source.readable().await?;
+        }
     }
 
-    /// Performs an I/O operation asynchronously.
+    /// Performs a read operation asynchronously.
     ///
-    /// This I/O handle is in non-blocking mode and is registered in the reactor. It gets notified
-    /// on every new event.
+    /// The I/O handle is registered in the reactor and put in non-blocking mode. This function
+    /// invokes the `op` closure in a loop until it succeeds or returns an error other than
+    /// [`io::ErrorKind::WouldBlock`]. In between iterations of the loop, it waits until the OS
+    /// sends a notification that the I/O handle is readable.
     ///
-    /// The closure passed to this function attempts an I/O operation and must return
-    /// [`io::ErrorKind::WouldBlock`] if it's not ready. The current task then gets notified by the
-    /// reactor when the I/O handle is ready again and the closure retries the operation.
-    ///
-    /// The closure gets a mutable reference to the inner I/O handle.
+    /// The closure receives a mutable reference to the I/O handle.
     ///
     /// # Examples
     ///
@@ -329,14 +367,92 @@ impl<T> Async<T> {
     /// let mut listener = Async::<TcpListener>::bind("127.0.0.1:80")?;
     ///
     /// // Accept a new client asynchronously.
-    /// let (stream, addr) = listener.with_mut(|l| l.accept()).await?;
+    /// let (stream, addr) = listener.read_with_mut(|l| l.accept()).await?;
     /// # std::io::Result::Ok(()) });
     /// ```
-    pub async fn with_mut<R>(&mut self, op: impl FnMut(&mut T) -> io::Result<R>) -> io::Result<R> {
+    pub async fn read_with_mut<R>(
+        &mut self,
+        op: impl FnMut(&mut T) -> io::Result<R>,
+    ) -> io::Result<R> {
         let mut op = op;
-        let mut io = self.io.as_mut().unwrap();
-        let source = &self.source;
-        future::poll_fn(|cx| source.poll_io(cx, || op(&mut io))).await
+        loop {
+            match op(self.get_mut()) {
+                Err(err) if err.kind() == io::ErrorKind::WouldBlock => {}
+                res => return res,
+            }
+            self.source.readable().await?;
+        }
+    }
+
+    /// Performs a write operation asynchronously.
+    ///
+    /// The I/O handle is registered in the reactor and put in non-blocking mode. This function
+    /// invokes the `op` closure in a loop until it succeeds or returns an error other than
+    /// [`io::ErrorKind::WouldBlock`]. In between iterations of the loop, it waits until the OS
+    /// sends a notification that the I/O handle is writable.
+    ///
+    /// The closure receives a shared reference to the I/O handle.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use smol::Async;
+    /// use std::net::UdpSocket;
+    ///
+    /// # smol::run(async {
+    /// let socket = Async::<UdpSocket>::bind("127.0.0.1:9000")?;
+    /// socket.get_ref().connect("127.0.0.1:8000")?;
+    ///
+    /// let msg = b"hello";
+    /// let len = socket.write_with(|s| s.send(msg)).await?;
+    /// # std::io::Result::Ok(()) });
+    /// ```
+    pub async fn write_with<R>(&self, op: impl FnMut(&T) -> io::Result<R>) -> io::Result<R> {
+        let mut op = op;
+        loop {
+            match op(self.get_ref()) {
+                Err(err) if err.kind() == io::ErrorKind::WouldBlock => {}
+                res => return res,
+            }
+            self.source.writable().await?;
+        }
+    }
+
+    /// Performs a write operation asynchronously.
+    ///
+    /// The I/O handle is registered in the reactor and put in non-blocking mode. This function
+    /// invokes the `op` closure in a loop until it succeeds or returns an error other than
+    /// [`io::ErrorKind::WouldBlock`]. In between iterations of the loop, it waits until the OS
+    /// sends a notification that the I/O handle is writable.
+    ///
+    /// The closure receives a mutable reference to the I/O handle.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use smol::Async;
+    /// use std::net::UdpSocket;
+    ///
+    /// # smol::run(async {
+    /// let mut socket = Async::<UdpSocket>::bind("127.0.0.1:9000")?;
+    /// socket.get_ref().connect("127.0.0.1:8000")?;
+    ///
+    /// let msg = b"hello";
+    /// let len = socket.write_with_mut(|s| s.send(msg)).await?;
+    /// # std::io::Result::Ok(()) });
+    /// ```
+    pub async fn write_with_mut<R>(
+        &mut self,
+        op: impl FnMut(&mut T) -> io::Result<R>,
+    ) -> io::Result<R> {
+        let mut op = op;
+        loop {
+            match op(self.get_mut()) {
+                Err(err) if err.kind() == io::ErrorKind::WouldBlock => {}
+                res => return res,
+            }
+            self.source.writable().await?;
+        }
     }
 }
 
@@ -364,7 +480,7 @@ impl<T: Read> AsyncRead for Async<T> {
         cx: &mut Context<'_>,
         buf: &mut [u8],
     ) -> Poll<io::Result<usize>> {
-        poll_future(cx, self.with_mut(|io| io.read(buf)))
+        poll_future(cx, self.read_with_mut(|io| io.read(buf)))
     }
 
     fn poll_read_vectored(
@@ -372,7 +488,7 @@ impl<T: Read> AsyncRead for Async<T> {
         cx: &mut Context<'_>,
         bufs: &mut [IoSliceMut<'_>],
     ) -> Poll<io::Result<usize>> {
-        poll_future(cx, self.with_mut(|io| io.read_vectored(bufs)))
+        poll_future(cx, self.read_with_mut(|io| io.read_vectored(bufs)))
     }
 }
 
@@ -385,7 +501,7 @@ where
         cx: &mut Context<'_>,
         buf: &mut [u8],
     ) -> Poll<io::Result<usize>> {
-        poll_future(cx, self.with(|io| (&*io).read(buf)))
+        poll_future(cx, self.read_with(|io| (&*io).read(buf)))
     }
 
     fn poll_read_vectored(
@@ -393,7 +509,7 @@ where
         cx: &mut Context<'_>,
         bufs: &mut [IoSliceMut<'_>],
     ) -> Poll<io::Result<usize>> {
-        poll_future(cx, self.with(|io| (&*io).read_vectored(bufs)))
+        poll_future(cx, self.read_with(|io| (&*io).read_vectored(bufs)))
     }
 }
 
@@ -403,7 +519,7 @@ impl<T: Write> AsyncWrite for Async<T> {
         cx: &mut Context<'_>,
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
-        poll_future(cx, self.with_mut(|io| io.write(buf)))
+        poll_future(cx, self.write_with_mut(|io| io.write(buf)))
     }
 
     fn poll_write_vectored(
@@ -411,11 +527,11 @@ impl<T: Write> AsyncWrite for Async<T> {
         cx: &mut Context<'_>,
         bufs: &[IoSlice<'_>],
     ) -> Poll<io::Result<usize>> {
-        poll_future(cx, self.with_mut(|io| io.write_vectored(bufs)))
+        poll_future(cx, self.write_with_mut(|io| io.write_vectored(bufs)))
     }
 
     fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        poll_future(cx, self.with_mut(|io| io.flush()))
+        poll_future(cx, self.write_with_mut(|io| io.flush()))
     }
 
     fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
@@ -432,7 +548,7 @@ where
         cx: &mut Context<'_>,
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
-        poll_future(cx, self.with(|io| (&*io).write(buf)))
+        poll_future(cx, self.write_with(|io| (&*io).write(buf)))
     }
 
     fn poll_write_vectored(
@@ -440,11 +556,11 @@ where
         cx: &mut Context<'_>,
         bufs: &[IoSlice<'_>],
     ) -> Poll<io::Result<usize>> {
-        poll_future(cx, self.with(|io| (&*io).write_vectored(bufs)))
+        poll_future(cx, self.write_with(|io| (&*io).write_vectored(bufs)))
     }
 
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        poll_future(cx, self.with(|io| (&*io).flush()))
+        poll_future(cx, self.write_with(|io| (&*io).flush()))
     }
 
     fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
@@ -494,7 +610,7 @@ impl Async<TcpListener> {
     /// # std::io::Result::Ok(()) });
     /// ```
     pub async fn accept(&self) -> io::Result<(Async<TcpStream>, SocketAddr)> {
-        let (stream, addr) = self.with(|io| io.accept()).await?;
+        let (stream, addr) = self.read_with(|io| io.accept()).await?;
         Ok((Async::new(stream)?, addr))
     }
 
@@ -597,7 +713,7 @@ impl Async<TcpStream> {
             res => res.map(|_| ()),
         };
         // The stream becomes writable when connected.
-        stream.with(|io| wait_connect(io)).await?;
+        stream.write_with(|io| wait_connect(io)).await?;
 
         Ok(stream)
     }
@@ -620,7 +736,7 @@ impl Async<TcpStream> {
     /// # std::io::Result::Ok(()) });
     /// ```
     pub async fn peek(&self, buf: &mut [u8]) -> io::Result<usize> {
-        self.with(|io| io.peek(buf)).await
+        self.read_with(|io| io.peek(buf)).await
     }
 }
 
@@ -669,7 +785,7 @@ impl Async<UdpSocket> {
     /// # std::io::Result::Ok(()) });
     /// ```
     pub async fn recv_from(&self, buf: &mut [u8]) -> io::Result<(usize, SocketAddr)> {
-        self.with(|io| io.recv_from(buf)).await
+        self.read_with(|io| io.recv_from(buf)).await
     }
 
     /// Receives a single datagram message without removing it from the queue.
@@ -693,7 +809,7 @@ impl Async<UdpSocket> {
     /// # std::io::Result::Ok(()) });
     /// ```
     pub async fn peek_from(&self, buf: &mut [u8]) -> io::Result<(usize, SocketAddr)> {
-        self.with(|io| io.peek_from(buf)).await
+        self.read_with(|io| io.peek_from(buf)).await
     }
 
     /// Sends data to the specified address.
@@ -716,7 +832,7 @@ impl Async<UdpSocket> {
     /// ```
     pub async fn send_to<A: Into<SocketAddr>>(&self, buf: &[u8], addr: A) -> io::Result<usize> {
         let addr = addr.into();
-        self.with(|io| io.send_to(buf, addr)).await
+        self.write_with(|io| io.send_to(buf, addr)).await
     }
 
     /// Receives a single datagram message from the connected peer.
@@ -744,7 +860,7 @@ impl Async<UdpSocket> {
     /// # std::io::Result::Ok(()) });
     /// ```
     pub async fn recv(&self, buf: &mut [u8]) -> io::Result<usize> {
-        self.with(|io| io.recv(buf)).await
+        self.write_with(|io| io.recv(buf)).await
     }
 
     /// Receives a single datagram message from the connected peer without removing it from the
@@ -773,7 +889,7 @@ impl Async<UdpSocket> {
     /// # std::io::Result::Ok(()) });
     /// ```
     pub async fn peek(&self, buf: &mut [u8]) -> io::Result<usize> {
-        self.with(|io| io.peek(buf)).await
+        self.read_with(|io| io.peek(buf)).await
     }
 
     /// Sends data to the connected peer.
@@ -798,7 +914,7 @@ impl Async<UdpSocket> {
     /// # std::io::Result::Ok(()) });
     /// ```
     pub async fn send(&self, buf: &[u8]) -> io::Result<usize> {
-        self.with(|io| io.send(buf)).await
+        self.write_with(|io| io.send(buf)).await
     }
 }
 
@@ -840,7 +956,7 @@ impl Async<UnixListener> {
     /// # std::io::Result::Ok(()) });
     /// ```
     pub async fn accept(&self) -> io::Result<(Async<UnixStream>, UnixSocketAddr)> {
-        let (stream, addr) = self.with(|io| io.accept()).await?;
+        let (stream, addr) = self.read_with(|io| io.accept()).await?;
         Ok((Async::new(stream)?, addr))
     }
 
@@ -914,7 +1030,7 @@ impl Async<UnixStream> {
             res => res.map(|_| ()),
         };
         // The stream becomes writable when connected.
-        stream.with(|io| wait_connect(io)).await?;
+        stream.write_with(|io| wait_connect(io)).await?;
 
         Ok(stream)
     }
@@ -1007,7 +1123,7 @@ impl Async<UnixDatagram> {
     /// # std::io::Result::Ok(()) });
     /// ```
     pub async fn recv_from(&self, buf: &mut [u8]) -> io::Result<(usize, UnixSocketAddr)> {
-        self.with(|io| io.recv_from(buf)).await
+        self.read_with(|io| io.recv_from(buf)).await
     }
 
     /// Sends data to the specified address.
@@ -1029,7 +1145,7 @@ impl Async<UnixDatagram> {
     /// # std::io::Result::Ok(()) });
     /// ```
     pub async fn send_to<P: AsRef<Path>>(&self, buf: &[u8], path: P) -> io::Result<usize> {
-        self.with(|io| io.send_to(buf, &path)).await
+        self.write_with(|io| io.send_to(buf, &path)).await
     }
 
     /// Receives data from the connected peer.
@@ -1054,7 +1170,7 @@ impl Async<UnixDatagram> {
     /// # std::io::Result::Ok(()) });
     /// ```
     pub async fn recv(&self, buf: &mut [u8]) -> io::Result<usize> {
-        self.with(|io| io.recv(buf)).await
+        self.read_with(|io| io.recv(buf)).await
     }
 
     /// Sends data to the connected peer.
@@ -1079,6 +1195,6 @@ impl Async<UnixDatagram> {
     /// # std::io::Result::Ok(()) });
     /// ```
     pub async fn send(&self, buf: &[u8]) -> io::Result<usize> {
-        self.with(|io| io.send(buf)).await
+        self.write_with(|io| io.send(buf)).await
     }
 }

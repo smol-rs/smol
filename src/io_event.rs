@@ -62,6 +62,9 @@ impl IoEvent {
                 // Trigger an I/O event by writing a byte into the sending socket.
                 let _ = (&self.0.writer).write(&1u64.to_ne_bytes());
                 let _ = (&self.0.writer).flush();
+
+                // Re-register to wake up the poller.
+                let _ = self.0.reader.reregister_io_event();
             }
         }
     }
@@ -71,7 +74,6 @@ impl IoEvent {
         // Read all available bytes from the receiving socket.
         while self.0.reader.get_ref().read(&mut [0; 64]).is_ok() {}
         let value = self.0.flag.swap(false, Ordering::SeqCst);
-        let _ = self.0.reader.reregister();
 
         // Publish all in-memory changes after clearing the flag.
         atomic::fence(Ordering::SeqCst);
@@ -84,7 +86,7 @@ impl IoEvent {
     pub async fn notified(&self) {
         self.0
             .reader
-            .with(|_| {
+            .read_with(|_| {
                 if self.0.flag.load(Ordering::SeqCst) {
                     Ok(())
                 } else {

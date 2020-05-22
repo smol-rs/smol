@@ -27,10 +27,11 @@ use std::os::unix::io::RawFd;
 use std::os::windows::io::{FromRawSocket, RawSocket};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
-use std::task::{Context, Poll, Waker};
+use std::task::{Poll, Waker};
 use std::time::{Duration, Instant};
 
 use crossbeam::queue::ArrayQueue;
+use futures_util::future;
 #[cfg(unix)]
 use nix::fcntl::{fcntl, FcntlArg, OFlag};
 use once_cell::sync::Lazy;
@@ -39,7 +40,6 @@ use slab::Slab;
 use socket2::Socket;
 
 use crate::io_event::IoEvent;
-use crate::throttle;
 
 /// The reactor.
 ///
@@ -114,14 +114,17 @@ impl Reactor {
         }
 
         // Create a source and register it.
+        let key = vacant.key();
+        self.sys.register(raw, key)?;
+
         let source = Arc::new(Source {
             raw,
-            key: vacant.key(),
-            wakers: piper::Mutex::new(Vec::new()),
-            tick: AtomicUsize::new(0),
+            key,
+            wakers: piper::Mutex::new(Wakers {
+                readers: Vec::new(),
+                writers: Vec::new(),
+            }),
         });
-        self.sys.register(raw, source.key)?;
-
         Ok(vacant.insert(source).clone())
     }
 
@@ -271,15 +274,24 @@ impl ReactorLock<'_> {
                     // Iterate over sources in the event list.
                     let sources = self.reactor.sources.lock();
 
-                    for source in self.events.iter().filter_map(|i| sources.get(i)) {
-                        // Bump the ticker.
-                        let mut wakers = source.wakers.lock();
-                        let tick = source.tick.load(Ordering::Acquire);
-                        source.tick.store(tick.wrapping_add(1), Ordering::Release);
+                    for ev in self.events.iter() {
+                        // Check if there is a source in the table with this key.
+                        if let Some(source) = sources.get(ev.key) {
+                            let mut wakers = source.wakers.lock();
 
-                        // Wake up tasks waiting on I/O.
-                        for w in wakers.drain(..) {
-                            w.wake();
+                            // Wake readers if a readability event was emitted.
+                            if ev.readable {
+                                for w in wakers.readers.drain(..) {
+                                    w.wake();
+                                }
+                            }
+
+                            // Wake writers if a writability event was emitted.
+                            if ev.writable {
+                                for w in wakers.writers.drain(..) {
+                                    w.wake();
+                                }
+                            }
                         }
                     }
 
@@ -313,62 +325,99 @@ pub(crate) struct Source {
     #[cfg(windows)]
     pub(crate) raw: RawSocket,
 
-    /// The ID of this source obtain during registration.
+    /// The key of this source obtained during registration.
     key: usize,
 
-    /// A list of wakers representing tasks interested in events on this source.
-    wakers: piper::Mutex<Vec<Waker>>,
+    /// Tasks interested in events on this source.
+    wakers: piper::Mutex<Wakers>,
+}
 
-    /// Incremented on every I/O notification - this is only used for synchronization.
-    tick: AtomicUsize,
+/// Tasks interested in events on a source.
+#[derive(Debug)]
+struct Wakers {
+    /// Tasks waiting for the next readability event.
+    readers: Vec<Waker>,
+
+    /// Tasks waiting for the next writability event.
+    writers: Vec<Waker>,
 }
 
 impl Source {
-    /// Reregisters the I/O handle is registered in the reactor.
-    ///
-    /// This is a useful method when the reactor is used in oneshot mode.
-    pub(crate) fn reregister(&self) -> io::Result<()> {
-        Reactor::get().sys.reregister(self.raw, self.key)
+    /// Re-registers the I/O event to wake the poller.
+    pub(crate) fn reregister_io_event(&self) -> io::Result<()> {
+        let wakers = self.wakers.lock();
+        Reactor::get()
+            .sys
+            .reregister(self.raw, self.key, true, !wakers.writers.is_empty())?;
+        Ok(())
     }
 
-    /// Attempts a non-blocking I/O operation and registers a waker if it errors with `WouldBlock`.
-    pub fn poll_io<R>(
-        &self,
-        cx: &mut Context<'_>,
-        mut op: impl FnMut() -> io::Result<R>,
-    ) -> Poll<io::Result<R>> {
-        // Throttle if the current task did too many I/O operations without yielding.
-        futures_util::ready!(throttle::poll(cx));
+    /// Waits until the I/O source is readable.
+    ///
+    /// This function may occasionally complete even if the I/O source is not readable.
+    pub(crate) async fn readable(&self) -> io::Result<()> {
+        let mut polled = false;
 
-        loop {
-            // This number is bumped just before I/O notifications while wakers are locked.
-            let tick = self.tick.load(Ordering::Acquire);
+        future::poll_fn(|cx| {
+            if polled {
+                Poll::Ready(Ok(()))
+            } else {
+                let mut wakers = self.wakers.lock();
 
-            // Attempt the non-blocking operation.
-            match op() {
-                Err(err) if err.kind() == io::ErrorKind::WouldBlock => {}
-                res => return Poll::Ready(res),
-            }
-
-            // Lock the waker list and retry the non-blocking operation.
-            let mut wakers = self.wakers.lock();
-
-            // If the current task is already registered, return.
-            if wakers.iter().any(|w| w.will_wake(cx.waker())) {
-                return Poll::Pending;
-            }
-
-            // If there were no new notifications, register and return.
-            if self.tick.load(Ordering::Acquire) == tick {
-                if wakers.is_empty() {
-                    // Re-register the I/O handle if it's in oneshot mode.
-                    self.reregister()?;
+                // If there are no other readers, re-register in the reactor.
+                if wakers.readers.is_empty() {
+                    Reactor::get().sys.reregister(
+                        self.raw,
+                        self.key,
+                        true,
+                        !wakers.writers.is_empty(),
+                    )?;
                 }
 
-                wakers.push(cx.waker().clone());
-                return Poll::Pending;
+                // Register the current task's waker if not present already.
+                if wakers.readers.iter().all(|w| !w.will_wake(cx.waker())) {
+                    wakers.readers.push(cx.waker().clone());
+                }
+
+                polled = true;
+                Poll::Pending
             }
-        }
+        })
+        .await
+    }
+
+    /// Waits until the I/O source is writable.
+    ///
+    /// This function may occasionally complete even if the I/O source is not writable.
+    pub(crate) async fn writable(&self) -> io::Result<()> {
+        let mut polled = false;
+
+        future::poll_fn(|cx| {
+            if polled {
+                Poll::Ready(Ok(()))
+            } else {
+                let mut wakers = self.wakers.lock();
+
+                // If there are no other writers, re-register in the reactor.
+                if wakers.writers.is_empty() {
+                    Reactor::get().sys.reregister(
+                        self.raw,
+                        self.key,
+                        !wakers.readers.is_empty(),
+                        true,
+                    )?;
+                }
+
+                // Register the current task's waker if not present already.
+                if wakers.writers.iter().all(|w| !w.will_wake(cx.waker())) {
+                    wakers.writers.push(cx.waker().clone());
+                }
+
+                polled = true;
+                Poll::Pending
+            }
+        })
+        .await
     }
 }
 
@@ -402,11 +451,19 @@ mod sys {
             Ok(Reactor(epoll_fd))
         }
         pub fn register(&self, fd: RawFd, key: usize) -> io::Result<()> {
-            let ev = &mut EpollEvent::new(flags(), key as u64);
+            let ev = &mut EpollEvent::new(EpollFlags::empty(), key as u64);
             epoll_ctl(self.0, EpollOp::EpollCtlAdd, fd, Some(ev)).map_err(io_err)
         }
-        pub fn reregister(&self, _fd: RawFd, _key: usize) -> io::Result<()> {
-            Ok(())
+        pub fn reregister(&self, fd: RawFd, key: usize, read: bool, write: bool) -> io::Result<()> {
+            let mut flags = EpollFlags::EPOLLONESHOT;
+            if read {
+                flags |= read_flags();
+            }
+            if write {
+                flags |= write_flags();
+            }
+            let ev = &mut EpollEvent::new(flags, key as u64);
+            epoll_ctl(self.0, EpollOp::EpollCtlMod, fd, Some(ev)).map_err(io_err)
         }
         pub fn deregister(&self, fd: RawFd) -> io::Result<()> {
             epoll_ctl(self.0, EpollOp::EpollCtlDel, fd, None).map_err(io_err)
@@ -426,8 +483,11 @@ mod sys {
             Ok(events.len)
         }
     }
-    fn flags() -> EpollFlags {
-        EpollFlags::EPOLLET | EpollFlags::EPOLLIN | EpollFlags::EPOLLOUT | EpollFlags::EPOLLRDHUP
+    fn read_flags() -> EpollFlags {
+        EpollFlags::EPOLLIN | EpollFlags::EPOLLRDHUP
+    }
+    fn write_flags() -> EpollFlags {
+        EpollFlags::EPOLLOUT
     }
 
     pub struct Events {
@@ -440,9 +500,18 @@ mod sys {
             let len = 0;
             Events { list, len }
         }
-        pub fn iter(&self) -> impl Iterator<Item = usize> + '_ {
-            self.list[..self.len].iter().map(|ev| ev.data() as usize)
+        pub fn iter(&self) -> impl Iterator<Item = Event> + '_ {
+            self.list[..self.len].iter().map(|ev| Event {
+                readable: ev.events().intersects(read_flags()),
+                writable: ev.events().intersects(write_flags()),
+                key: ev.data() as usize,
+            })
         }
+    }
+    pub struct Event {
+        pub readable: bool,
+        pub writable: bool,
+        pub key: usize,
     }
 }
 
@@ -474,25 +543,54 @@ mod sys {
             fcntl(fd, FcntlArg::F_SETFD(FdFlag::FD_CLOEXEC)).map_err(io_err)?;
             Ok(Reactor(fd))
         }
-        pub fn register(&self, fd: RawFd, key: usize) -> io::Result<()> {
-            let flags = EventFlag::EV_CLEAR | EventFlag::EV_RECEIPT | EventFlag::EV_ADD;
+        pub fn register(&self, _fd: RawFd, _key: usize) -> io::Result<()> {
+            Ok(())
+        }
+        pub fn reregister(&self, fd: RawFd, key: usize, read: bool, write: bool) -> io::Result<()> {
+            let mut read_flags = EventFlag::EV_ONESHOT | EventFlag::EV_RECEIPT;
+            let mut write_flags = EventFlag::EV_ONESHOT | EventFlag::EV_RECEIPT;
+            if read {
+                read_flags |= EventFlag::EV_ADD;
+            } else {
+                read_flags |= EventFlag::EV_DELETE;
+            }
+            if write {
+                write_flags |= EventFlag::EV_ADD;
+            } else {
+                write_flags |= EventFlag::EV_DELETE;
+            }
             let udata = key as _;
             let changelist = [
-                KEvent::new(fd as _, EventFilter::EVFILT_WRITE, flags, FFLAGS, 0, udata),
-                KEvent::new(fd as _, EventFilter::EVFILT_READ, flags, FFLAGS, 0, udata),
+                KEvent::new(
+                    fd as _,
+                    EventFilter::EVFILT_READ,
+                    read_flags,
+                    FFLAGS,
+                    0,
+                    udata,
+                ),
+                KEvent::new(
+                    fd as _,
+                    EventFilter::EVFILT_WRITE,
+                    write_flags,
+                    FFLAGS,
+                    0,
+                    udata,
+                ),
             ];
             let mut eventlist = changelist;
             kevent_ts(self.0, &changelist, &mut eventlist, None).map_err(io_err)?;
             for ev in &eventlist {
-                // See https://github.com/tokio-rs/mio/issues/582
+                // Explanation for ignoring EPIPE: https://github.com/tokio-rs/mio/issues/582
                 let (flags, data) = (ev.flags(), ev.data());
-                if flags.contains(EventFlag::EV_ERROR) && data != 0 && data != Errno::EPIPE as _ {
+                if flags.contains(EventFlag::EV_ERROR)
+                    && data != 0
+                    && data != Errno::ENOENT as _
+                    && data != Errno::EPIPE as _
+                {
                     return Err(io::Error::from_raw_os_error(data as _));
                 }
             }
-            Ok(())
-        }
-        pub fn reregister(&self, _fd: RawFd, _key: usize) -> io::Result<()> {
             Ok(())
         }
         pub fn deregister(&self, fd: RawFd) -> io::Result<()> {
@@ -505,7 +603,7 @@ mod sys {
             kevent_ts(self.0, &changelist, &mut eventlist, None).map_err(io_err)?;
             for ev in &eventlist {
                 let (flags, data) = (ev.flags(), ev.data());
-                if flags.contains(EventFlag::EV_ERROR) && data != 0 {
+                if flags.contains(EventFlag::EV_ERROR) && data != 0 && data != Errno::ENOENT as _ {
                     return Err(io::Error::from_raw_os_error(data as _));
                 }
             }
@@ -534,9 +632,18 @@ mod sys {
             let len = 0;
             Events { list, len }
         }
-        pub fn iter(&self) -> impl Iterator<Item = usize> + '_ {
-            self.list[..self.len].iter().map(|ev| ev.udata() as usize)
+        pub fn iter(&self) -> impl Iterator<Item = Event> + '_ {
+            self.list[..self.len].iter().map(|ev| Event {
+                readable: ev.filter() == EventFilter::EVFILT_READ,
+                writable: ev.filter() == EventFilter::EVFILT_WRITE,
+                key: ev.udata() as usize,
+            })
         }
+    }
+    pub struct Event {
+        pub readable: bool,
+        pub writable: bool,
+        pub key: usize,
     }
 }
 
@@ -555,17 +662,26 @@ mod sys {
             Ok(Reactor(Epoll::new()?))
         }
         pub fn register(&self, sock: RawSocket, key: usize) -> io::Result<()> {
-            self.0.register(&As(sock), flags(), key as u64)
+            self.0.register(&As(sock), EventFlag::empty(), key as u64)
         }
-        pub fn reregister(&self, sock: RawSocket, key: usize) -> io::Result<()> {
-            // Ignore errors because a concurrent poll can reregister the handle at any point.
-            let _ = self.0.reregister(&As(sock), flags(), key as u64);
-            Ok(())
+        pub fn reregister(
+            &self,
+            sock: RawSocket,
+            key: usize,
+            read: bool,
+            write: bool,
+        ) -> io::Result<()> {
+            let mut flags = EventFlag::ONESHOT;
+            if read {
+                flags |= read_flags();
+            }
+            if write {
+                flags |= write_flags();
+            }
+            self.0.reregister(&As(sock), flags, key as u64)
         }
         pub fn deregister(&self, sock: RawSocket) -> io::Result<()> {
-            // Ignore errors because an event can deregister the handle at any point.
-            let _ = self.0.deregister(&As(sock));
-            Ok(())
+            self.0.deregister(&As(sock))
         }
         pub fn wait(&self, events: &mut Events, timeout: Option<Duration>) -> io::Result<usize> {
             let timeout = timeout.map(|t| {
@@ -585,8 +701,11 @@ mod sys {
             self.0
         }
     }
-    fn flags() -> EventFlag {
-        EventFlag::ONESHOT | EventFlag::IN | EventFlag::OUT | EventFlag::RDHUP
+    fn read_flags() -> EventFlag {
+        EventFlag::IN | EventFlag::RDHUP
+    }
+    fn write_flags() -> EventFlag {
+        EventFlag::OUT
     }
 
     pub struct Events(wepoll_binding::Events);
@@ -594,8 +713,19 @@ mod sys {
         pub fn new() -> Events {
             Events(wepoll_binding::Events::with_capacity(1000))
         }
-        pub fn iter(&self) -> impl Iterator<Item = usize> + '_ {
-            self.0.iter().map(|ev| ev.data() as usize)
+        pub fn iter(&self) -> impl Iterator<Item = Event> + '_ {
+            // wepoll doesn't report events so we have to assume both readability and writabilit
+            // events have been emitted.
+            self.0.iter().map(|ev| Event {
+                readable: true,
+                writable: true,
+                key: ev.data() as usize,
+            })
         }
+    }
+    pub struct Event {
+        pub readable: bool,
+        pub writable: bool,
+        pub key: usize,
     }
 }

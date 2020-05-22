@@ -49,38 +49,3 @@ jobs:
         uses: actions-rs/cargo@v1
         with:
           command: test
-
-  cross:
-    name: Cross compile
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        target:
-          - i686-unknown-linux-gnu
-          - powerpc-unknown-linux-gnu
-          - powerpc64-unknown-linux-gnu
-          - powerpc64le-unknown-linux-gnu
-          - mips-unknown-linux-gnu
-          - arm-linux-androideabi
-
-    steps:
-    - uses: actions/checkout@v2
-    
-    - name: Set current week of the year in environnement
-      run: echo "::set-env name=CURRENT_WEEK::$(date +%V)"
-    
-    - name: Install nightly
-      uses: actions-rs/toolchain@v1
-      with:
-        toolchain: nightly
-        override: true
-
-    - name: Install cross
-      run: cargo install cross || true
-
-    - name: check
-      run: cross check --target ${{ matrix.target }}
-
-    - name: test
-      run: cross test --target ${{ matrix.target }}
