@@ -714,11 +714,9 @@ mod sys {
             Events(wepoll_binding::Events::with_capacity(1000))
         }
         pub fn iter(&self) -> impl Iterator<Item = Event> + '_ {
-            // wepoll doesn't report events so we have to assume both readability and writabilit
-            // events have been emitted.
             self.0.iter().map(|ev| Event {
-                readable: true,
-                writable: true,
+                readable: ev.flags().intersects(read_flags()),
+                writable: ev.flags().intersects(write_flags()),
                 key: ev.data() as usize,
             })
         }
