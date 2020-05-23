@@ -1,13 +1,15 @@
 #[cfg(target_os = "linux")]
-pub mod linux {
+pub mod eventfd {
     pub use nix::sys::eventfd::{eventfd, EfdFlags};
-
-    pub mod unistd {
-        pub use nix::unistd::{close, dup, read, write};
-    }
-
-    pub use nix::Error;
 }
+
+#[cfg(target_os = "linux")]
+pub mod unistd {
+    pub use nix::unistd::{close, dup, read, write};
+}
+
+#[cfg(target_os = "linux")]
+pub use nix::Error;
 
 #[cfg(unix)]
 pub mod fcntl {
