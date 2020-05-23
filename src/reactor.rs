@@ -484,10 +484,10 @@ mod sys {
         }
     }
     fn read_flags() -> EpollFlags {
-        EpollFlags::EPOLLIN | EpollFlags::EPOLLRDHUP
+        EpollFlags::EPOLLIN | EpollFlags::EPOLLRDHUP | EpollFlags::EPOLLHUP | EpollFlags::EPOLLERR
     }
     fn write_flags() -> EpollFlags {
-        EpollFlags::EPOLLOUT
+        EpollFlags::EPOLLOUT | EpollFlags::EPOLLHUP | EpollFlags::EPOLLERR
     }
 
     pub struct Events {
@@ -544,66 +544,29 @@ mod sys {
             Ok(Reactor(fd))
         }
         pub fn register(&self, _fd: RawFd, _key: usize) -> io::Result<()> {
-            Ok(())
-        }
-        pub fn reregister(&self, fd: RawFd, key: usize, read: bool, write: bool) -> io::Result<()> {
-            let mut read_flags = EventFlag::EV_ONESHOT | EventFlag::EV_RECEIPT;
-            let mut write_flags = EventFlag::EV_ONESHOT | EventFlag::EV_RECEIPT;
-            if read {
-                read_flags |= EventFlag::EV_ADD;
-            } else {
-                read_flags |= EventFlag::EV_DELETE;
-            }
-            if write {
-                write_flags |= EventFlag::EV_ADD;
-            } else {
-                write_flags |= EventFlag::EV_DELETE;
-            }
+            let flags = EventFlag::ADD | EventFlag::EV_CLEAR;
             let udata = key as _;
             let changelist = [
-                KEvent::new(
-                    fd as _,
-                    EventFilter::EVFILT_READ,
-                    read_flags,
-                    FFLAGS,
-                    0,
-                    udata,
-                ),
-                KEvent::new(
-                    fd as _,
-                    EventFilter::EVFILT_WRITE,
-                    write_flags,
-                    FFLAGS,
-                    0,
-                    udata,
-                ),
+                KEvent::new(fd as _, EventFilter::EVFILT_READ, flags, FFLAGS, 0, udata),
+                KEvent::new(fd as _, EventFilter::EVFILT_WRITE, flags, FFLAGS, 0, udata),
             ];
             let mut eventlist = changelist;
-            kevent_ts(self.0, &changelist, &mut eventlist, None).map_err(io_err)?;
-            for ev in &eventlist {
-                // Explanation for ignoring EPIPE: https://github.com/tokio-rs/mio/issues/582
-                let (flags, data) = (ev.flags(), ev.data());
-                if flags.contains(EventFlag::EV_ERROR)
-                    && data != 0
-                    && data != Errno::ENOENT as _
-                    && data != Errno::EPIPE as _
-                {
-                    return Err(io::Error::from_raw_os_error(data as _));
-                }
-            }
+            kevent_ts(self.0, &changelist, &mut eventlist, None).map_err(io_err)
+        }
+        pub fn reregister(&self, fd: RawFd, key: usize, read: bool, write: bool) -> io::Result<()> {
             Ok(())
         }
         pub fn deregister(&self, fd: RawFd) -> io::Result<()> {
-            let flags = EventFlag::EV_RECEIPT | EventFlag::EV_DELETE;
+            let flags = EventFlag::EV_DELETE | EventFlag::EV_RECEIPT;
             let changelist = [
-                KEvent::new(fd as _, EventFilter::EVFILT_WRITE, flags, FFLAGS, 0, 0),
                 KEvent::new(fd as _, EventFilter::EVFILT_READ, flags, FFLAGS, 0, 0),
+                KEvent::new(fd as _, EventFilter::EVFILT_WRITE, flags, FFLAGS, 0, 0),
             ];
             let mut eventlist = changelist;
             kevent_ts(self.0, &changelist, &mut eventlist, None).map_err(io_err)?;
             for ev in &eventlist {
                 let (flags, data) = (ev.flags(), ev.data());
-                if flags.contains(EventFlag::EV_ERROR) && data != 0 && data != Errno::ENOENT as _ {
+                if flags.contains(EventFlag::EV_ERROR) && data != 0 {
                     return Err(io::Error::from_raw_os_error(data as _));
                 }
             }
@@ -633,9 +596,15 @@ mod sys {
             Events { list, len }
         }
         pub fn iter(&self) -> impl Iterator<Item = Event> + '_ {
+            // On some platforms, closing the read end of a pipe wakes up writers, but the
+            // event is reported as EVFILT_READ with the EV_EOF flag.
+            //
+            // https://github.com/golang/go/commit/23aad448b1e3f7c3b4ba2af90120bde91ac865b4
             self.list[..self.len].iter().map(|ev| Event {
                 readable: ev.filter() == EventFilter::EVFILT_READ,
-                writable: ev.filter() == EventFilter::EVFILT_WRITE,
+                writable: ev.filter() == EventFilter::EVFILT_WRITE
+                    || (ev.filter() == EventFilter::EVFILT_READ
+                        && ev.flags().contains(EventFlag::EV_EOF)),
                 key: ev.udata() as usize,
             })
         }
@@ -702,10 +671,10 @@ mod sys {
         }
     }
     fn read_flags() -> EventFlag {
-        EventFlag::IN | EventFlag::RDHUP
+        EventFlag::IN | EventFlag::RDHUP | EventFlag::HUP | EventFlag::ERR
     }
     fn write_flags() -> EventFlag {
-        EventFlag::OUT
+        EventFlag::OUT | EventFlag::HUP | EventFlag::ERR
     }
 
     pub struct Events(wepoll_binding::Events);

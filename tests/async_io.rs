@@ -1,12 +1,12 @@
+use std::future::Future;
+use std::io;
+use std::net::{TcpListener, TcpStream, UdpSocket};
 #[cfg(unix)]
 use std::os::unix::net::{UnixDatagram, UnixListener, UnixStream};
-use std::{
-    io,
-    net::{TcpListener, TcpStream, UdpSocket},
-};
+use std::time::Duration;
 
 use futures::{AsyncReadExt, AsyncWriteExt, StreamExt};
-use smol::{Async, Task};
+use smol::{Async, Task, Timer};
 #[cfg(unix)]
 use tempfile::tempdir;
 
@@ -17,12 +17,21 @@ Etiam vestibulum lorem vel urna tempor, eu fermentum odio aliquam.
 Aliquam consequat urna vitae ipsum pulvinar, in blandit purus eleifend.
 ";
 
+/// Runs future inside a local task.
+///
+/// The main future passed to `smol::run()` is sometimes polled even if it was not woken - e.g.
+/// this can happen when the executor is waiting on the reactor and then wakes up for whatever
+/// reason.
+fn run<T: 'static>(future: impl Future<Output = T> + 'static) -> T {
+    smol::run(async { Task::local(async { future.await }).await })
+}
+
 #[test]
 fn tcp_connect() -> io::Result<()> {
-    smol::run(async {
-        let listener = Async::<TcpListener>::bind("127.0.0.1:12300")?;
+    run(async {
+        let listener = Async::<TcpListener>::bind("127.0.0.1:0")?;
         let addr = listener.get_ref().local_addr()?;
-        let task = Task::spawn(async move { listener.accept().await });
+        let task = Task::local(async move { listener.accept().await });
 
         let stream2 = Async::<TcpStream>::connect(&addr).await?;
         let stream1 = task.await?.0;
@@ -46,10 +55,11 @@ fn tcp_connect() -> io::Result<()> {
 
 #[test]
 fn tcp_peek_read() -> io::Result<()> {
-    smol::run(async {
-        let listener = Async::<TcpListener>::bind("127.0.0.1:12301")?;
+    run(async {
+        let listener = Async::<TcpListener>::bind("127.0.0.1:0")?;
+        let addr = listener.get_ref().local_addr()?;
 
-        let mut stream = Async::<TcpStream>::connect("127.0.0.1:12301").await?;
+        let mut stream = Async::<TcpStream>::connect(addr).await?;
         stream.write_all(LOREM_IPSUM).await?;
 
         let mut buf = [0; 1024];
@@ -66,10 +76,56 @@ fn tcp_peek_read() -> io::Result<()> {
 }
 
 #[test]
+fn tcp_reader_hangup() -> io::Result<()> {
+    run(async {
+        let listener = Async::<TcpListener>::bind("127.0.0.1:0")?;
+        let addr = listener.get_ref().local_addr()?;
+        let task = Task::local(async move { listener.accept().await });
+
+        let mut stream2 = Async::<TcpStream>::connect(&addr).await?;
+        let stream1 = task.await?.0;
+
+        Task::local(async move {
+            Timer::after(Duration::from_secs(1)).await;
+            drop(stream1);
+        })
+        .detach();
+
+        while stream2.write_all(LOREM_IPSUM).await.is_ok() {}
+
+        Ok(())
+    })
+}
+
+#[test]
+fn tcp_writer_hangup() -> io::Result<()> {
+    run(async {
+        let listener = Async::<TcpListener>::bind("127.0.0.1:0")?;
+        let addr = listener.get_ref().local_addr()?;
+        let task = Task::local(async move { listener.accept().await });
+
+        let mut stream2 = Async::<TcpStream>::connect(&addr).await?;
+        let stream1 = task.await?.0;
+
+        Task::local(async move {
+            Timer::after(Duration::from_secs(1)).await;
+            drop(stream1);
+        })
+        .detach();
+
+        let mut v = vec![];
+        stream2.read_to_end(&mut v).await?;
+        assert!(v.is_empty());
+
+        Ok(())
+    })
+}
+
+#[test]
 fn udp_send_recv() -> io::Result<()> {
-    smol::run(async {
-        let socket1 = Async::<UdpSocket>::bind("127.0.0.1:12302")?;
-        let socket2 = Async::<UdpSocket>::bind("127.0.0.1:12303")?;
+    run(async {
+        let socket1 = Async::<UdpSocket>::bind("127.0.0.1:0")?;
+        let socket2 = Async::<UdpSocket>::bind("127.0.0.1:0")?;
         socket1.get_ref().connect(socket2.get_ref().local_addr()?)?;
 
         let mut buf = [0u8; 1024];
@@ -95,7 +151,7 @@ fn udp_send_recv() -> io::Result<()> {
 #[cfg(unix)]
 #[test]
 fn udp_connect() -> io::Result<()> {
-    smol::run(async {
+    run(async {
         let dir = tempdir()?;
         let path = dir.path().join("socket");
 
@@ -118,13 +174,13 @@ fn udp_connect() -> io::Result<()> {
 #[cfg(unix)]
 #[test]
 fn uds_connect() -> io::Result<()> {
-    smol::run(async {
+    run(async {
         let dir = tempdir()?;
         let path = dir.path().join("socket");
         let listener = Async::<UnixListener>::bind(&path)?;
 
         let addr = listener.get_ref().local_addr()?;
-        let task = Task::spawn(async move { listener.accept().await });
+        let task = Task::local(async move { listener.accept().await });
 
         let stream2 = Async::<UnixStream>::connect(addr.as_pathname().unwrap()).await?;
         let stream1 = task.await?.0;
@@ -151,7 +207,7 @@ fn uds_connect() -> io::Result<()> {
 #[cfg(unix)]
 #[test]
 fn uds_send_recv() -> io::Result<()> {
-    smol::run(async {
+    run(async {
         let (socket1, socket2) = Async::<UnixDatagram>::pair()?;
 
         socket1.send(LOREM_IPSUM).await?;
@@ -166,7 +222,7 @@ fn uds_send_recv() -> io::Result<()> {
 #[cfg(unix)]
 #[test]
 fn uds_send_to_recv_from() -> io::Result<()> {
-    smol::run(async {
+    run(async {
         let dir = tempdir()?;
         let path = dir.path().join("socket");
         let socket1 = Async::<UnixDatagram>::bind(&path)?;
@@ -176,6 +232,44 @@ fn uds_send_to_recv_from() -> io::Result<()> {
         let mut buf = [0; 1024];
         let n = socket1.recv_from(&mut buf).await?.0;
         assert_eq!(&buf[..n], LOREM_IPSUM);
+
+        Ok(())
+    })
+}
+
+#[cfg(unix)]
+#[test]
+fn uds_reader_hangup() -> io::Result<()> {
+    run(async {
+        let (socket1, mut socket2) = Async::<UnixStream>::pair()?;
+
+        Task::local(async move {
+            Timer::after(Duration::from_secs(1)).await;
+            drop(socket1);
+        })
+        .detach();
+
+        while socket2.write_all(LOREM_IPSUM).await.is_ok() {}
+
+        Ok(())
+    })
+}
+
+#[cfg(unix)]
+#[test]
+fn uds_writer_hangup() -> io::Result<()> {
+    run(async {
+        let (socket1, mut socket2) = Async::<UnixStream>::pair()?;
+
+        Task::local(async move {
+            Timer::after(Duration::from_secs(1)).await;
+            drop(socket1);
+        })
+        .detach();
+
+        let mut v = vec![];
+        socket2.read_to_end(&mut v).await?;
+        assert!(v.is_empty());
 
         Ok(())
     })
