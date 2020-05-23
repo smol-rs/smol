@@ -543,8 +543,8 @@ mod sys {
             fcntl(fd, FcntlArg::F_SETFD(FdFlag::FD_CLOEXEC)).map_err(io_err)?;
             Ok(Reactor(fd))
         }
-        pub fn register(&self, _fd: RawFd, _key: usize) -> io::Result<()> {
-            let flags = EventFlag::ADD | EventFlag::EV_CLEAR;
+        pub fn register(&self, fd: RawFd, key: usize) -> io::Result<()> {
+            let flags = EventFlag::EV_ADD | EventFlag::EV_CLEAR;
             let udata = key as _;
             let changelist = [
                 KEvent::new(fd as _, EventFilter::EVFILT_READ, flags, FFLAGS, 0, udata),
@@ -553,7 +553,13 @@ mod sys {
             let mut eventlist = changelist;
             kevent_ts(self.0, &changelist, &mut eventlist, None).map_err(io_err)
         }
-        pub fn reregister(&self, fd: RawFd, key: usize, read: bool, write: bool) -> io::Result<()> {
+        pub fn reregister(
+            &self,
+            _fd: RawFd,
+            _key: usize,
+            _read: bool,
+            _write: bool,
+        ) -> io::Result<()> {
             Ok(())
         }
         pub fn deregister(&self, fd: RawFd) -> io::Result<()> {
