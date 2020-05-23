@@ -32,12 +32,13 @@ use std::time::{Duration, Instant};
 
 use crossbeam_queue::ArrayQueue;
 use futures_util::future;
-#[cfg(unix)]
-use nix::fcntl::{fcntl, FcntlArg, OFlag};
 use once_cell::sync::Lazy;
 use slab::Slab;
 #[cfg(windows)]
 use socket2::Socket;
+
+#[cfg(unix)]
+use crate::sys::fcntl::{fcntl, FcntlArg, OFlag};
 
 use crate::io_event::IoEvent;
 
@@ -446,7 +447,7 @@ mod sys {
     use std::os::unix::io::RawFd;
     use std::time::Duration;
 
-    use nix::sys::epoll::{
+    use crate::sys::epoll::{
         epoll_create1, epoll_ctl, epoll_wait, EpollCreateFlags, EpollEvent, EpollFlags, EpollOp,
     };
 
@@ -537,10 +538,10 @@ mod sys {
     use std::os::unix::io::RawFd;
     use std::time::Duration;
 
-    use nix::errno::Errno;
-    use nix::fcntl::{fcntl, FcntlArg, FdFlag};
-    use nix::libc;
-    use nix::sys::event::{kevent_ts, kqueue, EventFilter, EventFlag, FilterFlag, KEvent};
+    use crate::sys::errno::Errno;
+    use crate::sys::event::{kevent_ts, kqueue, EventFilter, EventFlag, FilterFlag, KEvent};
+    use crate::sys::fcntl::{fcntl, FcntlArg, FdFlag};
+    use crate::sys::libc;
 
     use super::io_err;
 

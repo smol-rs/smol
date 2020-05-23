@@ -678,7 +678,7 @@ impl Async<TcpStream> {
         socket.connect(&addr.into()).or_else(|err| {
             // Check for EINPROGRESS on Unix and WSAEWOULDBLOCK on Windows.
             #[cfg(unix)]
-            let in_progress = err.raw_os_error() == Some(nix::libc::EINPROGRESS);
+            let in_progress = err.raw_os_error() == Some(crate::sys::libc::EINPROGRESS);
             #[cfg(windows)]
             let in_progress = err.kind() == io::ErrorKind::WouldBlock;
 
@@ -1006,7 +1006,7 @@ impl Async<UnixStream> {
         socket
             .connect(&socket2::SockAddr::unix(path)?)
             .or_else(|err| {
-                if err.raw_os_error() == Some(nix::libc::EINPROGRESS) {
+                if err.raw_os_error() == Some(crate::sys::libc::EINPROGRESS) {
                     Ok(())
                 } else {
                     Err(err)

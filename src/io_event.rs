@@ -114,7 +114,7 @@ fn notifier() -> io::Result<(Socket, Socket)> {
 #[cfg(target_os = "linux")]
 mod linux {
     use super::*;
-    use nix::sys::eventfd::{eventfd, EfdFlags};
+    use crate::sys::linux::{self, eventfd, EfdFlags};
     use std::os::unix::io::AsRawFd;
 
     pub(crate) struct EventFd(std::os::unix::io::RawFd);
@@ -126,7 +126,7 @@ mod linux {
         }
 
         pub fn try_clone(&self) -> Result<EventFd, io::Error> {
-            nix::unistd::dup(self.0).map(EventFd).map_err(io_err)
+            linux::unistd::dup(self.0).map(EventFd).map_err(io_err)
         }
     }
 
@@ -138,13 +138,13 @@ mod linux {
 
     impl Drop for EventFd {
         fn drop(&mut self) {
-            let _ = nix::unistd::close(self.0);
+            let _ = linux::unistd::close(self.0);
         }
     }
 
-    fn io_err(err: nix::Error) -> io::Error {
+    fn io_err(err: linux::Error) -> io::Error {
         match err {
-            nix::Error::Sys(code) => code.into(),
+            linux::Error::Sys(code) => code.into(),
             err => io::Error::new(io::ErrorKind::Other, Box::new(err)),
         }
     }
@@ -152,14 +152,14 @@ mod linux {
     impl Read for &EventFd {
         #[inline]
         fn read(&mut self, buf: &mut [u8]) -> std::result::Result<usize, std::io::Error> {
-            nix::unistd::read(self.0, buf).map_err(io_err)
+            linux::unistd::read(self.0, buf).map_err(io_err)
         }
     }
 
     impl Write for &EventFd {
         #[inline]
         fn write(&mut self, buf: &[u8]) -> std::result::Result<usize, std::io::Error> {
-            nix::unistd::write(self.0, buf).map_err(io_err)
+            linux::unistd::write(self.0, buf).map_err(io_err)
         }
 
         #[inline]
