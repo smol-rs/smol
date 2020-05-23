@@ -85,13 +85,13 @@ fn tcp_reader_hangup() -> io::Result<()> {
         let mut stream2 = Async::<TcpStream>::connect(&addr).await?;
         let stream1 = task.await?.0;
 
-        Task::local(async move {
+        let task = Task::local(async move {
             Timer::after(Duration::from_secs(1)).await;
             drop(stream1);
-        })
-        .detach();
+        });
 
         while stream2.write_all(LOREM_IPSUM).await.is_ok() {}
+        task.await;
 
         Ok(())
     })
@@ -107,16 +107,16 @@ fn tcp_writer_hangup() -> io::Result<()> {
         let mut stream2 = Async::<TcpStream>::connect(&addr).await?;
         let stream1 = task.await?.0;
 
-        Task::local(async move {
+        let task = Task::local(async move {
             Timer::after(Duration::from_secs(1)).await;
             drop(stream1);
-        })
-        .detach();
+        });
 
         let mut v = vec![];
         stream2.read_to_end(&mut v).await?;
         assert!(v.is_empty());
 
+        task.await;
         Ok(())
     })
 }
@@ -243,13 +243,13 @@ fn uds_reader_hangup() -> io::Result<()> {
     run(async {
         let (socket1, mut socket2) = Async::<UnixStream>::pair()?;
 
-        Task::local(async move {
+        let task = Task::local(async move {
             Timer::after(Duration::from_secs(1)).await;
             drop(socket1);
-        })
-        .detach();
+        });
 
         while socket2.write_all(LOREM_IPSUM).await.is_ok() {}
+        task.await;
 
         Ok(())
     })
@@ -261,16 +261,16 @@ fn uds_writer_hangup() -> io::Result<()> {
     run(async {
         let (socket1, mut socket2) = Async::<UnixStream>::pair()?;
 
-        Task::local(async move {
+        let task = Task::local(async move {
             Timer::after(Duration::from_secs(1)).await;
             drop(socket1);
-        })
-        .detach();
+        });
 
         let mut v = vec![];
         socket2.read_to_end(&mut v).await?;
         assert!(v.is_empty());
 
+        task.await;
         Ok(())
     })
 }
