@@ -23,8 +23,8 @@ use std::future::Future;
 use std::num::Wrapping;
 use std::panic;
 
-use crossbeam::deque;
-use crossbeam::sync::ShardedLock;
+use crossbeam_deque as deque;
+use crossbeam_utils::sync::ShardedLock;
 use once_cell::sync::Lazy;
 use scoped_tls_hkt::scoped_thread_local;
 use slab::Slab;

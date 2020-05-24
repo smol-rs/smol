@@ -30,7 +30,7 @@ use std::sync::Arc;
 use std::task::{Poll, Waker};
 use std::time::{Duration, Instant};
 
-use crossbeam::queue::ArrayQueue;
+use crossbeam_queue::ArrayQueue;
 use futures_util::future;
 #[cfg(unix)]
 use nix::fcntl::{fcntl, FcntlArg, OFlag};

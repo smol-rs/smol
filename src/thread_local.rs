@@ -10,7 +10,7 @@ use std::future::Future;
 use std::sync::Arc;
 use std::thread::{self, ThreadId};
 
-use crossbeam::queue::SegQueue;
+use crossbeam_queue::SegQueue;
 use scoped_tls_hkt::scoped_thread_local;
 
 use crate::io_event::IoEvent;

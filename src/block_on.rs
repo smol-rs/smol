@@ -11,7 +11,7 @@ use std::cell::RefCell;
 use std::future::Future;
 use std::task::{Context, Poll, Waker};
 
-use crossbeam::sync::Parker;
+use crossbeam_utils::sync::Parker;
 
 use crate::context;
 
