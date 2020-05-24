@@ -127,7 +127,7 @@ mod linux {
         }
 
         pub fn try_clone(&self) -> Result<EventFd, io::Error> {
-            unistd::dup(self.0).map(EventFd).map_err(io_err)
+            unistd::dup(self.0).map(EventFd)
         }
     }
 
@@ -153,14 +153,14 @@ mod linux {
     impl Read for &EventFd {
         #[inline]
         fn read(&mut self, buf: &mut [u8]) -> std::result::Result<usize, std::io::Error> {
-            unistd::read(self.0, buf).map_err(io_err)
+            unistd::read(self.0, buf)
         }
     }
 
     impl Write for &EventFd {
         #[inline]
         fn write(&mut self, buf: &[u8]) -> std::result::Result<usize, std::io::Error> {
-            unistd::write(self.0, buf).map_err(io_err)
+            unistd::write(self.0, buf)
         }
 
         #[inline]

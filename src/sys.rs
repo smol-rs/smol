@@ -5,7 +5,43 @@ pub mod eventfd {
 
 #[cfg(target_os = "linux")]
 pub mod unistd {
-    pub use nix::unistd::{close, dup, read, write};
+    use super::check_err;
+    use std::os::unix::io::RawFd;
+
+    pub fn close(fd: RawFd) -> Result<(), std::io::Error> {
+        let res = unsafe { libc::close(fd) };
+
+        check_err(res).map(drop)
+    }
+
+    pub fn dup(oldfd: RawFd) -> Result<RawFd, std::io::Error> {
+        let res = unsafe { libc::dup(oldfd) };
+        check_err(res)
+    }
+
+    pub fn read(fd: RawFd, buf: &mut [u8]) -> Result<usize, std::io::Error> {
+        let res = unsafe {
+            libc::read(
+                fd,
+                buf.as_mut_ptr() as *mut libc::c_void,
+                buf.len() as libc::size_t,
+            )
+        };
+
+        check_err(res as _).map(|r| r as usize)
+    }
+
+    pub fn write(fd: RawFd, buf: &[u8]) -> Result<usize, std::io::Error> {
+        let res = unsafe {
+            libc::write(
+                fd,
+                buf.as_ptr() as *const libc::c_void,
+                buf.len() as libc::size_t,
+            )
+        };
+
+        check_err(res as _).map(|r| r as usize)
+    }
 }
 
 #[cfg(target_os = "linux")]
