@@ -551,7 +551,8 @@ mod sys {
                 KEvent::new(fd as _, EventFilter::EVFILT_WRITE, flags, FFLAGS, 0, udata),
             ];
             let mut eventlist = changelist;
-            kevent_ts(self.0, &changelist, &mut eventlist, None).map_err(io_err)
+            kevent_ts(self.0, &changelist, &mut eventlist, None).map_err(io_err)?;
+            Ok(())
         }
         pub fn reregister(
             &self,
