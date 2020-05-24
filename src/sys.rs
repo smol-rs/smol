@@ -85,6 +85,7 @@ pub mod fcntl {
     }
 }
 
+#[cfg(unix)]
 fn check_err(res: libc::c_int) -> Result<libc::c_int, std::io::Error> {
     if res == -1 {
         return Err(std::io::Error::last_os_error());

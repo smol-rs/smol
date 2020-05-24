@@ -642,7 +642,7 @@ mod sys {
             Ok(Reactor(Epoll::new()?))
         }
         pub fn register(&self, sock: RawSocket, key: usize) -> io::Result<()> {
-            self.0.register(&As(sock), 0, key as u64)
+            self.0.register(&As(sock), EventFlag::empty(), key as u64)
         }
         pub fn reregister(
             &self,
@@ -651,7 +651,7 @@ mod sys {
             read: bool,
             write: bool,
         ) -> io::Result<()> {
-            let mut flags = libc::ONESHOT;
+            let mut flags = EventFlag::ONESHOT;
             if read {
                 flags |= read_flags();
             }
@@ -682,10 +682,10 @@ mod sys {
         }
     }
     fn read_flags() -> EventFlag {
-        libc::IN | libc::RDHUP
+        EventFlag::IN | EventFlag::RDHUP
     }
     fn write_flags() -> EventFlag {
-        libc::OUT
+        EventFlag::OUT
     }
 
     pub struct Events(wepoll_binding::Events);
