@@ -38,7 +38,7 @@ use slab::Slab;
 use socket2::Socket;
 
 #[cfg(unix)]
-use crate::sys::fcntl::{fcntl, FcntlArg, OFlag};
+use crate::sys::fcntl::{fcntl, FcntlArg};
 
 use crate::io_event::IoEvent;
 
@@ -104,9 +104,9 @@ impl Reactor {
         // Put the I/O handle in non-blocking mode.
         #[cfg(unix)]
         {
-            let flags = fcntl(raw, FcntlArg::F_GETFL).map_err(io_err)?;
-            let flags = OFlag::from_bits_truncate(flags) | OFlag::O_NONBLOCK;
-            fcntl(raw, FcntlArg::F_SETFL(flags)).map_err(io_err)?;
+            let flags = fcntl(raw, FcntlArg::F_GETFL)?;
+            let flags = flags | libc::O_NONBLOCK;
+            fcntl(raw, FcntlArg::F_SETFL(flags))?;
         }
         #[cfg(windows)]
         {
@@ -538,9 +538,8 @@ mod sys {
     use std::os::unix::io::RawFd;
     use std::time::Duration;
 
-    use crate::sys::errno::Errno;
     use crate::sys::event::{kevent_ts, kqueue, EventFilter, EventFlag, FilterFlag, KEvent};
-    use crate::sys::fcntl::{fcntl, FcntlArg, FdFlag};
+    use crate::sys::fcntl::{fcntl, FcntlArg};
     use crate::sys::libc;
 
     use super::io_err;
@@ -549,7 +548,7 @@ mod sys {
     impl Reactor {
         pub fn new() -> io::Result<Reactor> {
             let fd = kqueue().map_err(io_err)?;
-            fcntl(fd, FcntlArg::F_SETFD(FdFlag::FD_CLOEXEC)).map_err(io_err)?;
+            fcntl(fd, FcntlArg::F_SETFD(libc::FD_CLOEXEC))?;
             Ok(Reactor(fd))
         }
         pub fn register(&self, _fd: RawFd, _key: usize) -> io::Result<()> {
@@ -594,8 +593,8 @@ mod sys {
                 let (flags, data) = (ev.flags(), ev.data());
                 if flags.contains(EventFlag::EV_ERROR)
                     && data != 0
-                    && data != Errno::ENOENT as _
-                    && data != Errno::EPIPE as _
+                    && data != libc::ENOENT as _
+                    && data != libc::EPIPE as _
                 {
                     return Err(io::Error::from_raw_os_error(data as _));
                 }
@@ -612,7 +611,7 @@ mod sys {
             kevent_ts(self.0, &changelist, &mut eventlist, None).map_err(io_err)?;
             for ev in &eventlist {
                 let (flags, data) = (ev.flags(), ev.data());
-                if flags.contains(EventFlag::EV_ERROR) && data != 0 && data != Errno::ENOENT as _ {
+                if flags.contains(EventFlag::EV_ERROR) && data != 0 && data != libc::ENOENT as _ {
                     return Err(io::Error::from_raw_os_error(data as _));
                 }
             }
