@@ -248,6 +248,59 @@ pub mod epoll {
     use super::check_err;
     use std::os::unix::io::RawFd;
 
+    #[macro_use]
+    mod dlsym {
+        // Based on https://github.com/tokio-rs/mio/blob/v0.6.x/src/sys/unix/dlsym.rs
+        // I feel very sad including this code, but I have not found a better way
+        // to check for the existence of a symbol in Rust.
+
+        use std::marker;
+        use std::mem;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        macro_rules! dlsym {
+            (fn $name:ident($($t:ty),*) -> $ret:ty) => (
+                #[allow(bad_style)]
+                static $name: $crate::sys::epoll::dlsym::DlSym<unsafe extern fn($($t),*) -> $ret> =
+                    $crate::sys::epoll::dlsym::DlSym {
+                        name: concat!(stringify!($name), "\0"),
+                        addr: std::sync::atomic::AtomicUsize::new(0),
+                        _marker: std::marker::PhantomData,
+                    };
+            )
+        }
+
+        pub struct DlSym<F> {
+            pub name: &'static str,
+            pub addr: AtomicUsize,
+            pub _marker: marker::PhantomData<F>,
+        }
+
+        impl<F> DlSym<F> {
+            pub fn get(&self) -> Option<&F> {
+                assert_eq!(mem::size_of::<F>(), mem::size_of::<usize>());
+                unsafe {
+                    if self.addr.load(Ordering::SeqCst) == 0 {
+                        self.addr.store(fetch(self.name), Ordering::SeqCst);
+                    }
+                    if self.addr.load(Ordering::SeqCst) == 1 {
+                        None
+                    } else {
+                        mem::transmute::<&AtomicUsize, Option<&F>>(&self.addr)
+                    }
+                }
+            }
+        }
+
+        unsafe fn fetch(name: &str) -> usize {
+            assert_eq!(name.as_bytes()[name.len() - 1], 0);
+            match libc::dlsym(libc::RTLD_DEFAULT, name.as_ptr() as *const _) as usize {
+                0 => 1,
+                n => n,
+            }
+        }
+    }
+
     #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
     #[repr(i32)]
     pub enum EpollOp {
@@ -263,13 +316,30 @@ pub mod epoll {
         // 21. But `EPOLL_CLOEXEC` is an alias for `O_CLOEXEC` on that platform,
         // so we use it instead.
         #[cfg(target_os = "android")]
-        let epoll_create1_flag = libc::O_CLOEXEC;
+        const CLOEXEC: libc::c_int = libc::O_CLOEXEC;
         #[cfg(not(target_os = "android"))]
-        let epoll_create1_flag = libc::EPOLL_CLOEXEC;
+        const CLOEXEC: libc::c_int = libc::EPOLL_CLOEXEC;
 
-        let res = unsafe { libc::epoll_create1(epoll_create1_flag) };
+        let fd = unsafe {
+            // Emulate epoll_create1 if not available.
 
-        check_err(res)
+            dlsym!(fn epoll_create1(libc::c_int) -> libc::c_int);
+            match epoll_create1.get() {
+                Some(epoll_create1_fn) => check_err(epoll_create1_fn(CLOEXEC))?,
+                None => {
+                    let fd = check_err(libc::epoll_create(1024))?;
+                    drop(set_cloexec(fd));
+                    fd
+                }
+            }
+        };
+
+        Ok(fd)
+    }
+
+    unsafe fn set_cloexec(fd: libc::c_int) -> Result<(), std::io::Error> {
+        let flags = libc::fcntl(fd, libc::F_GETFD);
+        check_err(libc::fcntl(fd, libc::F_SETFD, flags | libc::FD_CLOEXEC)).map(|_| ())
     }
 
     pub fn epoll_ctl<'a, T>(
