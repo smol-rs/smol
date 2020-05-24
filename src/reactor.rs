@@ -430,15 +430,6 @@ impl Source {
     }
 }
 
-/// Converts a [`nix::Error`] into [`io::Error`].
-#[cfg(unix)]
-fn io_err(err: nix::Error) -> io::Error {
-    match err {
-        nix::Error::Sys(code) => code.into(),
-        err => io::Error::new(io::ErrorKind::Other, Box::new(err)),
-    }
-}
-
 /// Raw bindings to epoll (Linux, Android, illumos).
 #[cfg(any(target_os = "linux", target_os = "android", target_os = "illumos"))]
 mod sys {
@@ -448,23 +439,21 @@ mod sys {
     use std::time::Duration;
 
     use crate::sys::epoll::{
-        epoll_create1, epoll_ctl, epoll_wait, EpollCreateFlags, EpollEvent, EpollFlags, EpollOp,
+        epoll_create1, epoll_ctl, epoll_wait, EpollEvent, EpollFlags, EpollOp,
     };
-
-    use super::io_err;
 
     pub struct Reactor(RawFd);
     impl Reactor {
         pub fn new() -> io::Result<Reactor> {
-            let epoll_fd = epoll_create1(EpollCreateFlags::EPOLL_CLOEXEC).map_err(io_err)?;
+            let epoll_fd = epoll_create1()?;
             Ok(Reactor(epoll_fd))
         }
         pub fn register(&self, fd: RawFd, key: usize) -> io::Result<()> {
-            let ev = &mut EpollEvent::new(EpollFlags::empty(), key as u64);
-            epoll_ctl(self.0, EpollOp::EpollCtlAdd, fd, Some(ev)).map_err(io_err)
+            let ev = &mut EpollEvent::new(0, key as u64);
+            epoll_ctl(self.0, EpollOp::EpollCtlAdd, fd, Some(ev))
         }
         pub fn reregister(&self, fd: RawFd, key: usize, read: bool, write: bool) -> io::Result<()> {
-            let mut flags = EpollFlags::EPOLLONESHOT;
+            let mut flags = libc::EPOLLONESHOT;
             if read {
                 flags |= read_flags();
             }
@@ -472,10 +461,10 @@ mod sys {
                 flags |= write_flags();
             }
             let ev = &mut EpollEvent::new(flags, key as u64);
-            epoll_ctl(self.0, EpollOp::EpollCtlMod, fd, Some(ev)).map_err(io_err)
+            epoll_ctl(self.0, EpollOp::EpollCtlMod, fd, Some(ev))
         }
         pub fn deregister(&self, fd: RawFd) -> io::Result<()> {
-            epoll_ctl(self.0, EpollOp::EpollCtlDel, fd, None).map_err(io_err)
+            epoll_ctl(self.0, EpollOp::EpollCtlDel, fd, None)
         }
         pub fn wait(&self, events: &mut Events, timeout: Option<Duration>) -> io::Result<usize> {
             let timeout_ms = timeout
@@ -488,15 +477,15 @@ mod sys {
                 })
                 .and_then(|t| t.as_millis().try_into().ok())
                 .unwrap_or(-1);
-            events.len = epoll_wait(self.0, &mut events.list, timeout_ms).map_err(io_err)?;
+            events.len = epoll_wait(self.0, &mut events.list, timeout_ms)?;
             Ok(events.len)
         }
     }
     fn read_flags() -> EpollFlags {
-        EpollFlags::EPOLLIN | EpollFlags::EPOLLRDHUP
+        libc::EPOLLIN | libc::EPOLLRDHUP
     }
     fn write_flags() -> EpollFlags {
-        EpollFlags::EPOLLOUT
+        libc::EPOLLOUT
     }
 
     pub struct Events {
@@ -511,8 +500,8 @@ mod sys {
         }
         pub fn iter(&self) -> impl Iterator<Item = Event> + '_ {
             self.list[..self.len].iter().map(|ev| Event {
-                readable: ev.events().intersects(read_flags()),
-                writable: ev.events().intersects(write_flags()),
+                readable: (ev.events() & read_flags()) > 0,
+                writable: (ev.events() & write_flags()) > 0,
                 key: ev.data() as usize,
             })
         }
@@ -540,7 +529,6 @@ mod sys {
 
     use crate::sys::event::{kevent_ts, kqueue, FilterFlag, KEvent};
     use crate::sys::fcntl::{fcntl, FcntlArg};
-    use crate::sys::libc;
 
     pub struct Reactor(RawFd);
     impl Reactor {

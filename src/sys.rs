@@ -53,9 +53,6 @@ pub mod unistd {
     }
 }
 
-#[cfg(target_os = "linux")]
-pub use nix::Error;
-
 #[cfg(unix)]
 pub mod fcntl {
     use super::check_err;
@@ -153,7 +150,7 @@ pub mod event {
     #[allow(non_camel_case_types)]
     type type_of_data = libc::int64_t;
 
-    #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+    #[derive(Clone, Copy)]
     #[repr(C)]
     pub struct KEvent(libc::kevent);
 
@@ -244,13 +241,103 @@ pub mod event {
     }
 }
 
-#[cfg(unix)]
-pub use libc;
-
 #[cfg(any(target_os = "linux", target_os = "android", target_os = "illumos"))]
 /// Epoll.
 pub mod epoll {
-    pub use nix::sys::epoll::{
-        epoll_create1, epoll_ctl, epoll_wait, EpollCreateFlags, EpollEvent, EpollFlags, EpollOp,
-    };
+    use super::check_err;
+    use std::os::unix::io::RawFd;
+
+    #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+    #[repr(i32)]
+    pub enum EpollOp {
+        EpollCtlAdd = libc::EPOLL_CTL_ADD,
+        EpollCtlDel = libc::EPOLL_CTL_DEL,
+        EpollCtlMod = libc::EPOLL_CTL_MOD,
+    }
+
+    pub type EpollFlags = libc::c_int;
+
+    pub fn epoll_create1() -> Result<RawFd, std::io::Error> {
+        // According to libuv, `EPOLL_CLOEXEC` is not defined on Android API <
+        // 21. But `EPOLL_CLOEXEC` is an alias for `O_CLOEXEC` on that platform,
+        // so we use it instead.
+        #[cfg(target_os = "android")]
+        let epoll_create1_flag = libc::O_CLOEXEC;
+        #[cfg(not(target_os = "android"))]
+        let epoll_create1_flag = libc::EPOLL_CLOEXEC;
+
+        let res = unsafe { libc::epoll_create1(epoll_create1_flag) };
+
+        check_err(res)
+    }
+
+    pub fn epoll_ctl<'a, T>(
+        epfd: RawFd,
+        op: EpollOp,
+        fd: RawFd,
+        event: T,
+    ) -> Result<(), std::io::Error>
+    where
+        T: Into<Option<&'a mut EpollEvent>>,
+    {
+        let mut event: Option<&mut EpollEvent> = event.into();
+        if event.is_none() && op != EpollOp::EpollCtlDel {
+            Err(std::io::Error::from_raw_os_error(libc::EINVAL))
+        } else {
+            let res = unsafe {
+                if let Some(ref mut event) = event {
+                    libc::epoll_ctl(epfd, op as libc::c_int, fd, &mut event.event)
+                } else {
+                    libc::epoll_ctl(epfd, op as libc::c_int, fd, std::ptr::null_mut())
+                }
+            };
+            check_err(res).map(drop)
+        }
+    }
+
+    pub fn epoll_wait(
+        epfd: RawFd,
+        events: &mut [EpollEvent],
+        timeout_ms: isize,
+    ) -> Result<usize, std::io::Error> {
+        let res = unsafe {
+            libc::epoll_wait(
+                epfd,
+                events.as_mut_ptr() as *mut libc::epoll_event,
+                events.len() as libc::c_int,
+                timeout_ms as libc::c_int,
+            )
+        };
+
+        check_err(res).map(|r| r as usize)
+    }
+
+    #[derive(Clone, Copy)]
+    #[repr(transparent)]
+    pub struct EpollEvent {
+        event: libc::epoll_event,
+    }
+
+    impl EpollEvent {
+        pub fn new(events: EpollFlags, data: u64) -> Self {
+            EpollEvent {
+                event: libc::epoll_event {
+                    events: events as u32,
+                    u64: data,
+                },
+            }
+        }
+
+        pub fn empty() -> Self {
+            unsafe { std::mem::zeroed::<EpollEvent>() }
+        }
+
+        pub fn events(&self) -> EpollFlags {
+            self.event.events as libc::c_int
+        }
+
+        pub fn data(&self) -> u64 {
+            self.event.u64
+        }
+    }
 }
