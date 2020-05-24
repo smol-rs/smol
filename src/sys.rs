@@ -106,7 +106,142 @@ fn check_err(res: libc::c_int) -> Result<libc::c_int, std::io::Error> {
 ))]
 /// Kqueue.
 pub mod event {
-    pub use nix::sys::event::{kevent_ts, kqueue, EventFilter, EventFlag, FilterFlag, KEvent};
+    use super::check_err;
+    use std::os::unix::io::RawFd;
+
+    #[cfg(any(
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "freebsd",
+        target_os = "dragonfly",
+        target_os = "openbsd"
+    ))]
+    #[allow(non_camel_case_types)]
+    type type_of_nchanges = libc::c_int;
+    #[cfg(target_os = "netbsd")]
+    #[allow(non_camel_case_types)]
+    type type_of_nchanges = libc::size_t;
+
+    #[cfg(target_os = "netbsd")]
+    #[allow(non_camel_case_types)]
+    type type_of_event_filter = u32;
+    #[cfg(not(target_os = "netbsd"))]
+    #[allow(non_camel_case_types)]
+    type type_of_event_filter = i16;
+
+    #[cfg(any(
+        target_os = "dragonfly",
+        target_os = "freebsd",
+        target_os = "ios",
+        target_os = "macos",
+        target_os = "openbsd"
+    ))]
+    #[allow(non_camel_case_types)]
+    type type_of_udata = *mut libc::c_void;
+    #[cfg(any(
+        target_os = "dragonfly",
+        target_os = "freebsd",
+        target_os = "ios",
+        target_os = "macos"
+    ))]
+    #[allow(non_camel_case_types)]
+    type type_of_data = libc::intptr_t;
+    #[cfg(any(target_os = "netbsd"))]
+    #[allow(non_camel_case_types)]
+    type type_of_udata = libc::intptr_t;
+    #[cfg(any(target_os = "netbsd", target_os = "openbsd"))]
+    #[allow(non_camel_case_types)]
+    type type_of_data = libc::int64_t;
+
+    #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+    #[repr(C)]
+    pub struct KEvent(libc::kevent);
+
+    unsafe impl Send for KEvent {}
+
+    impl KEvent {
+        pub fn new(
+            ident: libc::uintptr_t,
+            filter: EventFilter,
+            flags: EventFlag,
+            fflags: FilterFlag,
+            data: libc::intptr_t,
+            udata: libc::intptr_t,
+        ) -> KEvent {
+            KEvent(libc::kevent {
+                ident,
+                filter: filter as type_of_event_filter,
+                flags,
+                fflags,
+                data: data as type_of_data,
+                udata: udata as type_of_udata,
+            })
+        }
+
+        pub fn filter(&self) -> EventFilter {
+            unsafe { std::mem::transmute(self.0.filter as type_of_event_filter) }
+        }
+
+        pub fn flags(&self) -> EventFlag {
+            self.0.flags
+        }
+
+        pub fn data(&self) -> libc::intptr_t {
+            self.0.data as libc::intptr_t
+        }
+
+        pub fn udata(&self) -> libc::intptr_t {
+            self.0.udata as libc::intptr_t
+        }
+    }
+
+    #[cfg(any(
+        target_os = "dragonfly",
+        target_os = "freebsd",
+        target_os = "ios",
+        target_os = "macos",
+        target_os = "openbsd"
+    ))]
+    pub type EventFlag = u16;
+    #[cfg(any(target_os = "netbsd"))]
+    pub type EventFlag = u32;
+
+    pub type FilterFlag = u32;
+
+    #[cfg(target_os = "netbsd")]
+    pub type EventFilter = u32;
+    #[cfg(not(target_os = "netbsd"))]
+    pub type EventFilter = i16;
+
+    pub fn kqueue() -> Result<RawFd, std::io::Error> {
+        let res = unsafe { libc::kqueue() };
+
+        check_err(res)
+    }
+
+    pub fn kevent_ts(
+        kq: RawFd,
+        changelist: &[KEvent],
+        eventlist: &mut [KEvent],
+        timeout_opt: Option<libc::timespec>,
+    ) -> Result<usize, std::io::Error> {
+        let res = unsafe {
+            libc::kevent(
+                kq,
+                changelist.as_ptr() as *const libc::kevent,
+                changelist.len() as type_of_nchanges,
+                eventlist.as_mut_ptr() as *mut libc::kevent,
+                eventlist.len() as type_of_nchanges,
+                if let Some(ref timeout) = timeout_opt {
+                    timeout as *const libc::timespec
+                } else {
+                    std::ptr::null()
+                },
+            )
+        };
+
+        check_err(res).map(|r| r as usize)
+    }
 }
 
 #[cfg(unix)]

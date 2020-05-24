@@ -538,16 +538,14 @@ mod sys {
     use std::os::unix::io::RawFd;
     use std::time::Duration;
 
-    use crate::sys::event::{kevent_ts, kqueue, EventFilter, EventFlag, FilterFlag, KEvent};
+    use crate::sys::event::{kevent_ts, kqueue, FilterFlag, KEvent};
     use crate::sys::fcntl::{fcntl, FcntlArg};
     use crate::sys::libc;
-
-    use super::io_err;
 
     pub struct Reactor(RawFd);
     impl Reactor {
         pub fn new() -> io::Result<Reactor> {
-            let fd = kqueue().map_err(io_err)?;
+            let fd = kqueue()?;
             fcntl(fd, FcntlArg::F_SETFD(libc::FD_CLOEXEC))?;
             Ok(Reactor(fd))
         }
@@ -555,43 +553,29 @@ mod sys {
             Ok(())
         }
         pub fn reregister(&self, fd: RawFd, key: usize, read: bool, write: bool) -> io::Result<()> {
-            let mut read_flags = EventFlag::EV_ONESHOT | EventFlag::EV_RECEIPT;
-            let mut write_flags = EventFlag::EV_ONESHOT | EventFlag::EV_RECEIPT;
+            let mut read_flags = libc::EV_ONESHOT | libc::EV_RECEIPT;
+            let mut write_flags = libc::EV_ONESHOT | libc::EV_RECEIPT;
             if read {
-                read_flags |= EventFlag::EV_ADD;
+                read_flags |= libc::EV_ADD;
             } else {
-                read_flags |= EventFlag::EV_DELETE;
+                read_flags |= libc::EV_DELETE;
             }
             if write {
-                write_flags |= EventFlag::EV_ADD;
+                write_flags |= libc::EV_ADD;
             } else {
-                write_flags |= EventFlag::EV_DELETE;
+                write_flags |= libc::EV_DELETE;
             }
             let udata = key as _;
             let changelist = [
-                KEvent::new(
-                    fd as _,
-                    EventFilter::EVFILT_READ,
-                    read_flags,
-                    FFLAGS,
-                    0,
-                    udata,
-                ),
-                KEvent::new(
-                    fd as _,
-                    EventFilter::EVFILT_WRITE,
-                    write_flags,
-                    FFLAGS,
-                    0,
-                    udata,
-                ),
+                KEvent::new(fd as _, libc::EVFILT_READ, read_flags, FFLAGS, 0, udata),
+                KEvent::new(fd as _, libc::EVFILT_WRITE, write_flags, FFLAGS, 0, udata),
             ];
             let mut eventlist = changelist;
-            kevent_ts(self.0, &changelist, &mut eventlist, None).map_err(io_err)?;
+            kevent_ts(self.0, &changelist, &mut eventlist, None)?;
             for ev in &eventlist {
                 // Explanation for ignoring EPIPE: https://github.com/tokio-rs/mio/issues/582
                 let (flags, data) = (ev.flags(), ev.data());
-                if flags.contains(EventFlag::EV_ERROR)
+                if (flags & libc::EV_ERROR) == 1
                     && data != 0
                     && data != libc::ENOENT as _
                     && data != libc::EPIPE as _
@@ -602,16 +586,16 @@ mod sys {
             Ok(())
         }
         pub fn deregister(&self, fd: RawFd) -> io::Result<()> {
-            let flags = EventFlag::EV_RECEIPT | EventFlag::EV_DELETE;
+            let flags = libc::EV_RECEIPT | libc::EV_DELETE;
             let changelist = [
-                KEvent::new(fd as _, EventFilter::EVFILT_WRITE, flags, FFLAGS, 0, 0),
-                KEvent::new(fd as _, EventFilter::EVFILT_READ, flags, FFLAGS, 0, 0),
+                KEvent::new(fd as _, libc::EVFILT_WRITE, flags, FFLAGS, 0, 0),
+                KEvent::new(fd as _, libc::EVFILT_READ, flags, FFLAGS, 0, 0),
             ];
             let mut eventlist = changelist;
-            kevent_ts(self.0, &changelist, &mut eventlist, None).map_err(io_err)?;
+            kevent_ts(self.0, &changelist, &mut eventlist, None)?;
             for ev in &eventlist {
                 let (flags, data) = (ev.flags(), ev.data());
-                if flags.contains(EventFlag::EV_ERROR) && data != 0 && data != libc::ENOENT as _ {
+                if (flags & libc::EV_ERROR == 1) && data != 0 && data != libc::ENOENT as _ {
                     return Err(io::Error::from_raw_os_error(data as _));
                 }
             }
@@ -622,11 +606,11 @@ mod sys {
                 tv_sec: t.as_secs() as libc::time_t,
                 tv_nsec: t.subsec_nanos() as libc::c_long,
             });
-            events.len = kevent_ts(self.0, &[], &mut events.list, timeout).map_err(io_err)?;
+            events.len = kevent_ts(self.0, &[], &mut events.list, timeout)?;
             Ok(events.len)
         }
     }
-    const FFLAGS: FilterFlag = FilterFlag::empty();
+    const FFLAGS: FilterFlag = 0;
 
     pub struct Events {
         list: Box<[KEvent]>,
@@ -634,16 +618,16 @@ mod sys {
     }
     impl Events {
         pub fn new() -> Events {
-            let flags = EventFlag::empty();
-            let event = KEvent::new(0, EventFilter::EVFILT_USER, flags, FFLAGS, 0, 0);
+            let flags = 0;
+            let event = KEvent::new(0, libc::EVFILT_USER, flags, FFLAGS, 0, 0);
             let list = vec![event; 1000].into_boxed_slice();
             let len = 0;
             Events { list, len }
         }
         pub fn iter(&self) -> impl Iterator<Item = Event> + '_ {
             self.list[..self.len].iter().map(|ev| Event {
-                readable: ev.filter() == EventFilter::EVFILT_READ,
-                writable: ev.filter() == EventFilter::EVFILT_WRITE,
+                readable: ev.filter() == libc::EVFILT_READ,
+                writable: ev.filter() == libc::EVFILT_WRITE,
                 key: ev.udata() as usize,
             })
         }
@@ -670,7 +654,7 @@ mod sys {
             Ok(Reactor(Epoll::new()?))
         }
         pub fn register(&self, sock: RawSocket, key: usize) -> io::Result<()> {
-            self.0.register(&As(sock), EventFlag::empty(), key as u64)
+            self.0.register(&As(sock), 0, key as u64)
         }
         pub fn reregister(
             &self,
@@ -679,7 +663,7 @@ mod sys {
             read: bool,
             write: bool,
         ) -> io::Result<()> {
-            let mut flags = EventFlag::ONESHOT;
+            let mut flags = libc::ONESHOT;
             if read {
                 flags |= read_flags();
             }
@@ -710,10 +694,10 @@ mod sys {
         }
     }
     fn read_flags() -> EventFlag {
-        EventFlag::IN | EventFlag::RDHUP
+        libc::IN | libc::RDHUP
     }
     fn write_flags() -> EventFlag {
-        EventFlag::OUT
+        libc::OUT
     }
 
     pub struct Events(wepoll_binding::Events);
