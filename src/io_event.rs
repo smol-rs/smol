@@ -114,7 +114,7 @@ fn notifier() -> io::Result<(Socket, Socket)> {
 #[cfg(target_os = "linux")]
 mod linux {
     use super::*;
-    use crate::sys::eventfd::{eventfd, EfdFlags};
+    use crate::sys::eventfd::eventfd;
     use crate::sys::unistd;
     use std::os::unix::io::AsRawFd;
 
@@ -122,7 +122,7 @@ mod linux {
 
     impl EventFd {
         pub fn new() -> Result<Self, std::io::Error> {
-            let fd = eventfd(0, EfdFlags::EFD_CLOEXEC | EfdFlags::EFD_NONBLOCK).map_err(io_err)?;
+            let fd = eventfd(0, libc::EFD_CLOEXEC | libc::EFD_NONBLOCK)?;
             Ok(EventFd(fd))
         }
 
@@ -140,13 +140,6 @@ mod linux {
     impl Drop for EventFd {
         fn drop(&mut self) {
             let _ = unistd::close(self.0);
-        }
-    }
-
-    fn io_err(err: crate::sys::Error) -> io::Error {
-        match err {
-            crate::sys::Error::Sys(code) => code.into(),
-            err => io::Error::new(io::ErrorKind::Other, Box::new(err)),
         }
     }
 

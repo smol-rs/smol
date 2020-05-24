@@ -1,6 +1,15 @@
 #[cfg(target_os = "linux")]
 pub mod eventfd {
-    pub use nix::sys::eventfd::{eventfd, EfdFlags};
+    use super::check_err;
+    use std::os::unix::io::RawFd;
+
+    pub type EfdFlags = libc::c_int;
+
+    pub fn eventfd(initval: libc::c_uint, flags: EfdFlags) -> Result<RawFd, std::io::Error> {
+        let res = unsafe { libc::eventfd(initval, flags) };
+
+        check_err(res).map(|r| r as RawFd)
+    }
 }
 
 #[cfg(target_os = "linux")]
