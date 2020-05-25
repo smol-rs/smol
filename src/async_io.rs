@@ -159,6 +159,7 @@ impl<T: IntoRawFd> IntoRawFd for Async<T> {
         self.into_inner().unwrap().into_raw_fd()
     }
 }
+
 #[cfg(windows)]
 impl<T: AsRawSocket> Async<T> {
     /// Creates an async I/O handle.
@@ -453,6 +454,54 @@ impl<T> Async<T> {
             }
             self.source.writable().await?;
         }
+    }
+
+    /// Wait until the async I/O handle is readable.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use smol::Async;
+    /// use std::net::{TcpListener, TcpStream};
+    /// use futures_util::io::AsyncWriteExt;
+    ///
+    /// # smol::run(async {
+    /// let listener = Async::<TcpListener>::bind("0.0.0.0:0")?;
+    /// let addr = listener.get_ref().local_addr()?;
+    ///
+    /// let mut stream1 = Async::<TcpStream>::connect(addr).await?;
+    /// let (stream2, _) = listener.accept().await?;
+    ///
+    /// stream1.write(b"test").await?;
+    /// stream2.readable().await?;
+    ///
+    /// # std::io::Result::Ok(()) });
+    /// ```
+    #[inline]
+    pub async fn readable(&self) -> io::Result<()> {
+        self.source.readable().await
+    }
+
+    /// Wait until the async I/O handle is writable.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use smol::Async;
+    /// use std::net::{TcpListener, TcpStream};
+    ///
+    /// # smol::run(async {
+    /// let listener = Async::<TcpListener>::bind("0.0.0.0:0")?;
+    /// let addr = listener.get_ref().local_addr()?;
+    ///
+    /// let stream = Async::<TcpStream>::connect(addr).await?;
+    ///
+    /// stream.writable().await?;
+    /// # std::io::Result::Ok(()) });
+    /// ```
+    #[inline]
+    pub async fn writable(&self) -> io::Result<()> {
+        self.source.writable().await
     }
 }
 
