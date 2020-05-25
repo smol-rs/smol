@@ -191,7 +191,7 @@ impl<T: AsRawSocket> Async<T> {
     /// use std::net::TcpListener;
     ///
     /// # smol::run(async {
-    /// let listener = TcpListener::bind("127.0.0.1:80")?;
+    /// let listener = TcpListener::bind("0.0.0.0:0")?;
     /// let listener = Async::new(listener)?;
     /// # std::io::Result::Ok(()) });
     /// ```
@@ -232,7 +232,7 @@ impl<T> Async<T> {
     /// use std::net::TcpListener;
     ///
     /// # smol::run(async {
-    /// let listener = Async::<TcpListener>::bind("127.0.0.1:80")?;
+    /// let listener = Async::<TcpListener>::bind("0.0.0.0:0")?;
     /// let inner = listener.get_ref();
     /// # std::io::Result::Ok(()) });
     /// ```
@@ -249,7 +249,7 @@ impl<T> Async<T> {
     /// use std::net::TcpListener;
     ///
     /// # smol::run(async {
-    /// let mut listener = Async::<TcpListener>::bind("127.0.0.1:80")?;
+    /// let mut listener = Async::<TcpListener>::bind("0.0.0.0:0")?;
     /// let inner = listener.get_mut();
     /// # std::io::Result::Ok(()) });
     /// ```
@@ -266,7 +266,7 @@ impl<T> Async<T> {
     /// use std::net::TcpListener;
     ///
     /// # smol::run(async {
-    /// let listener = Async::<TcpListener>::bind("127.0.0.1:80")?;
+    /// let listener = Async::<TcpListener>::bind("0.0.0.0:0")?;
     /// let inner = listener.into_inner()?;
     /// # std::io::Result::Ok(()) });
     /// ```
