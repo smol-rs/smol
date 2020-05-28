@@ -224,6 +224,9 @@ impl Reactor {
             Some(Duration::from_secs(0))
         };
 
+        // Drop the lock before waking.
+        drop(timers);
+
         // Wake up tasks waiting on timers.
         for (_, waker) in ready {
             waker.wake();
@@ -273,6 +276,7 @@ impl ReactorLock<'_> {
                 Ok(_) => {
                     // Iterate over sources in the event list.
                     let sources = self.reactor.sources.lock();
+                    let mut ready = Vec::new();
 
                     for ev in self.events.iter() {
                         // Check if there is a source in the table with this key.
@@ -281,18 +285,22 @@ impl ReactorLock<'_> {
 
                             // Wake readers if a readability event was emitted.
                             if ev.readable {
-                                for w in wakers.readers.drain(..) {
-                                    w.wake();
-                                }
+                                ready.append(&mut wakers.readers);
                             }
 
                             // Wake writers if a writability event was emitted.
                             if ev.writable {
-                                for w in wakers.writers.drain(..) {
-                                    w.wake();
-                                }
+                                ready.append(&mut wakers.writers);
                             }
                         }
+                    }
+
+                    // Drop the lock before waking.
+                    drop(sources);
+
+                    // Wake up tasks waiting on I/O.
+                    for waker in ready {
+                        waker.wake();
                     }
 
                     return Ok(());
