@@ -168,6 +168,19 @@ impl Reactor {
         }
     }
 
+    /// Reset a timer to a new Instant.
+    pub fn reset_timer(&self, when: Instant, id: usize, new: Instant) {
+        // Push a reset operation.
+        while self.timer_ops.push(TimerOp::Reset(when, id, new)).is_err() {
+            // Fire timers to drain the queue.
+            self.fire_timers();
+        }
+        // Notify if the new instant is sooner than the original.
+        if new < when {
+            self.timer_event.notify();
+        }
+    }
+
     /// Attempts to lock the reactor.
     pub fn try_lock(&self) -> Option<ReactorLock<'_>> {
         self.events.try_lock().map(|events| {
@@ -201,6 +214,11 @@ impl Reactor {
                 }
                 Ok(TimerOp::Remove(when, id)) => {
                     timers.remove(&(when, id));
+                }
+                Ok(TimerOp::Reset(when, id, new)) => {
+                    if let Some(waker) = timers.remove(&(when, id)) {
+                        timers.insert((new, id), waker);
+                    }
                 }
                 Err(_) => break,
             }
@@ -312,6 +330,7 @@ impl ReactorLock<'_> {
 enum TimerOp {
     Insert(Instant, usize, Waker),
     Remove(Instant, usize),
+    Reset(/* original */ Instant, usize, /* new */ Instant),
 }
 
 /// A registered source of I/O events.

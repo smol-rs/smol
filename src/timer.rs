@@ -106,6 +106,22 @@ impl Timer {
         let id = None;
         Timer { id, when }
     }
+
+    /// Reset the timer to fire at the specified instant.
+    pub fn reset_at(&mut self, when: Instant) {
+        match self.id {
+            None => {}
+            Some(id) => {
+                Reactor::get().reset_timer(self.when, id, when);
+                self.when = when;
+            }
+        }
+    }
+
+    /// Reset timer to fire after the specified duration of time.
+    pub fn reset_after(&mut self, dur: Duration) {
+        self.reset_at(Instant::now() + dur);
+    }
 }
 
 impl Drop for Timer {
