@@ -97,11 +97,43 @@ use crate::task::Task;
 #[derive(Debug)]
 pub struct Async<T> {
     /// A source registered in the reactor.
-    source: Arc<Source>,
+    source: SourceRegistration,
 
     /// The inner I/O handle.
-    io: Option<Box<T>>,
+    io: T,
 }
+
+/// A newtype wrapper of `Arc<Source>`. De-registers the source on drop.
+///
+/// (If we implement Drop on Async, it would require unsafe to implement
+/// into_inner.)
+#[derive(Debug)]
+struct SourceRegistration {
+    source: Arc<Source>,
+}
+
+impl SourceRegistration {
+    fn new(source: Arc<Source>) -> Self {
+        SourceRegistration { source }
+    }
+}
+
+impl std::ops::Deref for SourceRegistration {
+    type Target = Source;
+
+    fn deref(&self) -> &Self::Target {
+        &self.source
+    }
+}
+
+impl Drop for SourceRegistration {
+    fn drop(&mut self) {
+        // Deregister and ignore errors because destructors should not panic.
+        let _ = Reactor::get().remove_io(&self.source);
+    }
+}
+
+impl<T> Unpin for Async<T> {}
 
 #[cfg(unix)]
 impl<T: AsRawFd> Async<T> {
@@ -140,8 +172,8 @@ impl<T: AsRawFd> Async<T> {
     /// ```
     pub fn new(io: T) -> io::Result<Async<T>> {
         Ok(Async {
-            source: Reactor::get().insert_io(io.as_raw_fd())?,
-            io: Some(Box::new(io)),
+            source: SourceRegistration::new(Reactor::get().insert_io(io.as_raw_fd())?),
+            io,
         })
     }
 }
@@ -196,8 +228,8 @@ impl<T: AsRawSocket> Async<T> {
     /// ```
     pub fn new(io: T) -> io::Result<Async<T>> {
         Ok(Async {
-            source: Reactor::get().insert_io(io.as_raw_socket())?,
-            io: Some(Box::new(io)),
+            source: SourceRegistration::new(Reactor::get().insert_io(io.as_raw_socket())?),
+            io,
         })
     }
 }
@@ -236,7 +268,7 @@ impl<T> Async<T> {
     /// # std::io::Result::Ok(()) });
     /// ```
     pub fn get_ref(&self) -> &T {
-        self.io.as_ref().unwrap()
+        &self.io
     }
 
     /// Gets a mutable reference to the inner I/O handle.
@@ -253,7 +285,7 @@ impl<T> Async<T> {
     /// # std::io::Result::Ok(()) });
     /// ```
     pub fn get_mut(&mut self) -> &mut T {
-        self.io.as_mut().unwrap()
+        &mut self.io
     }
 
     /// Unwraps the inner non-blocking I/O handle.
@@ -269,19 +301,31 @@ impl<T> Async<T> {
     /// let inner = listener.into_inner()?;
     /// # std::io::Result::Ok(()) });
     /// ```
-    pub fn into_inner(mut self) -> io::Result<T> {
-        let io = *self.io.take().unwrap();
-        Reactor::get().remove_io(&self.source)?;
-        Ok(io)
+    #[inline]
+    pub fn into_inner(self) -> io::Result<T> {
+        // We can get the error result from `remove_io`, but that requires
+        // either unsafe code:
+        //
+        // ```
+        // let source = std::mem::ManuallyDrop::new(self.source);
+        // let source = unsafe { std::ptr::read(&source.source) };
+        // Reactor::get().remove_io(&source)?;
+        // ```
+        //
+        // or an additional field in SourceRegistration to track whether it has
+        // been de-registered yet.
+
+        // It's not likely to fail anyway. We are even unwrapping in
+        // into_raw_{fd,handle}, so let's just return Ok.
+        Ok(self.io)
     }
 
     #[doc(hidden)]
     #[deprecated(note = "use `read_with()` or `write_with()` instead")]
     pub async fn with<R>(&self, op: impl FnMut(&T) -> io::Result<R>) -> io::Result<R> {
         let mut op = op;
-        let io = self.io.as_ref().unwrap();
         loop {
-            match op(io) {
+            match op(&self.io) {
                 Err(err) if err.kind() == io::ErrorKind::WouldBlock => {}
                 res => return res,
             }
@@ -299,9 +343,8 @@ impl<T> Async<T> {
     #[deprecated(note = "use `read_with_mut()` or `write_with_mut()` instead")]
     pub async fn with_mut<R>(&mut self, op: impl FnMut(&mut T) -> io::Result<R>) -> io::Result<R> {
         let mut op = op;
-        let io = self.io.as_mut().unwrap();
         loop {
-            match op(io) {
+            match op(&mut self.io) {
                 Err(err) if err.kind() == io::ErrorKind::WouldBlock => {}
                 res => return res,
             }
@@ -452,18 +495,6 @@ impl<T> Async<T> {
                 res => return res,
             }
             self.source.writable().await?;
-        }
-    }
-}
-
-impl<T> Drop for Async<T> {
-    fn drop(&mut self) {
-        if self.io.is_some() {
-            // Deregister and ignore errors because destructors should not panic.
-            let _ = Reactor::get().remove_io(&self.source);
-
-            // Drop the I/O handle to close it.
-            self.io.take();
         }
     }
 }
