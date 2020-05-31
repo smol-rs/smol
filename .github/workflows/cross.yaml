@@ -20,11 +20,14 @@ jobs:
         toolchain: nightly
         override: true
 
+    - name: Install docker
+      run: sudo apt install docker
+
     - name: Install cross
       run: cargo install cross
 
     - name: Android
-      run: cross build --target arm-linux-androideabi
+      run: cross test --target arm-linux-androideabi
 
     - name: NetBSD
       run: cross build --target x86_64-unknown-netbsd
@@ -33,4 +36,4 @@ jobs:
       run: cross build --target x86_64-unknown-dragonfly
 
     - name: iOS
-      run: cross build --target aarch64-apple-ios
+      run: cross test --target aarch64-apple-ios
