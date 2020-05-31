@@ -1,0 +1,36 @@
+name: Cross compile
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+
+jobs:
+  cross:
+    name: Cross compile
+    runs-on: macos-latest
+
+    steps:
+    - uses: actions/checkout@master
+
+    - name: Install nightly
+      uses: actions-rs/toolchain@v1
+      with:
+        toolchain: nightly
+        override: true
+
+    - name: Install cross
+      run: cargo install cross
+
+    - name: Android
+      run: cross test --target arm-linux-androideabi
+
+    - name: NetBSD
+      run: cross build --target x86_64-unknown-netbsd
+
+    - name: DragonFly BSD
+      run: cross build --target x86_64-unknown-dragonfly
+
+    - name: iOS
+      run: cross test --target aarch64-apple-ios

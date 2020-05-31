@@ -565,8 +565,8 @@ mod sys {
                 let (flags, data) = (ev.flags(), ev.data());
                 if (flags & libc::EV_ERROR) == 1
                     && data != 0
-                    && data != libc::ENOENT as _
-                    && data != libc::EPIPE as _
+                    && data as u64 != libc::ENOENT as u64
+                    && data as u64 != libc::EPIPE as u64
                 {
                     return Err(io::Error::from_raw_os_error(data as _));
                 }
@@ -583,7 +583,8 @@ mod sys {
             kevent_ts(self.0, &changelist, &mut eventlist, None)?;
             for ev in &eventlist {
                 let (flags, data) = (ev.flags(), ev.data());
-                if (flags & libc::EV_ERROR == 1) && data != 0 && data != libc::ENOENT as _ {
+                if (flags & libc::EV_ERROR == 1) && data != 0 && data as u64 != libc::ENOENT as u64
+                {
                     return Err(io::Error::from_raw_os_error(data as _));
                 }
             }
@@ -607,7 +608,7 @@ mod sys {
     impl Events {
         pub fn new() -> Events {
             let flags = 0;
-            let event = KEvent::new(0, libc::EVFILT_USER, flags, FFLAGS, 0, 0);
+            let event = KEvent::new(0, libc::EVFILT_READ, flags, FFLAGS, 0, 0);
             let list = vec![event; 1000].into_boxed_slice();
             let len = 0;
             Events { list, len }
