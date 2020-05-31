@@ -44,4 +44,4 @@ jobs:
 
     - name: iOS
       if: startsWith(matrix.os, 'macos')
-      run: cross test --target aarch64-apple-ios
+      run: cross build --target aarch64-apple-ios
