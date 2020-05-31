@@ -9,7 +9,10 @@ on:
 jobs:
   cross:
     name: Cross compile
-    runs-on: macos-latest
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
 
     steps:
     - uses: actions/checkout@master
@@ -21,19 +24,24 @@ jobs:
         override: true
 
     - name: Install docker
+      if: startsWith(matrix.os, 'ubuntu')
       run: sudo apt install docker
 
     - name: Install cross
       run: cargo install cross
 
     - name: Android
+      if: startsWith(matrix.os, 'ubuntu')
       run: cross test --target arm-linux-androideabi
 
     - name: NetBSD
+      if: startsWith(matrix.os, 'ubuntu')
       run: cross build --target x86_64-unknown-netbsd
 
     - name: DragonFly BSD
+      if: startsWith(matrix.os, 'ubuntu')
       run: cross build --target x86_64-unknown-dragonfly
 
     - name: iOS
+      if: startsWith(matrix.os, 'macos')
       run: cross test --target aarch64-apple-ios
