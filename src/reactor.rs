@@ -32,12 +32,13 @@ use std::time::{Duration, Instant};
 
 use crossbeam_queue::ArrayQueue;
 use futures_util::future;
-#[cfg(unix)]
-use nix::fcntl::{fcntl, FcntlArg, OFlag};
 use once_cell::sync::Lazy;
 use slab::Slab;
 #[cfg(windows)]
 use socket2::Socket;
+
+#[cfg(unix)]
+use crate::sys::fcntl::{fcntl, FcntlArg};
 
 use crate::io_event::IoEvent;
 
@@ -103,9 +104,9 @@ impl Reactor {
         // Put the I/O handle in non-blocking mode.
         #[cfg(unix)]
         {
-            let flags = fcntl(raw, FcntlArg::F_GETFL).map_err(io_err)?;
-            let flags = OFlag::from_bits_truncate(flags) | OFlag::O_NONBLOCK;
-            fcntl(raw, FcntlArg::F_SETFL(flags)).map_err(io_err)?;
+            let flags = fcntl(raw, FcntlArg::F_GETFL)?;
+            let flags = flags | libc::O_NONBLOCK;
+            fcntl(raw, FcntlArg::F_SETFL(flags))?;
         }
         #[cfg(windows)]
         {
@@ -429,15 +430,6 @@ impl Source {
     }
 }
 
-/// Converts a [`nix::Error`] into [`io::Error`].
-#[cfg(unix)]
-fn io_err(err: nix::Error) -> io::Error {
-    match err {
-        nix::Error::Sys(code) => code.into(),
-        err => io::Error::new(io::ErrorKind::Other, Box::new(err)),
-    }
-}
-
 /// Raw bindings to epoll (Linux, Android, illumos).
 #[cfg(any(target_os = "linux", target_os = "android", target_os = "illumos"))]
 mod sys {
@@ -446,24 +438,22 @@ mod sys {
     use std::os::unix::io::RawFd;
     use std::time::Duration;
 
-    use nix::sys::epoll::{
-        epoll_create1, epoll_ctl, epoll_wait, EpollCreateFlags, EpollEvent, EpollFlags, EpollOp,
+    use crate::sys::epoll::{
+        epoll_create1, epoll_ctl, epoll_wait, EpollEvent, EpollFlags, EpollOp,
     };
-
-    use super::io_err;
 
     pub struct Reactor(RawFd);
     impl Reactor {
         pub fn new() -> io::Result<Reactor> {
-            let epoll_fd = epoll_create1(EpollCreateFlags::EPOLL_CLOEXEC).map_err(io_err)?;
+            let epoll_fd = epoll_create1()?;
             Ok(Reactor(epoll_fd))
         }
         pub fn register(&self, fd: RawFd, key: usize) -> io::Result<()> {
-            let ev = &mut EpollEvent::new(EpollFlags::empty(), key as u64);
-            epoll_ctl(self.0, EpollOp::EpollCtlAdd, fd, Some(ev)).map_err(io_err)
+            let ev = &mut EpollEvent::new(0, key as u64);
+            epoll_ctl(self.0, EpollOp::EpollCtlAdd, fd, Some(ev))
         }
         pub fn reregister(&self, fd: RawFd, key: usize, read: bool, write: bool) -> io::Result<()> {
-            let mut flags = EpollFlags::EPOLLONESHOT;
+            let mut flags = libc::EPOLLONESHOT;
             if read {
                 flags |= read_flags();
             }
@@ -471,10 +461,10 @@ mod sys {
                 flags |= write_flags();
             }
             let ev = &mut EpollEvent::new(flags, key as u64);
-            epoll_ctl(self.0, EpollOp::EpollCtlMod, fd, Some(ev)).map_err(io_err)
+            epoll_ctl(self.0, EpollOp::EpollCtlMod, fd, Some(ev))
         }
         pub fn deregister(&self, fd: RawFd) -> io::Result<()> {
-            epoll_ctl(self.0, EpollOp::EpollCtlDel, fd, None).map_err(io_err)
+            epoll_ctl(self.0, EpollOp::EpollCtlDel, fd, None)
         }
         pub fn wait(&self, events: &mut Events, timeout: Option<Duration>) -> io::Result<usize> {
             let timeout_ms = timeout
@@ -487,15 +477,15 @@ mod sys {
                 })
                 .and_then(|t| t.as_millis().try_into().ok())
                 .unwrap_or(-1);
-            events.len = epoll_wait(self.0, &mut events.list, timeout_ms).map_err(io_err)?;
+            events.len = epoll_wait(self.0, &mut events.list, timeout_ms)?;
             Ok(events.len)
         }
     }
     fn read_flags() -> EpollFlags {
-        EpollFlags::EPOLLIN | EpollFlags::EPOLLRDHUP
+        libc::EPOLLIN | libc::EPOLLRDHUP
     }
     fn write_flags() -> EpollFlags {
-        EpollFlags::EPOLLOUT
+        libc::EPOLLOUT
     }
 
     pub struct Events {
@@ -510,8 +500,8 @@ mod sys {
         }
         pub fn iter(&self) -> impl Iterator<Item = Event> + '_ {
             self.list[..self.len].iter().map(|ev| Event {
-                readable: ev.events().intersects(read_flags()),
-                writable: ev.events().intersects(write_flags()),
+                readable: (ev.events() & read_flags()) > 0,
+                writable: (ev.events() & write_flags()) > 0,
                 key: ev.data() as usize,
             })
         }
@@ -537,64 +527,46 @@ mod sys {
     use std::os::unix::io::RawFd;
     use std::time::Duration;
 
-    use nix::errno::Errno;
-    use nix::fcntl::{fcntl, FcntlArg, FdFlag};
-    use nix::libc;
-    use nix::sys::event::{kevent_ts, kqueue, EventFilter, EventFlag, FilterFlag, KEvent};
-
-    use super::io_err;
+    use crate::sys::event::{kevent_ts, kqueue, FilterFlag, KEvent};
+    use crate::sys::fcntl::{fcntl, FcntlArg};
 
     pub struct Reactor(RawFd);
     impl Reactor {
         pub fn new() -> io::Result<Reactor> {
-            let fd = kqueue().map_err(io_err)?;
-            fcntl(fd, FcntlArg::F_SETFD(FdFlag::FD_CLOEXEC)).map_err(io_err)?;
+            let fd = kqueue()?;
+            fcntl(fd, FcntlArg::F_SETFD(libc::FD_CLOEXEC))?;
             Ok(Reactor(fd))
         }
         pub fn register(&self, _fd: RawFd, _key: usize) -> io::Result<()> {
             Ok(())
         }
         pub fn reregister(&self, fd: RawFd, key: usize, read: bool, write: bool) -> io::Result<()> {
-            let mut read_flags = EventFlag::EV_ONESHOT | EventFlag::EV_RECEIPT;
-            let mut write_flags = EventFlag::EV_ONESHOT | EventFlag::EV_RECEIPT;
+            let mut read_flags = libc::EV_ONESHOT | libc::EV_RECEIPT;
+            let mut write_flags = libc::EV_ONESHOT | libc::EV_RECEIPT;
             if read {
-                read_flags |= EventFlag::EV_ADD;
+                read_flags |= libc::EV_ADD;
             } else {
-                read_flags |= EventFlag::EV_DELETE;
+                read_flags |= libc::EV_DELETE;
             }
             if write {
-                write_flags |= EventFlag::EV_ADD;
+                write_flags |= libc::EV_ADD;
             } else {
-                write_flags |= EventFlag::EV_DELETE;
+                write_flags |= libc::EV_DELETE;
             }
             let udata = key as _;
             let changelist = [
-                KEvent::new(
-                    fd as _,
-                    EventFilter::EVFILT_READ,
-                    read_flags,
-                    FFLAGS,
-                    0,
-                    udata,
-                ),
-                KEvent::new(
-                    fd as _,
-                    EventFilter::EVFILT_WRITE,
-                    write_flags,
-                    FFLAGS,
-                    0,
-                    udata,
-                ),
+                KEvent::new(fd as _, libc::EVFILT_READ, read_flags, FFLAGS, 0, udata),
+                KEvent::new(fd as _, libc::EVFILT_WRITE, write_flags, FFLAGS, 0, udata),
             ];
             let mut eventlist = changelist;
-            kevent_ts(self.0, &changelist, &mut eventlist, None).map_err(io_err)?;
+            kevent_ts(self.0, &changelist, &mut eventlist, None)?;
             for ev in &eventlist {
                 // Explanation for ignoring EPIPE: https://github.com/tokio-rs/mio/issues/582
                 let (flags, data) = (ev.flags(), ev.data());
-                if flags.contains(EventFlag::EV_ERROR)
+                if (flags & libc::EV_ERROR) == 1
                     && data != 0
-                    && data != Errno::ENOENT as _
-                    && data != Errno::EPIPE as _
+                    && data != libc::ENOENT as _
+                    && data != libc::EPIPE as _
                 {
                     return Err(io::Error::from_raw_os_error(data as _));
                 }
@@ -602,16 +574,16 @@ mod sys {
             Ok(())
         }
         pub fn deregister(&self, fd: RawFd) -> io::Result<()> {
-            let flags = EventFlag::EV_RECEIPT | EventFlag::EV_DELETE;
+            let flags = libc::EV_RECEIPT | libc::EV_DELETE;
             let changelist = [
-                KEvent::new(fd as _, EventFilter::EVFILT_WRITE, flags, FFLAGS, 0, 0),
-                KEvent::new(fd as _, EventFilter::EVFILT_READ, flags, FFLAGS, 0, 0),
+                KEvent::new(fd as _, libc::EVFILT_WRITE, flags, FFLAGS, 0, 0),
+                KEvent::new(fd as _, libc::EVFILT_READ, flags, FFLAGS, 0, 0),
             ];
             let mut eventlist = changelist;
-            kevent_ts(self.0, &changelist, &mut eventlist, None).map_err(io_err)?;
+            kevent_ts(self.0, &changelist, &mut eventlist, None)?;
             for ev in &eventlist {
                 let (flags, data) = (ev.flags(), ev.data());
-                if flags.contains(EventFlag::EV_ERROR) && data != 0 && data != Errno::ENOENT as _ {
+                if (flags & libc::EV_ERROR == 1) && data != 0 && data != libc::ENOENT as _ {
                     return Err(io::Error::from_raw_os_error(data as _));
                 }
             }
@@ -622,11 +594,11 @@ mod sys {
                 tv_sec: t.as_secs() as libc::time_t,
                 tv_nsec: t.subsec_nanos() as libc::c_long,
             });
-            events.len = kevent_ts(self.0, &[], &mut events.list, timeout).map_err(io_err)?;
+            events.len = kevent_ts(self.0, &[], &mut events.list, timeout)?;
             Ok(events.len)
         }
     }
-    const FFLAGS: FilterFlag = FilterFlag::empty();
+    const FFLAGS: FilterFlag = 0;
 
     pub struct Events {
         list: Box<[KEvent]>,
@@ -634,16 +606,16 @@ mod sys {
     }
     impl Events {
         pub fn new() -> Events {
-            let flags = EventFlag::empty();
-            let event = KEvent::new(0, EventFilter::EVFILT_USER, flags, FFLAGS, 0, 0);
+            let flags = 0;
+            let event = KEvent::new(0, libc::EVFILT_USER, flags, FFLAGS, 0, 0);
             let list = vec![event; 1000].into_boxed_slice();
             let len = 0;
             Events { list, len }
         }
         pub fn iter(&self) -> impl Iterator<Item = Event> + '_ {
             self.list[..self.len].iter().map(|ev| Event {
-                readable: ev.filter() == EventFilter::EVFILT_READ,
-                writable: ev.filter() == EventFilter::EVFILT_WRITE,
+                readable: ev.filter() == libc::EVFILT_READ,
+                writable: ev.filter() == libc::EVFILT_WRITE,
                 key: ev.udata() as usize,
             })
         }
