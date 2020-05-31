@@ -24,7 +24,7 @@ jobs:
       run: cargo install cross
 
     - name: Android
-      run: cross test --target arm-linux-androideabi
+      run: cross build --target arm-linux-androideabi
 
     - name: NetBSD
       run: cross build --target x86_64-unknown-netbsd
@@ -33,4 +33,4 @@ jobs:
       run: cross build --target x86_64-unknown-dragonfly
 
     - name: iOS
-      run: cross test --target aarch64-apple-ios
+      run: cross build --target aarch64-apple-ios
