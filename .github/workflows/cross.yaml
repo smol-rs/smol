@@ -1,0 +1,47 @@
+name: Cross compile
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+
+jobs:
+  cross:
+    name: Cross compile
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+
+    steps:
+    - uses: actions/checkout@master
+
+    - name: Install nightly
+      uses: actions-rs/toolchain@v1
+      with:
+        toolchain: nightly
+        override: true
+
+    - name: Install docker
+      if: startsWith(matrix.os, 'ubuntu')
+      run: sudo apt install docker
+
+    - name: Install cross
+      run: cargo install cross
+
+    - name: Android
+      if: startsWith(matrix.os, 'ubuntu')
+      run: cross test --target arm-linux-androideabi
+
+    - name: NetBSD
+      if: startsWith(matrix.os, 'ubuntu')
+      run: cross build --target x86_64-unknown-netbsd
+
+    - name: FreeBSD
+      if: startsWith(matrix.os, 'ubuntu')
+      run: cross build --target x86_64-unknown-freebsd
+
+    - name: iOS
+      if: startsWith(matrix.os, 'macos')
+      run: cross build --target aarch64-apple-ios
