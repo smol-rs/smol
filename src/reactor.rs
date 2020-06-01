@@ -527,7 +527,7 @@ mod sys {
     use std::os::unix::io::RawFd;
     use std::time::Duration;
 
-    use crate::sys::event::{kevent_ts, kqueue, FilterFlag, KEvent};
+    use crate::sys::event::{kevent_ts, kqueue, KEvent};
     use crate::sys::fcntl::{fcntl, FcntlArg};
 
     pub struct Reactor(RawFd);
@@ -555,8 +555,8 @@ mod sys {
             }
             let udata = key as _;
             let changelist = [
-                KEvent::new(fd as _, libc::EVFILT_READ, read_flags, FFLAGS, 0, udata),
-                KEvent::new(fd as _, libc::EVFILT_WRITE, write_flags, FFLAGS, 0, udata),
+                KEvent::new(fd as _, libc::EVFILT_READ, read_flags, 0, 0, udata),
+                KEvent::new(fd as _, libc::EVFILT_WRITE, write_flags, 0, 0, udata),
             ];
             let mut eventlist = changelist;
             kevent_ts(self.0, &changelist, &mut eventlist, None)?;
@@ -565,8 +565,8 @@ mod sys {
                 let (flags, data) = (ev.flags(), ev.data());
                 if (flags & libc::EV_ERROR) == 1
                     && data != 0
-                    && data as u64 != libc::ENOENT as u64
-                    && data as u64 != libc::EPIPE as u64
+                    && data != libc::ENOENT as _
+                    && data != libc::EPIPE as _
                 {
                     return Err(io::Error::from_raw_os_error(data as _));
                 }
@@ -576,15 +576,14 @@ mod sys {
         pub fn deregister(&self, fd: RawFd) -> io::Result<()> {
             let flags = libc::EV_RECEIPT | libc::EV_DELETE;
             let changelist = [
-                KEvent::new(fd as _, libc::EVFILT_WRITE, flags, FFLAGS, 0, 0),
-                KEvent::new(fd as _, libc::EVFILT_READ, flags, FFLAGS, 0, 0),
+                KEvent::new(fd as _, libc::EVFILT_WRITE, flags, 0, 0, 0),
+                KEvent::new(fd as _, libc::EVFILT_READ, flags, 0, 0, 0),
             ];
             let mut eventlist = changelist;
             kevent_ts(self.0, &changelist, &mut eventlist, None)?;
             for ev in &eventlist {
                 let (flags, data) = (ev.flags(), ev.data());
-                if (flags & libc::EV_ERROR == 1) && data != 0 && data as u64 != libc::ENOENT as u64
-                {
+                if (flags & libc::EV_ERROR == 1) && data != 0 && data != libc::ENOENT as _ {
                     return Err(io::Error::from_raw_os_error(data as _));
                 }
             }
@@ -599,7 +598,6 @@ mod sys {
             Ok(events.len)
         }
     }
-    const FFLAGS: FilterFlag = 0;
 
     pub struct Events {
         list: Box<[KEvent]>,
@@ -608,7 +606,7 @@ mod sys {
     impl Events {
         pub fn new() -> Events {
             let flags = 0;
-            let event = KEvent::new(0, libc::EVFILT_READ, flags, FFLAGS, 0, 0);
+            let event = KEvent::new(0, 0, flags, 0, 0, 0);
             let list = vec![event; 1000].into_boxed_slice();
             let len = 0;
             Events { list, len }

@@ -38,6 +38,10 @@ jobs:
       if: startsWith(matrix.os, 'ubuntu')
       run: cross build --target x86_64-unknown-netbsd
 
+    - name: FreeBSD
+      if: startsWith(matrix.os, 'ubuntu')
+      run: cross build --target x86_64-unknown-freebsd
+
     - name: iOS
       if: startsWith(matrix.os, 'macos')
       run: cross build --target aarch64-apple-ios
