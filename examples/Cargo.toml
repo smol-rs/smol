@@ -34,7 +34,7 @@ signal-hook = "0.1.13"
 smol = { path = "../", features = ["tokio02"] }
 surf = { version = "2.0.0-alpha.1", default-features = false, features = ["h1-client"] }
 tempfile = "3.1.0"
-tokio = { version = "0.2.18", default-features = false }
+tokio = { version = "0.2", default-features = false }
 tungstenite = "0.10.1"
 url = "2.1.1"
 

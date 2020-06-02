@@ -38,7 +38,7 @@ slab = "0.4.2"
 socket2 = { version = "0.3.12", features = ["pair", "unix"] }
 
 [dependencies.tokio]
-version = "0.2.19"
+version = "0.2"
 default-features = false
 features = ["rt-threaded"]
 optional = true
