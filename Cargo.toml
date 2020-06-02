@@ -26,11 +26,11 @@ tokio02 = ["tokio"]
 
 [dependencies]
 async-task = "3.0.0"
-crossbeam-deque = "0.7.3"
-crossbeam-queue = "0.2.1"
-crossbeam-utils = "0.7.2"
-futures-util = { version = "0.3.5", default-features = false, features = ["std", "io"] }
+blocking = "0.4.4"
+concurrent-queue = "1.0.0"
+fastrand = "1.1.0"
 futures-io = { version = "0.3.5", default-features = false, features = ["std"] }
+futures-util = { version = "0.3.5", default-features = false, features = ["std", "io"] }
 once_cell = "1.3.1"
 piper = "0.1.2"
 scoped-tls-hkt = "0.1.2"

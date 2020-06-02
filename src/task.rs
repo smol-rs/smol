@@ -54,7 +54,7 @@ pub(crate) type Runnable = async_task::Task<()>;
 /// # });
 /// ```
 ///
-/// [`run()`]: crate::run()
+/// [`run()`]: `crate::run()`
 #[must_use = "tasks get canceled when dropped, use `.detach()` to run them in the background"]
 #[derive(Debug)]
 pub struct Task<T>(pub(crate) Option<async_task::JoinHandle<T, ()>>);
@@ -75,7 +75,7 @@ impl<T: 'static> Task<T> {
     /// # })
     /// ```
     ///
-    /// [`run()`]: crate::run()
+    /// [`run()`]: `crate::run()`
     pub fn local(future: impl Future<Output = T> + 'static) -> Task<T> {
         ThreadLocalExecutor::spawn(future)
     }
@@ -97,7 +97,7 @@ impl<T: Send + 'static> Task<T> {
     /// # });
     /// ```
     ///
-    /// [`run()`]: crate::run()
+    /// [`run()`]: `crate::run()`
     pub fn spawn(future: impl Future<Output = T> + Send + 'static) -> Task<T> {
         WorkStealingExecutor::get().spawn(future)
     }

@@ -30,7 +30,7 @@ use std::sync::Arc;
 use std::task::{Poll, Waker};
 use std::time::{Duration, Instant};
 
-use crossbeam_queue::ArrayQueue;
+use concurrent_queue::ConcurrentQueue;
 use futures_util::future;
 use once_cell::sync::Lazy;
 use slab::Slab;
@@ -69,7 +69,7 @@ pub(crate) struct Reactor {
     ///
     /// When inserting or removing a timer, we don't process it immediately - we just push it into
     /// this queue. Timers actually get processed when the queue fills up or the reactor is polled.
-    timer_ops: ArrayQueue<TimerOp>,
+    timer_ops: ConcurrentQueue<TimerOp>,
 
     /// An I/O event that is triggered when a new timer is registered.
     ///
@@ -86,7 +86,7 @@ impl Reactor {
             sources: piper::Mutex::new(Slab::new()),
             events: piper::Lock::new(sys::Events::new()),
             timers: piper::Mutex::new(BTreeMap::new()),
-            timer_ops: ArrayQueue::new(1000),
+            timer_ops: ConcurrentQueue::bounded(1000),
             timer_event: Lazy::new(|| IoEvent::new().expect("cannot create an `IoEvent`")),
         });
         &REACTOR
@@ -195,7 +195,7 @@ impl Reactor {
 
         // Process timer operations, but no more than the queue capacity because otherwise we could
         // keep popping operations forever.
-        for _ in 0..self.timer_ops.capacity() {
+        for _ in 0..self.timer_ops.capacity().unwrap() {
             match self.timer_ops.pop() {
                 Ok(TimerOp::Insert(when, id, waker)) => {
                     timers.insert((when, id), waker);

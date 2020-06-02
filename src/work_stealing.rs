@@ -20,11 +20,10 @@
 
 use std::cell::Cell;
 use std::future::Future;
-use std::num::Wrapping;
 use std::panic;
+use std::sync::{Arc, RwLock};
 
-use crossbeam_deque as deque;
-use crossbeam_utils::sync::ShardedLock;
+use concurrent_queue::ConcurrentQueue;
 use once_cell::sync::Lazy;
 use scoped_tls_hkt::scoped_thread_local;
 use slab::Slab;
@@ -47,10 +46,10 @@ scoped_thread_local! {
 pub(crate) struct WorkStealingExecutor {
     /// When a thread that is not inside [`run()`][`crate::run()`] spawns or wakes a task, it goes
     /// into this queue.
-    injector: deque::Injector<Runnable>,
+    injector: ConcurrentQueue<Runnable>,
 
     /// Registered handles for stealing tasks from workers.
-    stealers: ShardedLock<Slab<deque::Stealer<Runnable>>>,
+    stealers: RwLock<Slab<Arc<ConcurrentQueue<Runnable>>>>,
 
     /// An I/O event that is triggered whenever there might be available tasks to run.
     event: IoEvent,
@@ -60,8 +59,8 @@ impl WorkStealingExecutor {
     /// Returns a reference to the global work-stealing executor.
     pub fn get() -> &'static WorkStealingExecutor {
         static EXECUTOR: Lazy<WorkStealingExecutor> = Lazy::new(|| WorkStealingExecutor {
-            injector: deque::Injector::new(),
-            stealers: ShardedLock::new(Slab::new()),
+            injector: ConcurrentQueue::unbounded(),
+            stealers: RwLock::new(Slab::new()),
             event: IoEvent::new().expect("cannot create an `IoEvent`"),
         });
         &EXECUTOR
@@ -86,7 +85,7 @@ impl WorkStealingExecutor {
                 WORKER.with(|w| w.push(runnable));
             } else {
                 // If scheduling from a non-worker thread, push into the injector queue.
-                self.injector.push(runnable);
+                self.injector.push(runnable).unwrap();
 
                 // Notify workers that there is a task in the injector queue.
                 self.event.notify();
@@ -110,10 +109,10 @@ impl WorkStealingExecutor {
         let worker = Worker {
             key: vacant.key(),
             slot: Cell::new(None),
-            queue: deque::Worker::new_fifo(),
+            queue: Arc::new(ConcurrentQueue::bounded(512)),
             executor: self,
         };
-        vacant.insert(worker.queue.stealer());
+        vacant.insert(worker.queue.clone());
 
         worker
     }
@@ -134,7 +133,7 @@ pub(crate) struct Worker<'a> {
     /// A queue of tasks.
     ///
     /// Other workers are able to steal tasks from this queue.
-    queue: deque::Worker<Runnable>,
+    queue: Arc<ConcurrentQueue<Runnable>>,
 
     /// The parent work-stealing executor.
     executor: &'a WorkStealingExecutor,
@@ -217,21 +216,40 @@ impl Worker<'_> {
         // Put the task into the slot.
         if let Some(r) = self.slot.replace(Some(runnable)) {
             // If the slot had a task, push it into the queue.
-            self.queue.push(r);
+            if let Err(err) = self.queue.push(r) {
+                use concurrent_queue::*;
+                match err {
+                    PushError::Full(v) | PushError::Closed(v) => {
+                        self.executor.injector.push(v).unwrap();
+                    }
+                }
+            }
         }
     }
 
     /// Moves a task from the slot into the local queue.
     fn flush_slot(&self) {
         if let Some(r) = self.slot.take() {
-            self.queue.push(r);
+            if let Err(err) = self.queue.push(r) {
+                use concurrent_queue::*;
+                match err {
+                    PushError::Full(v) | PushError::Closed(v) => {
+                        self.executor.injector.push(v).unwrap();
+                    }
+                }
+            }
         }
     }
 
     /// Finds the next task to run.
     fn search(&self) -> Option<Runnable> {
-        // Check if there is a task in the slot or in the queue.
-        if let Some(r) = self.slot.take().or_else(|| self.queue.pop()) {
+        // Check if there is a task in the slot.
+        if let Some(r) = self.slot.take() {
+            return Some(r);
+        }
+
+        // Check if there is a task in the queue.
+        if let Ok(r) = self.queue.pop() {
             return Some(r);
         }
 
@@ -242,26 +260,61 @@ impl Worker<'_> {
 
         // Try stealing from other workers.
         let stealers = self.executor.stealers.read().unwrap();
-        retry_steal(|| {
-            // Pick a random starting point in the iterator list and rotate the list.
-            let n = stealers.len();
-            let start = fast_random(n);
-            let iter = stealers.iter().chain(stealers.iter()).skip(start).take(n);
 
-            // Remove this worker's stealer handle.
-            let iter = iter.filter(|(k, _)| *k != self.key);
+        // Pick a random starting point in the iterator list and rotate the list.
+        let n = stealers.len();
+        let start = fastrand::usize(..n);
+        let iter = stealers.iter().chain(stealers.iter()).skip(start).take(n);
 
-            // Try stealing from each worker in the list. Collecting stops as soon as we get a
-            // `Steal::Success`. Otherwise, if any steal attempt resulted in a `Steal::Retry`,
-            // that's the collected result and we'll retry from the beginning.
-            iter.map(|(_, s)| s.steal_batch_and_pop(&self.queue))
-                .collect()
-        })
+        // Remove this worker's stealer handle.
+        let iter = iter.filter(|(k, _)| *k != self.key);
+        let iter = iter.map(|(_, q)| q);
+
+        // Try stealing from each worker in the list.
+        for q in iter {
+            let count = self
+                .queue
+                .capacity()
+                .unwrap_or(usize::MAX)
+                .min((q.len() + 1) / 2);
+
+            // Steal half of the tasks from this worker.
+            for _ in 0..count {
+                if let Ok(r) = q.pop() {
+                    self.push(r);
+                } else {
+                    break;
+                }
+            }
+
+            // Check if there is a task in the slot.
+            if let Some(r) = self.slot.take() {
+                return Some(r);
+            }
+        }
+
+        None
     }
 
     /// Steals tasks from the injector queue.
     fn steal_global(&self) -> Option<Runnable> {
-        retry_steal(|| self.executor.injector.steal_batch_and_pop(&self.queue))
+        let count = self
+            .queue
+            .capacity()
+            .unwrap_or(usize::MAX)
+            .min((self.executor.injector.len() + 1) / 2);
+
+        // Steal half of the tasks from the injector queue.
+        for _ in 0..count {
+            if let Ok(r) = self.executor.injector.pop() {
+                self.push(r);
+            } else {
+                break;
+            }
+        }
+
+        // If anything was stolen, a task must be in the slot.
+        self.slot.take()
     }
 }
 
@@ -276,43 +329,12 @@ impl Drop for Worker<'_> {
         }
 
         // Move all tasks in this worker's queue into the injector queue.
-        while let Some(r) = self.queue.pop() {
+        while let Ok(r) = self.queue.pop() {
             r.schedule();
         }
 
         // This task will not search for tasks anymore and therefore won't notify other workers if
         // new tasks are found. Notify another worker to start searching right away.
         self.executor.event.notify();
-    }
-}
-
-/// Returns a random number in the interval `0..n`.
-fn fast_random(n: usize) -> usize {
-    thread_local! {
-        static RNG: Cell<Wrapping<u32>> = Cell::new(Wrapping(1));
-    }
-
-    RNG.with(|rng| {
-        // This is the 32-bit variant of Xorshift: https://en.wikipedia.org/wiki/Xorshift
-        let mut x = rng.get();
-        x ^= x << 13;
-        x ^= x >> 17;
-        x ^= x << 5;
-        rng.set(x);
-
-        // This is a fast alternative to `x % n`:
-        // https://lemire.me/blog/2016/06/27/a-fast-alternative-to-the-modulo-reduction/
-        ((x.0 as u64).wrapping_mul(n as u64) >> 32) as usize
-    })
-}
-
-/// Retries a steal operation for as long as it returns `Steal::Retry`.
-fn retry_steal<T>(mut steal_op: impl FnMut() -> deque::Steal<T>) -> Option<T> {
-    loop {
-        match steal_op() {
-            deque::Steal::Success(t) => return Some(t),
-            deque::Steal::Empty => return None,
-            deque::Steal::Retry => {}
-        }
     }
 }

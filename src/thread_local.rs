@@ -10,7 +10,7 @@ use std::future::Future;
 use std::sync::Arc;
 use std::thread::{self, ThreadId};
 
-use crossbeam_queue::SegQueue;
+use concurrent_queue::ConcurrentQueue;
 use scoped_tls_hkt::scoped_thread_local;
 
 use crate::io_event::IoEvent;
@@ -33,7 +33,7 @@ pub(crate) struct ThreadLocalExecutor {
     queue: RefCell<VecDeque<Runnable>>,
 
     /// When another thread wakes a task belonging to this executor, it goes into this queue.
-    injector: Arc<SegQueue<Runnable>>,
+    injector: Arc<ConcurrentQueue<Runnable>>,
 
     /// An I/O event that is triggered when another thread wakes a task belonging to this executor.
     event: IoEvent,
@@ -44,7 +44,7 @@ impl ThreadLocalExecutor {
     pub fn new() -> ThreadLocalExecutor {
         ThreadLocalExecutor {
             queue: RefCell::new(VecDeque::new()),
-            injector: Arc::new(SegQueue::new()),
+            injector: Arc::new(ConcurrentQueue::unbounded()),
             event: IoEvent::new().expect("cannot create an `IoEvent`"),
         }
     }
@@ -84,7 +84,7 @@ impl ThreadLocalExecutor {
                     EXECUTOR.with(|ex| ex.queue.borrow_mut().push_back(runnable));
                 } else if let Some(injector) = injector.upgrade() {
                     // If scheduling from a different thread, push into the injector queue.
-                    injector.push(runnable);
+                    injector.push(runnable).unwrap();
                 }
 
                 // Trigger an I/O event to let the original thread know that a task has been
