@@ -27,7 +27,7 @@ tokio02 = ["tokio"]
 [dependencies]
 async-task = "3.0.0"
 blocking = "0.4.4"
-concurrent-queue = "1.0.0"
+concurrent-queue = "1.1.1"
 fastrand = "1.1.0"
 futures-io = { version = "0.3.5", default-features = false, features = ["std"] }
 futures-util = { version = "0.3.5", default-features = false, features = ["std", "io"] }

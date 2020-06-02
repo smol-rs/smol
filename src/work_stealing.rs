@@ -217,12 +217,7 @@ impl Worker<'_> {
         if let Some(r) = self.slot.replace(Some(runnable)) {
             // If the slot had a task, push it into the queue.
             if let Err(err) = self.queue.push(r) {
-                use concurrent_queue::*;
-                match err {
-                    PushError::Full(v) | PushError::Closed(v) => {
-                        self.executor.injector.push(v).unwrap();
-                    }
-                }
+                self.executor.injector.push(err.into_inner()).unwrap();
             }
         }
     }
@@ -231,12 +226,7 @@ impl Worker<'_> {
     fn flush_slot(&self) {
         if let Some(r) = self.slot.take() {
             if let Err(err) = self.queue.push(r) {
-                use concurrent_queue::*;
-                match err {
-                    PushError::Full(v) | PushError::Closed(v) => {
-                        self.executor.injector.push(v).unwrap();
-                    }
-                }
+                self.executor.injector.push(err.into_inner()).unwrap();
             }
         }
     }
