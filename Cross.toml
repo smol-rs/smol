@@ -1,0 +1,13 @@
+# TODO: Remove this, and actually apt install openssl into our own custom docker image
+# based on rustembedded/cross:arm-linuxandroideabi-latest
+#
+# Note this is only necessary for running tests (because of rust-ssl becoming part
+# dev-dependencies at the top level, and to have this thing pass the github workflow
+#
+# 
+
+[target.arm-linux-androideabi]
+image = "rustembedded/cross:arm-linux-androideabi-0.1.16"
+
+
+
