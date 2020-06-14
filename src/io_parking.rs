@@ -5,6 +5,9 @@ use std::sync::atomic::Ordering::SeqCst;
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
+use once_cell::sync::Lazy;
+
+use crate::io_event::IoEvent;
 use crate::reactor::{Reactor, ReactorLock};
 
 pub(crate) struct IoParker {
@@ -51,6 +54,12 @@ impl IoParker {
     }
 }
 
+impl Drop for IoParker {
+    fn drop(&mut self) {
+        // TODO: wake up another active IoParker
+    }
+}
+
 impl fmt::Debug for IoParker {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.pad("IoParker { .. }")
@@ -86,7 +95,10 @@ impl Clone for IoUnparker {
 
 const EMPTY: usize = 0;
 const PARKED: usize = 1;
-const NOTIFIED: usize = 2;
+const POLLING: usize = 2;
+const NOTIFIED: usize = 3;
+
+static EVENT: Lazy<IoEvent> = Lazy::new(|| IoEvent::new().unwrap());
 
 struct Inner {
     state: AtomicUsize,
@@ -96,18 +108,25 @@ struct Inner {
 
 impl Inner {
     fn park(&self, timeout: Option<Duration>) -> bool {
+        let mut reactor_lock = Reactor::get().try_lock();
+
         // If we were previously notified then we consume this notification and return quickly.
         if self
             .state
             .compare_exchange(NOTIFIED, EMPTY, SeqCst, SeqCst)
             .is_ok()
         {
+            // Process available I/O events.
+            if let Some(mut reactor_lock) = Reactor::get().try_lock() {
+                reactor_lock.poll().expect("failure while polling I/O");
+            }
             return true;
         }
 
         // If the timeout is zero, then there is no need to actually block.
         if let Some(dur) = timeout {
             if dur == Duration::from_millis(0) {
+                // Process available I/O events.
                 if let Some(mut reactor_lock) = Reactor::get().try_lock() {
                     reactor_lock.poll().expect("failure while polling I/O");
                 }
@@ -118,7 +137,12 @@ impl Inner {
         // Otherwise we need to coordinate going to sleep.
         let mut m = self.lock.lock().unwrap();
 
-        match self.state.compare_exchange(EMPTY, PARKED, SeqCst, SeqCst) {
+        let state = match reactor_lock {
+            None => PARKED,
+            Some(_) => POLLING,
+        };
+
+        match self.state.compare_exchange(EMPTY, state, SeqCst, SeqCst) {
             Ok(_) => {}
             // Consume this notification to avoid spurious wakeups in the next park.
             Err(NOTIFIED) => {
@@ -138,7 +162,18 @@ impl Inner {
             None => {
                 loop {
                     // Block the current thread on the conditional variable.
-                    m = self.cvar.wait(m).unwrap();
+                    match &mut reactor_lock {
+                        None => m = self.cvar.wait(m).unwrap(),
+                        Some(reactor_lock) => {
+                            drop(m);
+                            if EVENT.clear() {
+                                reactor_lock.poll().expect("TODO");
+                            } else {
+                                reactor_lock.wait().expect("TODO");
+                            }
+                            m = self.lock.lock().unwrap();
+                        }
+                    }
 
                     match self.state.compare_exchange(NOTIFIED, EMPTY, SeqCst, SeqCst) {
                         Ok(_) => return true, // got a notification
@@ -150,11 +185,22 @@ impl Inner {
                 // Wait with a timeout, and if we spuriously wake up or otherwise wake up from a
                 // notification we just want to unconditionally set `state` back to `EMPTY`, either
                 // consuming a notification or un-flagging ourselves as parked.
-                let (_m, _result) = self.cvar.wait_timeout(m, timeout).unwrap();
+                let _m = match &mut reactor_lock {
+                    None => self.cvar.wait_timeout(m, timeout).unwrap().0,
+                    Some(reactor_lock) => {
+                        drop(m);
+                        if EVENT.clear() {
+                            reactor_lock.poll().expect("TODO");
+                        } else {
+                            reactor_lock.wait().expect("TODO"); // TODO: use actual timeout
+                        }
+                        self.lock.lock().unwrap()
+                    }
+                };
 
                 match self.state.swap(EMPTY, SeqCst) {
-                    NOTIFIED => true, // got a notification
-                    PARKED => false,  // no notification
+                    NOTIFIED => true,          // got a notification
+                    PARKED | POLLING => false, // no notification
                     n => panic!("inconsistent park_timeout state: {}", n),
                 }
             }
@@ -166,12 +212,11 @@ impl Inner {
         // perform a release operation that `park` can synchronize with. To do that we must write
         // `NOTIFIED` even if `state` is already `NOTIFIED`. That is why this must be a swap rather
         // than a compare-and-swap that returns if it reads `NOTIFIED` on failure.
-        match self.state.swap(NOTIFIED, SeqCst) {
+        let state = match self.state.swap(NOTIFIED, SeqCst) {
             EMPTY => return,    // no one was waiting
             NOTIFIED => return, // already unparked
-            PARKED => {}        // gotta go wake someone up
-            _ => panic!("inconsistent state in unpark"),
-        }
+            state => state,     // gotta go wake someone up
+        };
 
         // There is a period between when the parked thread sets `state` to `PARKED` (or last
         // checked `state` in the case of a spurious wakeup) and when it actually waits on `cvar`.
@@ -182,6 +227,11 @@ impl Inner {
         // Releasing `lock` before the call to `notify_one` means that when the parked thread wakes
         // it doesn't get woken only to have to wait for us to release `lock`.
         drop(self.lock.lock().unwrap());
-        self.cvar.notify_one();
+
+        if state == PARKED {
+            self.cvar.notify_one();
+        } else {
+            EVENT.notify();
+        }
     }
 }

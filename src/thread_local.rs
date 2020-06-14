@@ -4,7 +4,7 @@
 //! [`run()`][`crate::run()`] creates a thread-local executor. Tasks cannot be spawned onto a
 //! thread-local executor if it is not running.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::future::Future;
 use std::sync::Arc;
@@ -13,53 +13,52 @@ use std::thread::{self, ThreadId};
 use concurrent_queue::ConcurrentQueue;
 use scoped_tls_hkt::scoped_thread_local;
 
-use crate::io_event::IoEvent;
 use crate::task::{Runnable, Task};
-use crate::throttle;
 
 scoped_thread_local! {
     /// The thread-local executor.
     ///
-    /// This thread-local is only set while inside [`ThreadLocalExecutor::enter()`].
-    static EXECUTOR: ThreadLocalExecutor
+    /// This thread-local is only set while inside [`LocalExecutor::enter()`].
+    static EXECUTOR: LocalExecutor
 }
 
 /// An executor for thread-local tasks.
 ///
 /// Thread-local tasks are spawned by calling [`Task::local()`] and their futures do not have to
 /// implement [`Send`]. They can only be run by the same thread that created them.
-pub(crate) struct ThreadLocalExecutor {
+pub(crate) struct LocalExecutor {
     /// The main task queue.
     queue: RefCell<VecDeque<Runnable>>,
 
     /// When another thread wakes a task belonging to this executor, it goes into this queue.
     injector: Arc<ConcurrentQueue<Runnable>>,
 
-    /// An I/O event that is triggered when another thread wakes a task belonging to this executor.
-    event: IoEvent,
+    callback: Arc<dyn Fn() + Send + Sync>,
+
+    sleeping: Cell<bool>,
+
+    ticks: Cell<usize>,
 }
 
-impl ThreadLocalExecutor {
+impl LocalExecutor {
     /// Creates a new thread-local executor.
-    pub fn new() -> ThreadLocalExecutor {
-        ThreadLocalExecutor {
+    pub fn new(notify: impl Fn() + Send + Sync + 'static) -> LocalExecutor {
+        LocalExecutor {
             queue: RefCell::new(VecDeque::new()),
             injector: Arc::new(ConcurrentQueue::unbounded()),
-            event: IoEvent::new().expect("cannot create an `IoEvent`"),
+            callback: Arc::new(notify),
+            sleeping: Cell::new(false),
+            ticks: Cell::new(0),
         }
     }
 
     /// Enters the context of this executor.
     pub fn enter<T>(&self, f: impl FnOnce() -> T) -> T {
+        // TODO(stjepang): Allow recursive executors.
         if EXECUTOR.is_set() {
             panic!("cannot run an executor inside another executor");
         }
         EXECUTOR.set(self, f)
-    }
-
-    /// Returns the event indicating there is a scheduled task.
-    pub fn event(&self) -> &IoEvent {
-        &self.event
     }
 
     /// Spawns a future onto this executor.
@@ -74,7 +73,7 @@ impl ThreadLocalExecutor {
             // Why weak reference here? Injector may hold the task while the task's waker holds a
             // reference to the injector. So this reference must be weak to break the cycle.
             let injector = Arc::downgrade(&ex.injector);
-            let event = ex.event.clone();
+            let callback = ex.callback.clone();
             let id = thread_id();
 
             // The function that schedules a runnable task when it gets woken up.
@@ -90,7 +89,7 @@ impl ThreadLocalExecutor {
                 // Trigger an I/O event to let the original thread know that a task has been
                 // scheduled. If that thread is inside epoll/kqueue/wepoll, an I/O event will wake
                 // it up.
-                event.notify();
+                callback();
             };
 
             // Create a task, push it into the queue by scheduling it, and return its `Task` handle.
@@ -100,30 +99,23 @@ impl ThreadLocalExecutor {
         })
     }
 
-    /// Executes a batch of tasks and returns `true` if there may be more tasks to run.
-    pub fn execute(&self) -> bool {
-        // Execute 4 series of 50 tasks.
-        for _ in 0..4 {
-            for _ in 0..50 {
-                // Find the next task to run.
-                match self.search() {
-                    None => {
-                        // There are no more tasks to run.
-                        return false;
-                    }
-                    Some(r) => {
-                        // Run the task.
-                        throttle::setup(|| r.run());
-                    }
-                }
+    pub fn tick(&self) -> bool {
+        match self.search() {
+            None => {
+                self.ticks.set(0);
+                false
             }
+            Some(r) => {
+                self.ticks.set(self.ticks.get() + 1);
+                if self.ticks.get() == 50 {
+                    self.ticks.set(0);
+                    self.fetch();
+                }
 
-            // Drain the injector queue occasionally for fair scheduling.
-            self.fetch();
+                self.enter(|| r.run());
+                true
+            }
         }
-
-        // There are likely more tasks to run.
-        true
     }
 
     /// Finds the next task to run.
