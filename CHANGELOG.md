@@ -1,3 +1,7 @@
+# Version 0.1.12
+
+- Fix a bug in `Async::<UdpSocket>::recv()`.
+
 # Version 0.1.11
 
 - Update `wepoll-binding`.
