@@ -5,7 +5,7 @@
 use std::fmt::Debug;
 use std::future::Future;
 use std::pin::Pin;
-use std::task::{Context, Poll};
+use std::task::{Context, Poll, Waker};
 use std::time::{Duration, Instant};
 
 use crate::reactor::Reactor;
@@ -62,10 +62,8 @@ use crate::reactor::Reactor;
 /// ```
 #[derive(Debug)]
 pub struct Timer {
-    /// This timer's ID.
-    ///
-    /// When this field is set to `None`, this timer is not registered in the reactor.
-    id: Option<usize>,
+    /// This timer's registration in the reactor.
+    registration: Option<(usize, Waker)>,
 
     /// When this timer fires.
     when: Instant,
@@ -103,14 +101,14 @@ impl Timer {
     /// # });
     /// ```
     pub fn at(when: Instant) -> Timer {
-        let id = None;
-        Timer { id, when }
+        let registration = None;
+        Timer { registration, when }
     }
 }
 
 impl Drop for Timer {
     fn drop(&mut self) {
-        if let Some(id) = self.id.take() {
+        if let Some((id, _)) = self.registration.take() {
             // Deregister the timer from the reactor.
             Reactor::get().remove_timer(self.when, id);
         }
@@ -123,15 +121,29 @@ impl Future for Timer {
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         // Check if the timer has already fired.
         if Instant::now() >= self.when {
-            if let Some(id) = self.id.take() {
+            if let Some((id, _)) = self.registration.take() {
                 // Deregister the timer from the reactor.
                 Reactor::get().remove_timer(self.when, id);
             }
             Poll::Ready(self.when)
         } else {
-            if self.id.is_none() {
-                // Register the timer in the reactor.
-                self.id = Some(Reactor::get().insert_timer(self.when, cx.waker()));
+            match self.registration {
+                None => {
+                    // Register the timer in the reactor.
+                    let waker = cx.waker();
+                    self.registration = Some((
+                        Reactor::get().insert_new_timer(self.when, waker),
+                        waker.clone(),
+                    ));
+                }
+                Some((id, ref old_waker)) => {
+                    let new_waker = cx.waker();
+                    if !old_waker.will_wake(new_waker) {
+                        // Reregister the timer to the new waker.
+                        Reactor::get().insert_timer(self.when, id, new_waker);
+                        self.registration = Some((id, new_waker.clone()));
+                    }
+                }
             }
             Poll::Pending
         }

@@ -120,14 +120,23 @@ impl Reactor {
         self.sys.deregister(source.raw)
     }
 
-    /// Registers a timer in the reactor.
+    /// Registers a timer in the reactor with a fresh ID.
     ///
     /// Returns the inserted timer's ID.
-    pub fn insert_timer(&self, when: Instant, waker: &Waker) -> usize {
+    pub fn insert_new_timer(&self, when: Instant, waker: &Waker) -> usize {
         // Generate a new timer ID.
         static ID_GENERATOR: AtomicUsize = AtomicUsize::new(1);
         let id = ID_GENERATOR.fetch_add(1, Ordering::Relaxed);
 
+        // Insert a timer with the generated ID.
+        self.insert_timer(when, id, waker);
+
+        id
+    }
+
+    /// Registers a timer in the reactor, overwriting if one has already been registered with the
+    /// given ID.
+    pub fn insert_timer(&self, when: Instant, id: usize, waker: &Waker) {
         // Push an insert operation.
         while self
             .timer_ops
@@ -138,10 +147,8 @@ impl Reactor {
             self.fire_timers();
         }
 
-        // Notify that a timer was added.
+        // Notify that a timer was registered.
         self.notify();
-
-        id
     }
 
     /// Deregisters a timer from the reactor.
