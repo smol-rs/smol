@@ -119,15 +119,15 @@ mod async_io;
 mod block_on;
 mod blocking;
 mod context;
+mod executor;
 mod io_event;
+mod parking;
 mod reactor;
 mod run;
 mod sys;
 mod task;
-mod thread_local;
 mod throttle;
 mod timer;
-mod work_stealing;
 
 pub use self::blocking::{iter, reader, writer};
 pub use async_io::Async;

@@ -4,17 +4,23 @@
 
 use std::future::Future;
 use std::task::{Context, Poll};
-use std::thread;
+use std::time::Duration;
 
-use futures_util::future::{self, Either};
+use once_cell::sync::Lazy;
 
-use crate::block_on;
 use crate::context;
-use crate::io_event::IoEvent;
-use crate::reactor::{Reactor, ReactorLock};
-use crate::thread_local::ThreadLocalExecutor;
+use crate::executor::{Queue, Worker};
+use crate::parking::Parker;
 use crate::throttle;
-use crate::work_stealing::WorkStealingExecutor;
+use scoped_tls::scoped_thread_local;
+
+/// The global task queue.
+pub(crate) static QUEUE: Lazy<Queue> = Lazy::new(|| Queue::new());
+
+scoped_thread_local! {
+    /// Thread-local worker queue.
+    pub(crate) static WORKER: Worker
+}
 
 /// Runs executors and polls the reactor.
 ///
@@ -95,134 +101,36 @@ use crate::work_stealing::WorkStealingExecutor;
 /// }
 /// ```
 pub fn run<T>(future: impl Future<Output = T>) -> T {
-    // Create a thread-local executor and a worker in the work-stealing executor.
-    let local = ThreadLocalExecutor::new();
-    let ws_executor = WorkStealingExecutor::get();
-    let worker = ws_executor.worker();
-    let reactor = Reactor::get();
+    let parker = Parker::new();
+
+    let unparker = parker.unparker();
+    let worker = QUEUE.worker(move || unparker.unpark());
 
     // Create a waker that triggers an I/O event in the thread-local scheduler.
-    let ev = local.event().clone();
-    let waker = async_task::waker_fn(move || ev.notify());
+    let unparker = parker.unparker();
+    let waker = async_task::waker_fn(move || unparker.unpark());
     let cx = &mut Context::from_waker(&waker);
     futures_util::pin_mut!(future);
 
-    // Set up tokio (if enabled) and the thread-locals before execution begins.
-    let enter = context::enter;
-    let enter = |f| local.enter(|| enter(f));
-    let enter = |f| worker.enter(|| enter(f));
+    // Set up tokio if enabled.
+    context::enter(|| {
+        WORKER.set(&worker, || {
+            'start: loop {
+                // Poll the main future.
+                if let Poll::Ready(val) = throttle::setup(|| future.as_mut().poll(cx)) {
+                    return val;
+                }
 
-    enter(|| {
-        // A list of I/O events that indicate there is work to do.
-        let io_events = [local.event(), ws_executor.event()];
+                for _ in 0..200 {
+                    if !worker.tick() {
+                        parker.park();
+                        continue 'start;
+                    }
+                }
 
-        // Number of times this thread has yielded because it didn't find any work.
-        let mut yields = 0;
-
-        // We run four components at the same time, treating them all fairly and making sure none
-        // of them get starved:
-        //
-        // 1. `future` - the main future.
-        // 2. `local - the thread-local executor.
-        // 3. `worker` - the work-stealing executor.
-        // 4. `reactor` - the reactor.
-        //
-        // When all four components are out of work, we block the current thread on
-        // epoll/kevent/wepoll. If new work comes in that isn't naturally triggered by an I/O event
-        // registered with `Async` handles, we use `IoEvent`s to simulate an I/O event that will
-        // unblock the thread:
-        //
-        // - When the main future is woken, `local.event()` is triggered.
-        // - When thread-local executor gets new work, `local.event()` is triggered.
-        // - When work-stealing executor gets new work, `ws_executor.event()` is triggered.
-        // - When a new earliest timer is registered, `reactor.event()` is triggered.
-        //
-        // This way we make sure that if any changes happen that might give us new work will
-        // unblock epoll/kevent/wepoll and let us continue the loop.
-        loop {
-            // 1. Poll the main future.
-            if let Poll::Ready(val) = throttle::setup(|| future.as_mut().poll(cx)) {
-                return val;
+                // Process ready I/O events without blocking.
+                parker.park_timeout(Duration::from_secs(0));
             }
-
-            // 2. Run a batch of tasks in the thread-local executor.
-            let more_local = local.execute();
-            // 3. Run a batch of tasks in the work-stealing executor.
-            let more_worker = worker.execute();
-
-            // 4. Poll the reactor.
-            if let Some(reactor_lock) = reactor.try_lock() {
-                yields = 0;
-                react(reactor_lock, &io_events, more_local || more_worker);
-                continue;
-            }
-
-            // If there is more work in the thread-local or the work-stealing executor, continue.
-            if more_local || more_worker {
-                yields = 0;
-                continue;
-            }
-
-            // Yield a few times if no work is found.
-            yields += 1;
-            if yields <= 2 {
-                thread::yield_now();
-                continue;
-            }
-
-            // If still no work is found, stop yielding and block the thread.
-            yields = 0;
-
-            // Prepare for blocking until the reactor is locked or `local.event()` is triggered.
-            //
-            // Note that there is no need to wait for `ws_executor.event()`. If we lock the reactor
-            // immediately, we'll check for the I/O event right after that anyway.
-            //
-            // If some other worker is holding the reactor locked, it will unlock it as soon as the
-            // I/O event is triggered. Then, another worker will be allowed to lock the reactor,
-            // and will unlock it if there is more work to do because every worker triggers the I/O
-            // event whenever it finds a runnable task.
-            let lock = reactor.lock();
-            let notified = local.event().notified();
-            futures_util::pin_mut!(lock);
-            futures_util::pin_mut!(notified);
-
-            // Block until either the reactor is locked or `local.event()` is triggered.
-            if let Either::Left((reactor_lock, _)) = block_on(future::select(lock, notified)) {
-                react(reactor_lock, &io_events, false);
-            } else {
-                // Clear `local.event()` because it was triggered.
-                local.event().clear();
-            }
-        }
+        })
     })
-}
-
-/// Polls or waits on the locked reactor.
-///
-/// If any of the I/O events are ready or there are more tasks to run, the reactor is polled.
-/// Otherwise, the current thread waits on it until a timer fires or an I/O event occurs.
-///
-/// I/O events are cleared at the end of this function.
-fn react(mut reactor_lock: ReactorLock<'_>, io_events: &[&IoEvent], mut more_tasks: bool) {
-    // Clear all I/O events and check if any of them were triggered.
-    for ev in io_events {
-        if ev.clear() {
-            more_tasks = true;
-        }
-    }
-
-    if more_tasks {
-        // If there might be more tasks to run, just poll without blocking.
-        reactor_lock.poll().expect("failure while polling I/O");
-    } else {
-        // Otherwise, block until the first I/O event or a timer.
-        reactor_lock.wait().expect("failure while waiting on I/O");
-
-        // Clear all I/O events before dropping the lock. This is not really necessary, but
-        // clearing flags here might prevent a redundant wakeup in the future.
-        for ev in io_events {
-            ev.clear();
-        }
-    }
 }

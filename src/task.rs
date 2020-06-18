@@ -8,8 +8,7 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use crate::blocking::BlockingExecutor;
-use crate::thread_local::ThreadLocalExecutor;
-use crate::work_stealing::WorkStealingExecutor;
+use crate::run::{QUEUE, WORKER};
 
 /// A runnable future, ready for execution.
 ///
@@ -54,7 +53,7 @@ pub(crate) type Runnable = async_task::Task<()>;
 /// # });
 /// ```
 ///
-/// [`run()`]: crate::run()
+/// [`run()`]: `crate::run()`
 #[must_use = "tasks get canceled when dropped, use `.detach()` to run them in the background"]
 #[derive(Debug)]
 pub struct Task<T>(pub(crate) Option<async_task::JoinHandle<T, ()>>);
@@ -75,9 +74,13 @@ impl<T: 'static> Task<T> {
     /// # })
     /// ```
     ///
-    /// [`run()`]: crate::run()
+    /// [`run()`]: `crate::run()`
     pub fn local(future: impl Future<Output = T> + 'static) -> Task<T> {
-        ThreadLocalExecutor::spawn(future)
+        if WORKER.is_set() {
+            WORKER.with(|w| w.spawn_local(future))
+        } else {
+            panic!("cannot spawn a thread-local task if not inside an executor")
+        }
     }
 }
 
@@ -97,9 +100,13 @@ impl<T: Send + 'static> Task<T> {
     /// # });
     /// ```
     ///
-    /// [`run()`]: crate::run()
+    /// [`run()`]: `crate::run()`
     pub fn spawn(future: impl Future<Output = T> + Send + 'static) -> Task<T> {
-        WorkStealingExecutor::get().spawn(future)
+        QUEUE.spawn(future)
+        // WORKER.with(|w| match &*w.borrow() {
+        //     None => QUEUE.spawn(future),
+        //     Some(w) => w.spawn(future),
+        // })
     }
 
     /// Spawns a future onto the blocking executor.

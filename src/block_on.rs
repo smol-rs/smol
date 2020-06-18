@@ -7,11 +7,7 @@
 //! [`futures::executor::block_on()`]: https://docs.rs/futures/0.3/futures/executor/fn.block_on.html
 //! [blog-post]: https://stjepang.github.io/2020/01/25/build-your-own-block-on.html
 
-use std::cell::RefCell;
 use std::future::Future;
-use std::task::{Context, Poll, Waker};
-
-use crossbeam_utils::sync::Parker;
 
 use crate::context;
 
@@ -43,33 +39,7 @@ use crate::context;
 /// })
 /// ```
 ///
-/// [`run()`]: crate::run()
+/// [`run()`]: `crate::run()`
 pub fn block_on<T>(future: impl Future<Output = T>) -> T {
-    thread_local! {
-        // Parker and waker associated with the current thread.
-        static CACHE: RefCell<(Parker, Waker)> = {
-            let parker = Parker::new();
-            let unparker = parker.unparker().clone();
-            let waker = async_task::waker_fn(move || unparker.unpark());
-            RefCell::new((parker, waker))
-        };
-    }
-
-    CACHE.with(|cache| {
-        // Panic if `block_on()` is called recursively.
-        let (parker, waker) = &*cache.borrow();
-
-        // If enabled, set up tokio before execution begins.
-        context::enter(|| {
-            futures_util::pin_mut!(future);
-            let cx = &mut Context::from_waker(&waker);
-
-            loop {
-                match future.as_mut().poll(cx) {
-                    Poll::Ready(output) => return output,
-                    Poll::Pending => parker.park(),
-                }
-            }
-        })
-    })
+    context::enter(|| blocking::block_on(future))
 }
