@@ -1,3 +1,8 @@
+# Version 0.1.13
+
+- Fix a deadlock caused by lost wakeups.
+- Refactor the executor.
+
 # Version 0.1.12
 
 - Fix a bug in `Async::<UdpSocket>::recv()`.
