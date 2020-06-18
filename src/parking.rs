@@ -153,6 +153,7 @@ impl Inner {
                 reactor_lock
                     .react(Some(Duration::from_secs(0)))
                     .expect("failure while polling I/O");
+                EVENT.clear();
             }
             return true;
         }
@@ -165,6 +166,7 @@ impl Inner {
                     reactor_lock
                         .react(Some(Duration::from_secs(0)))
                         .expect("failure while polling I/O");
+                    EVENT.clear();
                 }
                 return false;
             }
