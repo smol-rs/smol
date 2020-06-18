@@ -277,6 +277,19 @@ impl ReactorLock<'_> {
                         if ev.writable {
                             ready.append(&mut wakers.writers);
                         }
+
+                        // Re-register if there are still writers or
+                        // readers. The can happen if e.g. we were
+                        // previously interested in both readability and
+                        // writability, but only one of them was emitted.
+                        if !(wakers.writers.is_empty() && wakers.readers.is_empty()) {
+                            self.reactor.sys.reregister(
+                                source.raw,
+                                source.key,
+                                !wakers.readers.is_empty(),
+                                !wakers.writers.is_empty(),
+                            )?;
+                        }
                     }
                 }
 

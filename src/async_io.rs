@@ -852,7 +852,7 @@ impl Async<UdpSocket> {
     /// # std::io::Result::Ok(()) });
     /// ```
     pub async fn recv(&self, buf: &mut [u8]) -> io::Result<usize> {
-        self.write_with(|io| io.recv(buf)).await
+        self.read_with(|io| io.recv(buf)).await
     }
 
     /// Receives a single datagram message from the connected peer without removing it from the

@@ -1,3 +1,14 @@
+# Version 0.1.12
+
+- Fix a bug in `Async::<UdpSocket>::recv()`.
+
+# Version 0.1.11
+
+- Update `wepoll-binding`.
+- Reduce dependencies.
+- Replace `nix` with `libc`.
+- Set minimum required `tokio` version to 0.2.
+
 # Version 0.1.10
 
 - Fix incorrectly reported error kind when connecting fails.
