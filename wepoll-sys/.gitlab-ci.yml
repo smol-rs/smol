@@ -1,0 +1,40 @@
+---
+
+variables:
+  CARGO_HOME: $CI_PROJECT_DIR/.cargo
+
+test:cargo:
+  stage: test
+  tags:
+    - shared-windows
+    - windows
+    - windows-1809
+  before_script:
+    - choco install rust-ms -y --no-progress
+    - rustc --version
+    - cargo --version
+  script:
+    - cargo test
+  cache:
+    paths:
+      - .cargo
+
+lint:rustfmt:
+  image: rust:latest
+  stage: test
+  before_script:
+    - rustup component add rustfmt
+    - rustc --version
+    - cargo --version
+    - rustfmt --version
+  script:
+    - rustfmt --check src/lib.rs build.rs
+
+lint:bindgen:
+  image: ruby:2.7-alpine
+  stage: test
+  before_script:
+    - apk add --no-cache --update git
+    - ruby --version
+  script:
+    - ruby scripts/lint_bindgen.rb

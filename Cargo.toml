@@ -50,6 +50,8 @@ libc = "0.2.70"
 miow = "0.3.5"
 wepoll-binding = "2.0.2"
 winapi = { version = "0.3.8", features = ["ioapiset"] }
+[target.'cfg(windows)'.patch.crates-io]
+wepoll-sys = { path = "./wepoll-sys" }
 
 [dev-dependencies]
 futures = { version = "0.3.5", default-features = false, features = ["std"] }

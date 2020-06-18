@@ -1,0 +1,24 @@
+[package]
+name = "wepoll-sys"
+version = "2.0.0"
+authors = ["Yorick Peterse <yorickpeterse@gmail.com>"]
+edition = "2018"
+links = "wepoll"
+build = "build.rs"
+description = "Raw bindings to the wepoll library"
+repository = "https://gitlab.com/yorickpeterse/wepoll-sys"
+readme = "README.md"
+license = "MPL-2.0"
+keywords = ["wepoll", "poll", "windows", "epoll"]
+categories = ["external-ffi-bindings", "os::windows-apis"]
+
+[build-dependencies]
+bindgen = { version = "^0.53", optional = true }
+cc = "^1.0"
+
+[package.metadata.docs.rs]
+default-target = "x86_64-pc-windows-msvc"
+
+[features]
+default = []
+buildtime-bindgen = ["bindgen"]
