@@ -4,19 +4,23 @@
 
 use std::future::Future;
 use std::task::{Context, Poll};
-use std::thread;
 use std::time::Duration;
 
-use futures_util::future::{self, Either};
+use once_cell::sync::Lazy;
 
-use crate::block_on;
 use crate::context;
-use crate::io_event::IoEvent;
-use crate::io_parking::{IoParker, IoUnparker};
-use crate::reactor::{Reactor, ReactorLock};
-use crate::thread_local::LocalExecutor;
+use crate::executor::{Queue, Worker};
+use crate::parking::Parker;
 use crate::throttle;
-use crate::work_stealing::{Executor, Worker};
+use scoped_tls::scoped_thread_local;
+
+/// The global task queue.
+pub(crate) static QUEUE: Lazy<Queue> = Lazy::new(|| Queue::new());
+
+scoped_thread_local! {
+    /// Thread-local worker queue.
+    pub(crate) static WORKER: Worker
+}
 
 /// Runs executors and polls the reactor.
 ///
@@ -97,13 +101,10 @@ use crate::work_stealing::{Executor, Worker};
 /// }
 /// ```
 pub fn run<T>(future: impl Future<Output = T>) -> T {
-    let parker = IoParker::new();
+    let parker = Parker::new();
 
     let unparker = parker.unparker();
-    let worker = Executor::get().worker(move || unparker.unpark());
-
-    let unparker = parker.unparker();
-    let local = LocalExecutor::new(move || unparker.unpark());
+    let worker = QUEUE.worker(move || unparker.unpark());
 
     // Create a waker that triggers an I/O event in the thread-local scheduler.
     let unparker = parker.unparker();
@@ -112,38 +113,24 @@ pub fn run<T>(future: impl Future<Output = T>) -> T {
     futures_util::pin_mut!(future);
 
     // Set up tokio if enabled.
-    // let mut enter = context::enter;
-
-    loop {
-        // Poll the main future.
-        if let Poll::Ready(val) = throttle::setup(|| future.as_mut().poll(cx)) {
-            return val;
-        }
-
-        let mut more_worker = true;
-        let mut more_local = true;
-        // enter(|| {
-            for _ in 0..200 {
-                if !worker.tick() {
-                    more_worker = false;
-                    break;
+    context::enter(|| {
+        WORKER.set(&worker, || {
+            'start: loop {
+                // Poll the main future.
+                if let Poll::Ready(val) = throttle::setup(|| future.as_mut().poll(cx)) {
+                    return val;
                 }
-            }
 
-            for _ in 0..200 {
-                if !local.tick() {
-                    more_local = false;
-                    break;
+                for _ in 0..200 {
+                    if !worker.tick() {
+                        parker.park();
+                        continue 'start;
+                    }
                 }
-            }
-        // });
 
-        if more_local || more_worker {
-            // Process ready I/O events without blocking.
-            parker.park_timeout(Duration::from_secs(0));
-        } else {
-            // Wait until unparked.
-            parker.park();
-        }
-    }
+                // Process ready I/O events without blocking.
+                parker.park_timeout(Duration::from_secs(0));
+            }
+        })
+    })
 }

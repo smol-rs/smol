@@ -56,7 +56,7 @@ pub(crate) struct Reactor {
     sources: piper::Mutex<Slab<Arc<Source>>>,
 
     /// Temporary storage for I/O events when polling the reactor.
-    events: piper::Lock<sys::Events>,
+    events: piper::Mutex<sys::Events>,
 
     /// An ordered map of registered timers.
     ///
@@ -84,7 +84,7 @@ impl Reactor {
         static REACTOR: Lazy<Reactor> = Lazy::new(|| Reactor {
             sys: sys::Reactor::new().expect("cannot initialize I/O event notification"),
             sources: piper::Mutex::new(Slab::new()),
-            events: piper::Lock::new(sys::Events::new()),
+            events: piper::Mutex::new(sys::Events::new()),
             timers: piper::Mutex::new(BTreeMap::new()),
             timer_ops: ConcurrentQueue::bounded(1000),
             timer_event: Lazy::new(|| IoEvent::new().expect("cannot create an `IoEvent`")),
@@ -177,13 +177,6 @@ impl Reactor {
         })
     }
 
-    /// Locks the reactor.
-    pub async fn lock(&self) -> ReactorLock<'_> {
-        let reactor = self;
-        let events = self.events.lock().await;
-        ReactorLock { reactor, events }
-    }
-
     /// Fires ready timers.
     ///
     /// Returns the duration until the next timer before this method was called.
@@ -240,79 +233,69 @@ impl Reactor {
 /// A lock on the reactor.
 pub(crate) struct ReactorLock<'a> {
     reactor: &'a Reactor,
-    events: piper::LockGuard<sys::Events>,
+    events: piper::MutexGuard<'a, sys::Events>,
 }
 
 impl ReactorLock<'_> {
-    /// Processes ready events without blocking.
-    pub fn poll(&mut self) -> io::Result<()> {
-        self.react(false)
-    }
-
-    /// Blocks until at least one event is processed.
-    pub fn wait(&mut self) -> io::Result<()> {
-        self.react(true)
-    }
-
-    /// Processes new events, optionally blocking until the first event.
-    fn react(&mut self, block: bool) -> io::Result<()> {
-        // Fire timers and compute the timeout for blocking on I/O events.
+    /// Processes new events, blocking until the first event or the timeout.
+    pub fn react(&mut self, timeout: Option<Duration>) -> io::Result<()> {
+        // Fire timers.
         let next_timer = self.reactor.fire_timers();
-        let timeout = if block {
-            next_timer
-        } else {
-            Some(Duration::from_secs(0))
+
+        // compute the timeout for blocking on I/O events.
+        let timeout = match (next_timer, timeout) {
+            (None, None) => None,
+            (Some(t), None) | (None, Some(t)) => Some(t),
+            (Some(a), Some(b)) => Some(a.min(b)),
         };
 
-        loop {
-            // Block on I/O events.
-            match self.reactor.sys.wait(&mut self.events, timeout) {
-                // The timeout was hit so fire ready timers.
-                Ok(0) => {
-                    self.reactor.fire_timers();
-                    return Ok(());
-                }
+        // Block on I/O events.
+        match self.reactor.sys.wait(&mut self.events, timeout) {
+            // The timeout was hit so fire ready timers.
+            Ok(0) => {
+                self.reactor.fire_timers();
+                return Ok(());
+            }
 
-                // At least one I/O event occured.
-                Ok(_) => {
-                    // Iterate over sources in the event list.
-                    let sources = self.reactor.sources.lock();
-                    let mut ready = Vec::new();
+            // At least one I/O event occured.
+            Ok(_) => {
+                // Iterate over sources in the event list.
+                let sources = self.reactor.sources.lock();
+                let mut ready = Vec::new();
 
-                    for ev in self.events.iter() {
-                        // Check if there is a source in the table with this key.
-                        if let Some(source) = sources.get(ev.key) {
-                            let mut wakers = source.wakers.lock();
+                for ev in self.events.iter() {
+                    // Check if there is a source in the table with this key.
+                    if let Some(source) = sources.get(ev.key) {
+                        let mut wakers = source.wakers.lock();
 
-                            // Wake readers if a readability event was emitted.
-                            if ev.readable {
-                                ready.append(&mut wakers.readers);
-                            }
+                        // Wake readers if a readability event was emitted.
+                        if ev.readable {
+                            ready.append(&mut wakers.readers);
+                        }
 
-                            // Wake writers if a writability event was emitted.
-                            if ev.writable {
-                                ready.append(&mut wakers.writers);
-                            }
+                        // Wake writers if a writability event was emitted.
+                        if ev.writable {
+                            ready.append(&mut wakers.writers);
                         }
                     }
-
-                    // Drop the lock before waking.
-                    drop(sources);
-
-                    // Wake up tasks waiting on I/O.
-                    for waker in ready {
-                        waker.wake();
-                    }
-
-                    return Ok(());
                 }
 
-                // The syscall was interrupted.
-                Err(err) if err.kind() == io::ErrorKind::Interrupted => continue,
+                // Drop the lock before waking.
+                drop(sources);
 
-                // An actual error occureed.
-                Err(err) => return Err(err),
+                // Wake up tasks waiting on I/O.
+                for waker in ready {
+                    waker.wake();
+                }
+
+                Ok(())
             }
+
+            // The syscall was interrupted.
+            Err(err) if err.kind() == io::ErrorKind::Interrupted => Ok(()),
+
+            // An actual error occureed.
+            Err(err) => Err(err),
         }
     }
 }

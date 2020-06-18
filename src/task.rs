@@ -8,8 +8,7 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use crate::blocking::BlockingExecutor;
-use crate::thread_local::LocalExecutor;
-use crate::work_stealing::Executor;
+use crate::run::{QUEUE, WORKER};
 
 /// A runnable future, ready for execution.
 ///
@@ -77,7 +76,11 @@ impl<T: 'static> Task<T> {
     ///
     /// [`run()`]: `crate::run()`
     pub fn local(future: impl Future<Output = T> + 'static) -> Task<T> {
-        LocalExecutor::spawn(future)
+        if WORKER.is_set() {
+            WORKER.with(|w| w.spawn_local(future))
+        } else {
+            panic!("cannot spawn a thread-local task if not inside an executor")
+        }
     }
 }
 
@@ -99,7 +102,11 @@ impl<T: Send + 'static> Task<T> {
     ///
     /// [`run()`]: `crate::run()`
     pub fn spawn(future: impl Future<Output = T> + Send + 'static) -> Task<T> {
-        Executor::get().spawn(future)
+        QUEUE.spawn(future)
+        // WORKER.with(|w| match &*w.borrow() {
+        //     None => QUEUE.spawn(future),
+        //     Some(w) => w.spawn(future),
+        // })
     }
 
     /// Spawns a future onto the blocking executor.

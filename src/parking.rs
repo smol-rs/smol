@@ -1,93 +1,127 @@
+use std::cell::Cell;
 use std::fmt;
-use std::marker::PhantomData;
-use std::sync::atomic::AtomicUsize;
-use std::sync::atomic::Ordering::SeqCst;
+use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 use once_cell::sync::Lazy;
+use slab::Slab;
 
 use crate::io_event::IoEvent;
-use crate::reactor::{Reactor, ReactorLock};
+use crate::reactor::Reactor;
 
-pub(crate) struct IoParker {
-    unparker: IoUnparker,
-    _marker: PhantomData<*const ()>,
+static REGISTRY: Lazy<Mutex<Slab<Unparker>>> = Lazy::new(|| Mutex::new(Slab::new()));
+
+/// Parks a thread.
+pub(crate) struct Parker {
+    key: Cell<Option<usize>>,
+    unparker: Unparker,
 }
 
-unsafe impl Send for IoParker {}
+unsafe impl Send for Parker {}
 
-impl IoParker {
-    pub fn new() -> IoParker {
-        IoParker {
-            unparker: IoUnparker {
+impl Parker {
+    /// Creates a new [`Parker`].
+    pub fn new() -> Parker {
+        Parker {
+            key: Cell::new(None),
+            unparker: Unparker {
                 inner: Arc::new(Inner {
                     state: AtomicUsize::new(EMPTY),
                     lock: Mutex::new(()),
                     cvar: Condvar::new(),
                 }),
             },
-            _marker: PhantomData,
         }
     }
 
+    /// Blocks the current thread until the token is made available.
     pub fn park(&self) {
+        self.register();
         self.unparker.inner.park(None);
     }
 
+    /// Blocks the current thread until the token is made available or the timeout is reached.
     pub fn park_timeout(&self, timeout: Duration) -> bool {
+        self.register();
         self.unparker.inner.park(Some(timeout))
     }
 
-    pub fn park_deadline(&self, deadline: Instant) -> bool {
-        self.unparker
-            .inner
-            .park(Some(deadline.saturating_duration_since(Instant::now())))
-    }
+    // /// Blocks the current thread until the token is made available or the deadline is reached.
+    // pub fn park_deadline(&self, deadline: Instant) -> bool {
+    //     self.register();
+    //     self.unparker
+    //         .inner
+    //         .park(Some(deadline.saturating_duration_since(Instant::now())))
+    // }
+    //
+    // /// Atomically makes the token available if it is not already.
+    // pub fn unpark(&self) {
+    //     self.unparker.unpark()
+    // }
 
-    pub fn unpark(&self) {
-        self.unparker.unpark()
-    }
-
-    pub fn unparker(&self) -> IoUnparker {
+    /// Returns a handle for unparking.
+    pub fn unparker(&self) -> Unparker {
         self.unparker.clone()
     }
+
+    fn register(&self) {
+        if self.key.get().is_none() {
+            let mut reg = REGISTRY.lock().unwrap();
+            let key = reg.insert(self.unparker.clone());
+            self.key.set(Some(key));
+        }
+    }
+
+    fn unregister(&self) {
+        if let Some(key) = self.key.take() {
+            let mut reg = REGISTRY.lock().unwrap();
+            reg.remove(key);
+
+            // Notify another parker to make sure the reactor keeps getting polled.
+            if let Some((_, u)) = reg.iter().next() {
+                u.unpark();
+            }
+        }
+    }
 }
 
-impl Drop for IoParker {
+impl Drop for Parker {
     fn drop(&mut self) {
-        // TODO: wake up another active IoParker
+        self.unregister();
     }
 }
 
-impl fmt::Debug for IoParker {
+impl fmt::Debug for Parker {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.pad("IoParker { .. }")
+        f.pad("Parker { .. }")
     }
 }
 
-pub(crate) struct IoUnparker {
+/// Unparks a thread.
+pub(crate) struct Unparker {
     inner: Arc<Inner>,
 }
 
-unsafe impl Send for IoUnparker {}
-unsafe impl Sync for IoUnparker {}
+unsafe impl Send for Unparker {}
+unsafe impl Sync for Unparker {}
 
-impl IoUnparker {
+impl Unparker {
+    /// Atomically makes the token available if it is not already.
     pub fn unpark(&self) {
         self.inner.unpark()
     }
 }
 
-impl fmt::Debug for IoUnparker {
+impl fmt::Debug for Unparker {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.pad("IoUnparker { .. }")
+        f.pad("Unparker { .. }")
     }
 }
 
-impl Clone for IoUnparker {
-    fn clone(&self) -> IoUnparker {
-        IoUnparker {
+impl Clone for Unparker {
+    fn clone(&self) -> Unparker {
+        Unparker {
             inner: self.inner.clone(),
         }
     }
@@ -108,8 +142,6 @@ struct Inner {
 
 impl Inner {
     fn park(&self, timeout: Option<Duration>) -> bool {
-        let mut reactor_lock = Reactor::get().try_lock();
-
         // If we were previously notified then we consume this notification and return quickly.
         if self
             .state
@@ -118,7 +150,9 @@ impl Inner {
         {
             // Process available I/O events.
             if let Some(mut reactor_lock) = Reactor::get().try_lock() {
-                reactor_lock.poll().expect("failure while polling I/O");
+                reactor_lock
+                    .react(Some(Duration::from_secs(0)))
+                    .expect("failure while polling I/O");
             }
             return true;
         }
@@ -128,19 +162,21 @@ impl Inner {
             if dur == Duration::from_millis(0) {
                 // Process available I/O events.
                 if let Some(mut reactor_lock) = Reactor::get().try_lock() {
-                    reactor_lock.poll().expect("failure while polling I/O");
+                    reactor_lock
+                        .react(Some(Duration::from_secs(0)))
+                        .expect("failure while polling I/O");
                 }
                 return false;
             }
         }
 
         // Otherwise we need to coordinate going to sleep.
-        let mut m = self.lock.lock().unwrap();
-
+        let mut reactor_lock = Reactor::get().try_lock();
         let state = match reactor_lock {
             None => PARKED,
             Some(_) => POLLING,
         };
+        let mut m = self.lock.lock().unwrap();
 
         match self.state.compare_exchange(EMPTY, state, SeqCst, SeqCst) {
             Ok(_) => {}
@@ -166,11 +202,10 @@ impl Inner {
                         None => m = self.cvar.wait(m).unwrap(),
                         Some(reactor_lock) => {
                             drop(m);
-                            if EVENT.clear() {
-                                reactor_lock.poll().expect("TODO");
-                            } else {
-                                reactor_lock.wait().expect("TODO");
-                            }
+
+                            reactor_lock.react(None).expect("failure while polling I/O");
+                            EVENT.clear();
+
                             m = self.lock.lock().unwrap();
                         }
                     }
@@ -185,14 +220,20 @@ impl Inner {
                 // Wait with a timeout, and if we spuriously wake up or otherwise wake up from a
                 // notification we just want to unconditionally set `state` back to `EMPTY`, either
                 // consuming a notification or un-flagging ourselves as parked.
-                let _m = match &mut reactor_lock {
+                let _m = match reactor_lock.as_mut() {
                     None => self.cvar.wait_timeout(m, timeout).unwrap().0,
                     Some(reactor_lock) => {
                         drop(m);
-                        if EVENT.clear() {
-                            reactor_lock.poll().expect("TODO");
-                        } else {
-                            reactor_lock.wait().expect("TODO"); // TODO: use actual timeout
+                        let deadline = Instant::now() + timeout;
+                        loop {
+                            reactor_lock
+                                .react(Some(deadline.saturating_duration_since(Instant::now())))
+                                .expect("failure while polling I/O");
+                            EVENT.clear();
+
+                            if Instant::now() >= deadline {
+                                break;
+                            }
                         }
                         self.lock.lock().unwrap()
                     }

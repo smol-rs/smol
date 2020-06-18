@@ -8,7 +8,7 @@
 use std::io::{self, Read, Write};
 #[cfg(windows)]
 use std::net::SocketAddr;
-use std::sync::atomic::{self, AtomicBool, Ordering};
+use std::sync::atomic::{self, Ordering};
 use std::sync::Arc;
 
 #[cfg(not(target_os = "linux"))]
@@ -24,9 +24,6 @@ type Notifier = linux::EventFd;
 
 /// A self-pipe.
 struct Inner {
-    /// Set to `true` if notified.
-    flag: AtomicBool,
-
     /// The writer side, emptied by `clear()`.
     writer: Notifier,
 
@@ -44,7 +41,6 @@ impl IoEvent {
         let (writer, reader) = notifier()?;
 
         Ok(IoEvent(Arc::new(Inner {
-            flag: AtomicBool::new(false),
             writer,
             reader: Async::new(reader)?,
         })))
@@ -55,46 +51,21 @@ impl IoEvent {
         // Publish all in-memory changes before setting the flag.
         atomic::fence(Ordering::SeqCst);
 
-        // If the flag is not set...
-        if !self.0.flag.load(Ordering::SeqCst) {
-            // If this thread sets it...
-            if !self.0.flag.swap(true, Ordering::SeqCst) {
-                // Trigger an I/O event by writing a byte into the sending socket.
-                let _ = (&self.0.writer).write(&1u64.to_ne_bytes());
-                let _ = (&self.0.writer).flush();
+        // Trigger an I/O event by writing a byte into the sending socket.
+        let _ = (&self.0.writer).write(&1u64.to_ne_bytes());
+        let _ = (&self.0.writer).flush();
 
-                // Re-register to wake up the poller.
-                let _ = self.0.reader.reregister_io_event();
-            }
-        }
+        // Re-register to wake up the poller.
+        let _ = self.0.reader.reregister_io_event();
     }
 
     /// Sets the flag to `false`.
-    pub fn clear(&self) -> bool {
+    pub fn clear(&self) {
         // Read all available bytes from the receiving socket.
         while self.0.reader.get_ref().read(&mut [0; 64]).is_ok() {}
-        let value = self.0.flag.swap(false, Ordering::SeqCst);
 
         // Publish all in-memory changes after clearing the flag.
         atomic::fence(Ordering::SeqCst);
-        value
-    }
-
-    /// Waits until notified.
-    ///
-    /// You should assume notifications may spuriously occur.
-    pub async fn notified(&self) {
-        self.0
-            .reader
-            .read_with(|_| {
-                if self.0.flag.load(Ordering::SeqCst) {
-                    Ok(())
-                } else {
-                    Err(io::ErrorKind::WouldBlock.into())
-                }
-            })
-            .await
-            .expect("failure while waiting on a self-pipe");
     }
 }
 

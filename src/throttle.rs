@@ -7,7 +7,7 @@
 use std::cell::Cell;
 use std::task::{Context, Poll};
 
-use scoped_tls_hkt::scoped_thread_local;
+use scoped_tls::scoped_thread_local;
 
 scoped_thread_local! {
     /// Number of times the current task is allowed to poll I/O operations.
