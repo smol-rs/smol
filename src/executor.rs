@@ -39,7 +39,7 @@ impl Global {
         {
             let callback = self.sleepers.lock().unwrap().notify();
             if let Some(cb) = callback {
-                (cb)();
+                cb.call();
             }
         }
     }
@@ -51,28 +51,28 @@ struct Sleepers {
     count: usize,
 
     /// Callbacks of sleeping unnotified workers.
-    callbacks: Vec<Arc<dyn Fn() + Send + Sync>>,
+    callbacks: Vec<Callback>,
 }
 
 impl Sleepers {
     /// Inserts a new sleeping worker.
-    fn insert(&mut self, callback: &Arc<dyn Fn() + Send + Sync>) {
+    fn insert(&mut self, callback: &Callback) {
         self.count += 1;
         self.callbacks.push(callback.clone());
     }
 
     /// Updates the callback of an already inserted worker.
-    fn update(&mut self, callback: &Arc<dyn Fn() + Send + Sync>) {
-        if self.callbacks.iter().all(|cb| !Arc::ptr_eq(cb, callback)) {
+    fn update(&mut self, callback: &Callback) {
+        if self.callbacks.iter().all(|cb| cb != callback) {
             self.callbacks.push(callback.clone());
         }
     }
 
     /// Removes a previously inserted worker.
-    fn remove(&mut self, callback: &Arc<dyn Fn() + Send + Sync>) {
+    fn remove(&mut self, callback: &Callback) {
         self.count -= 1;
         for i in (0..self.callbacks.len()).rev() {
-            if Arc::ptr_eq(&self.callbacks[i], callback) {
+            if &self.callbacks[i] == callback {
                 self.callbacks.remove(i);
                 return;
             }
@@ -87,9 +87,9 @@ impl Sleepers {
     /// Returns notification callback for a sleeping worker.
     ///
     /// If a worker was notified already or there are no workers, `None` will be returned.
-    fn notify(&mut self) -> Option<Arc<dyn Fn() + Send + Sync>> {
+    fn notify(&mut self) -> Option<Callback> {
         if self.callbacks.len() == self.count {
-            self.callbacks.pop().clone()
+            self.callbacks.pop()
         } else {
             None
         }
@@ -170,7 +170,7 @@ impl Queue {
                 slot: Cell::new(None),
                 queue: Arc::new(ConcurrentQueue::unbounded()),
             },
-            callback: Arc::new(notify),
+            callback: Callback::new(notify),
             sleeping: Cell::new(false),
             ticker: Cell::new(0),
         };
@@ -197,7 +197,7 @@ pub(crate) struct Worker {
     local: SlotQueue<Runnable>,
 
     /// Callback invoked to wake this worker up.
-    callback: Arc<dyn Fn() + Send + Sync>,
+    callback: Callback,
 
     /// Set to `true` when in sleeping state.
     sleeping: Cell<bool>,
@@ -229,7 +229,7 @@ impl Worker {
                 queue.push(runnable).unwrap();
             }
 
-            callback();
+            callback.call();
         };
 
         // Create a task, push it into the queue by scheduling it, and return its `Task` handle.
@@ -474,3 +474,24 @@ fn thread_id() -> ThreadId {
     ID.try_with(|id| *id)
         .unwrap_or_else(|_| thread::current().id())
 }
+
+#[derive(Clone)]
+struct Callback(Arc<Box<dyn Fn() + Send + Sync>>);
+
+impl Callback {
+    fn new(f: impl Fn() + Send + Sync + 'static) -> Callback {
+        Callback(Arc::new(Box::new(f)))
+    }
+
+    fn call(&self) {
+        (self.0)();
+    }
+}
+
+impl PartialEq for Callback {
+    fn eq(&self, other: &Callback) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl Eq for Callback {}
