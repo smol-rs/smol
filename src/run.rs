@@ -9,17 +9,16 @@ use std::time::Duration;
 use once_cell::sync::Lazy;
 
 use crate::context;
-use crate::executor::{Queue, Worker};
+use crate::multitask;
 use crate::parking::Parker;
-use crate::throttle;
 use scoped_tls::scoped_thread_local;
 
 /// The global task queue.
-pub(crate) static QUEUE: Lazy<Queue> = Lazy::new(|| Queue::new());
+pub(crate) static QUEUE: Lazy<multitask::Queue> = Lazy::new(|| multitask::Queue::new());
 
 scoped_thread_local! {
     /// Thread-local worker queue.
-    pub(crate) static WORKER: Worker
+    pub(crate) static WORKER: multitask::Worker
 }
 
 /// Runs executors and polls the reactor.
@@ -117,7 +116,7 @@ pub fn run<T>(future: impl Future<Output = T>) -> T {
         WORKER.set(&worker, || {
             'start: loop {
                 // Poll the main future.
-                if let Poll::Ready(val) = throttle::setup(|| future.as_mut().poll(cx)) {
+                if let Poll::Ready(val) = future.as_mut().poll(cx) {
                     return val;
                 }
 

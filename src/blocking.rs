@@ -35,7 +35,6 @@ use once_cell::sync::Lazy;
 
 use crate::context;
 use crate::task::{Runnable, Task};
-use crate::throttle;
 
 /// The blocking executor.
 pub(crate) struct BlockingExecutor {
@@ -235,9 +234,6 @@ pub fn iter<T: Send + 'static>(
         type Item = T;
 
         fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<T>> {
-            // Throttle if the current task has done too many I/O operations without yielding.
-            futures_util::ready!(throttle::poll(cx));
-
             match &mut *self {
                 State::Idle(iter) => {
                     // If idle, take the iterator out to run it on a blocking task.
@@ -339,9 +335,6 @@ pub fn reader(reader: impl Read + Send + 'static) -> impl AsyncRead + Send + Unp
             cx: &mut Context<'_>,
             buf: &mut [u8],
         ) -> Poll<io::Result<usize>> {
-            // Throttle if the current task has done too many I/O operations without yielding.
-            futures_util::ready!(throttle::poll(cx));
-
             match &mut *self {
                 State::Idle(io) => {
                     // If idle, take the I/O handle out to read it on a blocking task.
@@ -475,9 +468,6 @@ pub fn writer(writer: impl Write + Send + 'static) -> impl AsyncWrite + Send + U
             cx: &mut Context<'_>,
             buf: &[u8],
         ) -> Poll<io::Result<usize>> {
-            // Throttle if the current task has done too many I/O operations without yielding.
-            futures_util::ready!(throttle::poll(cx));
-
             loop {
                 match &mut *self {
                     // The writer is idle and closed.
@@ -502,9 +492,6 @@ pub fn writer(writer: impl Write + Send + 'static) -> impl AsyncWrite + Send + U
         }
 
         fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-            // Throttle if the current task has done too many I/O operations without yielding.
-            futures_util::ready!(throttle::poll(cx));
-
             loop {
                 match &mut *self {
                     // The writer is idle and closed.

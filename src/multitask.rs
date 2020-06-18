@@ -1,6 +1,5 @@
 use std::cell::Cell;
 use std::future::Future;
-use std::panic;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::thread::{self, ThreadId};
@@ -180,6 +179,12 @@ impl Queue {
     }
 }
 
+impl Default for Queue {
+    fn default() -> Queue {
+        Queue::new()
+    }
+}
+
 /// A worker that participates in the work-stealing executor.
 ///
 /// Each invocation of `run()` creates its own worker.
@@ -236,15 +241,6 @@ impl Worker {
         let (runnable, handle) = async_task::spawn_local(future, schedule, ());
         runnable.schedule();
         Task(Some(handle))
-    }
-
-    /// Enters the context of this executor.
-    fn enter<T>(&self, f: impl FnOnce() -> T) -> T {
-        // TODO(stjepang): Allow recursive executors.
-        if WORKER.is_set() {
-            panic!("cannot run an executor inside another executor");
-        }
-        WORKER.set(self, f)
     }
 
     /// Moves the worker into sleeping state.
@@ -320,7 +316,7 @@ impl Worker {
                     }
 
                     // Run the task.
-                    if self.enter(|| r.run()) {
+                    if WORKER.set(self, || r.run()) {
                         // The task was woken while it was running, which means it got
                         // scheduled the moment running completed. Therefore, it is now inside
                         // the slot and would be the next task to run.
