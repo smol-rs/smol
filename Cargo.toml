@@ -47,6 +47,7 @@ optional = true
 libc = "0.2.70"
 
 [target.'cfg(windows)'.dependencies]
+miow = "0.3.5"
 wepoll-binding = "2.0.2"
 winapi = { version = "0.3.8", features = ["ioapiset"] }
 

@@ -72,19 +72,27 @@ impl IoEvent {
 
     #[cfg(windows)]
     pub fn notify(&self) {
-        use std::os::windows::io::AsRawHandle;
+        use std::os::windows::io::*;
+        use std::mem::*;
         use winapi::um::ioapiset::PostQueuedCompletionStatus;
         use winapi::um::minwinbase::OVERLAPPED;
+        use miow::iocp::*;
+        use miow::*;
 
         let reactor = crate::reactor::Reactor::get();
+        let handle = reactor.sys.0.as_raw_handle();
 
         atomic::fence(Ordering::SeqCst);
         unsafe {
-            let ov: OVERLAPPED = unsafe { std::mem::zeroed() };
-            let zero = Box::leak(Box::new(ov));
-            PostQueuedCompletionStatus(
-                reactor.sys.0.as_raw_handle(),
-                0, 0, zero as *const OVERLAPPED as *mut OVERLAPPED);
+            let port = ManuallyDrop::new(CompletionPort::from_raw_handle(handle));
+            let status = CompletionStatus::zero();
+            port.post(status);
+
+            // PostQueuedCompletionStatus(
+            //     0,
+            //     0,
+            //     zero as *const OVERLAPPED as *mut OVERLAPPED,
+            //     );
         }
     }
 
