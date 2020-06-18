@@ -1,3 +1,7 @@
+# Version 0.1.13
+
+- Clear the flag after every call to `react()`.
+
 # Version 0.1.12
 
 - Fix a bug in `Async::<UdpSocket>::recv()`.
