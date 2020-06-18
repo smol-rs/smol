@@ -47,6 +47,7 @@ impl IoEvent {
     }
 
     /// Sets the flag to `true`.
+    #[cfg(not(windows))]
     pub fn notify(&self) {
         // Publish all in-memory changes before setting the flag.
         atomic::fence(Ordering::SeqCst);
@@ -60,11 +61,32 @@ impl IoEvent {
     }
 
     /// Sets the flag to `false`.
+    #[cfg(not(windows))]
     pub fn clear(&self) {
         // Read all available bytes from the receiving socket.
         while self.0.reader.get_ref().read(&mut [0; 64]).is_ok() {}
 
         // Publish all in-memory changes after clearing the flag.
+        atomic::fence(Ordering::SeqCst);
+    }
+
+    #[cfg(windows)]
+    pub fn notify(&self) {
+        use std::os::windows::io::AsRawHandle;
+        use winapi::um::ioapiset::PostQueuedCompletionStatus;
+
+        let reactor = crate::reactor::Reactor::get();
+
+        atomic::fence(Ordering::SeqCst);
+        unsafe {
+            PostQueuedCompletionStatus(
+                reactor.sys.0.as_raw_handle(),
+                0, 0, 0 as *mut _,);
+        }
+    }
+
+    #[cfg(windows)]
+    pub fn clear(&self) {
         atomic::fence(Ordering::SeqCst);
     }
 }

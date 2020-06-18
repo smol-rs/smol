@@ -50,7 +50,7 @@ use crate::io_event::IoEvent;
 /// There is only one global instance of this type, accessible by [`Reactor::get()`].
 pub(crate) struct Reactor {
     /// Raw bindings to epoll/kqueue/wepoll.
-    sys: sys::Reactor,
+    pub(crate) sys: sys::Reactor,
 
     /// Registered sources.
     sources: piper::Mutex<Slab<Arc<Source>>>,
@@ -631,7 +631,7 @@ mod sys {
 
     use wepoll_binding::{Epoll, EventFlag};
 
-    pub struct Reactor(Epoll);
+    pub struct Reactor(pub(crate) Epoll);
     impl Reactor {
         pub fn new() -> io::Result<Reactor> {
             Ok(Reactor(Epoll::new()?))
