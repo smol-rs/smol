@@ -1,6 +1,11 @@
-# Version 0.1.13
+# Version 0.1.14
 
 - Clear the flag after every call to `react()`.
+
+# Version 0.1.13
+
+- Fix deadlocks caused by lost wakeups.
+- Refactor the executor.
 
 # Version 0.1.12
 
