@@ -1207,6 +1207,11 @@ static int port__feed_events(port_state_t* port_state,
 
     if (io_status_block)
       epoll_event_count += sock_feed_event(port_state, io_status_block, ev);
+    else {
+      ev->events = 0;
+      ev->data = 1000000;
+      epoll_event_count += 1;
+    }
   }
 
   return epoll_event_count;
