@@ -81,7 +81,7 @@ impl IoEvent {
 
         atomic::fence(Ordering::SeqCst);
         unsafe {
-            PostQueuedCompletionStatus(reactor.sys.0.as_raw_handle(), 0, 0, 0 as *mut _);
+            PostQueuedCompletionStatus(reactor.sys.0.as_raw_handle() as _, 0, 0, 0 as *mut _);
         }
     }
 
