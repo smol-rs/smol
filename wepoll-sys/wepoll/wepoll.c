@@ -135,9 +135,15 @@ WEPOLL_EXPORT int epoll_wait(HANDLE ephnd,
 #pragma warning(push, 1)
 #endif
 
+#ifdef __MINGW32__
+#include <ws2tcpip.h>
+#include <winsock2.h>
+#include <windows.h>
+#else
 #include <WS2tcpip.h>
 #include <WinSock2.h>
 #include <Windows.h>
+#endif
 
 #ifndef __GNUC__
 #pragma warning(pop)
