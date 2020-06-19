@@ -254,7 +254,7 @@ impl ReactorLock<'_> {
             // The timeout was hit so fire ready timers.
             Ok(0) => {
                 self.reactor.fire_timers();
-                return Ok(());
+                Ok(())
             }
 
             // At least one I/O event occured.
@@ -481,7 +481,7 @@ mod sys {
         libc::EPOLLIN | libc::EPOLLRDHUP | libc::EPOLLHUP | libc::EPOLLERR | libc::EPOLLPRI
     }
     fn write_flags() -> EpollFlags {
-        libc::EPOLLOUT | libc::EPOLLHUP | libc::EPOLLER
+        libc::EPOLLOUT | libc::EPOLLHUP | libc::EPOLLERR
     }
 
     pub struct Events {
