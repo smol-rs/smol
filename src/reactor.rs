@@ -478,10 +478,10 @@ mod sys {
         }
     }
     fn read_flags() -> EpollFlags {
-        libc::EPOLLIN | libc::EPOLLRDHUP
+        libc::EPOLLIN | libc::EPOLLRDHUP | libc::EPOLLHUP | libc::EPOLLERR | libc::EPOLLPRI
     }
     fn write_flags() -> EpollFlags {
-        libc::EPOLLOUT
+        libc::EPOLLOUT | libc::EPOLLHUP | libc::EPOLLER
     }
 
     pub struct Events {
@@ -570,7 +570,7 @@ mod sys {
             Ok(())
         }
         pub fn deregister(&self, fd: RawFd) -> io::Result<()> {
-            let flags = libc::EV_RECEIPT | libc::EV_DELETE;
+            let flags = libc::EV_DELETE | libc::EV_RECEIPT;
             let changelist = [
                 KEvent::new(fd as _, libc::EVFILT_WRITE, flags, 0, 0, 0),
                 KEvent::new(fd as _, libc::EVFILT_READ, flags, 0, 0, 0),
@@ -608,9 +608,14 @@ mod sys {
             Events { list, len }
         }
         pub fn iter(&self) -> impl Iterator<Item = Event> + '_ {
+            // On some platforms, closing the read end of a pipe wakes up writers, but the
+            // event is reported as EVFILT_READ with the EV_EOF flag.
+            //
+            // https://github.com/golang/go/commit/23aad448b1e3f7c3b4ba2af90120bde91ac865b4
             self.list[..self.len].iter().map(|ev| Event {
                 readable: ev.filter() == libc::EVFILT_READ,
-                writable: ev.filter() == libc::EVFILT_WRITE,
+                writable: ev.filter() == libc::EVFILT_WRITE
+                    || (ev.filter() == libc::EVFILT_READ && (ev.flags() & libc::EV_EOF) != 0),
                 key: ev.udata() as usize,
             })
         }
@@ -677,10 +682,10 @@ mod sys {
         }
     }
     fn read_flags() -> EventFlag {
-        EventFlag::IN | EventFlag::RDHUP
+        EventFlag::IN | EventFlag::RDHUP | EventFlag::HUP | EventFlag::ERR | EventFlag::PRI
     }
     fn write_flags() -> EventFlag {
-        EventFlag::OUT
+        EventFlag::OUT | EventFlag::HUP | EventFlag::ERR
     }
 
     pub struct Events(wepoll_binding::Events);
