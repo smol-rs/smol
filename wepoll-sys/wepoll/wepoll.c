@@ -1205,7 +1205,13 @@ static int port__feed_events(port_state_t* port_state,
         (IO_STATUS_BLOCK*) iocp_events[i].lpOverlapped;
     struct epoll_event* ev = &epoll_events[epoll_event_count];
 
-    epoll_event_count += sock_feed_event(port_state, io_status_block, ev);
+    if (io_status_block)
+      epoll_event_count += sock_feed_event(port_state, io_status_block, ev);
+    else {
+      ev->events = 0;
+      ev->data.u64 = 0;
+      epoll_event_count += 1;
+    }
   }
 
   return epoll_event_count;
