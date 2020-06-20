@@ -20,7 +20,7 @@ fn main() {
     smol::run(async {
         println!("Waiting for Ctrl-C...");
 
-        // Receive a message that indicates the Ctrl-C signal occured.
+        // Receive a message that indicates the Ctrl-C signal occurred.
         ctrl_c.recv().await;
 
         println!("Done!");

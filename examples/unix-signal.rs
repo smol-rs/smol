@@ -20,7 +20,7 @@ fn main() -> std::io::Result<()> {
         signal_hook::pipe::register(signal_hook::SIGINT, a)?;
         println!("Waiting for Ctrl-C...");
 
-        // Receive a byte that indicates the Ctrl-C signal occured.
+        // Receive a byte that indicates the Ctrl-C signal occurred.
         b.read_exact(&mut [0]).await?;
 
         println!("Done!");
