@@ -1,3 +1,8 @@
+# Version 0.1.15
+
+- Fix wakeups lost inside the executor.
+- Fix a fairness issue in the executor.
+
 # Version 0.1.14
 
 - Clear the flag after every call to `react()`.
