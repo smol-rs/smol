@@ -25,7 +25,7 @@ use std::mem;
 use std::os::unix::io::RawFd;
 #[cfg(windows)]
 use std::os::windows::io::{FromRawSocket, RawSocket};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::task::{Poll, Waker};
 use std::time::{Duration, Instant};
@@ -51,6 +51,9 @@ use crate::io_event::IoEvent;
 pub(crate) struct Reactor {
     /// Raw bindings to epoll/kqueue/wepoll.
     sys: sys::Reactor,
+
+    /// Ticker bumped before polling.
+    ticker: AtomicU64,
 
     /// Registered sources.
     sources: piper::Mutex<Slab<Arc<Source>>>,
@@ -83,6 +86,7 @@ impl Reactor {
     pub fn get() -> &'static Reactor {
         static REACTOR: Lazy<Reactor> = Lazy::new(|| Reactor {
             sys: sys::Reactor::new().expect("cannot initialize I/O event notification"),
+            ticker: AtomicU64::new(0),
             sources: piper::Mutex::new(Slab::new()),
             events: piper::Mutex::new(sys::Events::new()),
             timers: piper::Mutex::new(BTreeMap::new()),
@@ -122,6 +126,8 @@ impl Reactor {
             raw,
             key,
             wakers: piper::Mutex::new(Wakers {
+                tick_readable: 0,
+                tick_writable: 0,
                 readers: Vec::new(),
                 writers: Vec::new(),
             }),
@@ -249,6 +255,13 @@ impl ReactorLock<'_> {
             (Some(a), Some(b)) => Some(a.min(b)),
         };
 
+        // Bump the ticker before polling I/O.
+        let tick = self
+            .reactor
+            .ticker
+            .fetch_add(1, Ordering::SeqCst)
+            .wrapping_add(1);
+
         // Block on I/O events.
         match self.reactor.sys.wait(&mut self.events, timeout) {
             // No I/O events occurred.
@@ -273,11 +286,13 @@ impl ReactorLock<'_> {
 
                         // Wake readers if a readability event was emitted.
                         if ev.readable {
+                            wakers.tick_readable = tick;
                             ready.append(&mut wakers.readers);
                         }
 
                         // Wake writers if a writability event was emitted.
                         if ev.writable {
+                            wakers.tick_writable = tick;
                             ready.append(&mut wakers.writers);
                         }
 
@@ -343,6 +358,12 @@ pub(crate) struct Source {
 /// Tasks interested in events on a source.
 #[derive(Debug)]
 struct Wakers {
+    /// Last reactor tick that delivered a readability event.
+    tick_readable: u64,
+
+    /// Last reactor tick that delivered a writability event.
+    tick_writable: u64,
+
     /// Tasks waiting for the next readability event.
     readers: Vec<Waker>,
 
@@ -361,69 +382,77 @@ impl Source {
     }
 
     /// Waits until the I/O source is readable.
-    ///
-    /// This function may occasionally complete even if the I/O source is not readable.
     pub(crate) async fn readable(&self) -> io::Result<()> {
-        let mut polled = false;
+        let mut tick = None;
 
         future::poll_fn(|cx| {
-            if polled {
-                Poll::Ready(Ok(()))
-            } else {
-                let mut wakers = self.wakers.lock();
+            let mut wakers = self.wakers.lock();
 
-                // If there are no other readers, re-register in the reactor.
-                if wakers.readers.is_empty() {
-                    Reactor::get().sys.reregister(
-                        self.raw,
-                        self.key,
-                        true,
-                        !wakers.writers.is_empty(),
-                    )?;
+            if let Some(tick) = tick {
+                if wakers.tick_readable > tick {
+                    return Poll::Ready(Ok(()));
                 }
-
-                // Register the current task's waker if not present already.
-                if wakers.readers.iter().all(|w| !w.will_wake(cx.waker())) {
-                    wakers.readers.push(cx.waker().clone());
-                }
-
-                polled = true;
-                Poll::Pending
             }
+
+            // If there are no other readers, re-register in the reactor.
+            if wakers.readers.is_empty() {
+                Reactor::get().sys.reregister(
+                    self.raw,
+                    self.key,
+                    true,
+                    !wakers.writers.is_empty(),
+                )?;
+            }
+
+            // Register the current task's waker if not present already.
+            if wakers.readers.iter().all(|w| !w.will_wake(cx.waker())) {
+                wakers.readers.push(cx.waker().clone());
+            }
+
+            // Remember the current tick.
+            if tick.is_none() {
+                tick = Some(Reactor::get().ticker.load(Ordering::SeqCst));
+            }
+
+            Poll::Pending
         })
         .await
     }
 
     /// Waits until the I/O source is writable.
-    ///
-    /// This function may occasionally complete even if the I/O source is not writable.
     pub(crate) async fn writable(&self) -> io::Result<()> {
-        let mut polled = false;
+        let mut tick = None;
 
         future::poll_fn(|cx| {
-            if polled {
-                Poll::Ready(Ok(()))
-            } else {
-                let mut wakers = self.wakers.lock();
+            let mut wakers = self.wakers.lock();
 
-                // If there are no other writers, re-register in the reactor.
-                if wakers.writers.is_empty() {
-                    Reactor::get().sys.reregister(
-                        self.raw,
-                        self.key,
-                        !wakers.readers.is_empty(),
-                        true,
-                    )?;
+            if let Some(tick) = tick {
+                if wakers.tick_writable > tick {
+                    return Poll::Ready(Ok(()));
                 }
-
-                // Register the current task's waker if not present already.
-                if wakers.writers.iter().all(|w| !w.will_wake(cx.waker())) {
-                    wakers.writers.push(cx.waker().clone());
-                }
-
-                polled = true;
-                Poll::Pending
             }
+
+            // If there are no other writers, re-register in the reactor.
+            if wakers.writers.is_empty() {
+                Reactor::get().sys.reregister(
+                    self.raw,
+                    self.key,
+                    !wakers.readers.is_empty(),
+                    true,
+                )?;
+            }
+
+            // Register the current task's waker if not present already.
+            if wakers.writers.iter().all(|w| !w.will_wake(cx.waker())) {
+                wakers.writers.push(cx.waker().clone());
+            }
+
+            // Remember the current tick.
+            if tick.is_none() {
+                tick = Some(Reactor::get().ticker.load(Ordering::SeqCst));
+            }
+
+            Poll::Pending
         })
         .await
     }

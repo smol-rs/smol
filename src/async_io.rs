@@ -134,7 +134,7 @@ impl<T: AsRawFd> Async<T> {
     /// use std::net::TcpListener;
     ///
     /// # smol::run(async {
-    /// let listener = TcpListener::bind("127.0.0.1:80")?;
+    /// let listener = TcpListener::bind("127.0.0.1:0")?;
     /// let listener = Async::new(listener)?;
     /// # std::io::Result::Ok(()) });
     /// ```
@@ -159,6 +159,7 @@ impl<T: IntoRawFd> IntoRawFd for Async<T> {
         self.into_inner().unwrap().into_raw_fd()
     }
 }
+
 #[cfg(windows)]
 impl<T: AsRawSocket> Async<T> {
     /// Creates an async I/O handle.
@@ -190,7 +191,7 @@ impl<T: AsRawSocket> Async<T> {
     /// use std::net::TcpListener;
     ///
     /// # smol::run(async {
-    /// let listener = TcpListener::bind("127.0.0.1:80")?;
+    /// let listener = TcpListener::bind("127.0.0.1:0")?;
     /// let listener = Async::new(listener)?;
     /// # std::io::Result::Ok(()) });
     /// ```
@@ -231,7 +232,7 @@ impl<T> Async<T> {
     /// use std::net::TcpListener;
     ///
     /// # smol::run(async {
-    /// let listener = Async::<TcpListener>::bind("127.0.0.1:80")?;
+    /// let listener = Async::<TcpListener>::bind("127.0.0.1:0")?;
     /// let inner = listener.get_ref();
     /// # std::io::Result::Ok(()) });
     /// ```
@@ -248,7 +249,7 @@ impl<T> Async<T> {
     /// use std::net::TcpListener;
     ///
     /// # smol::run(async {
-    /// let mut listener = Async::<TcpListener>::bind("127.0.0.1:80")?;
+    /// let mut listener = Async::<TcpListener>::bind("127.0.0.1:0")?;
     /// let inner = listener.get_mut();
     /// # std::io::Result::Ok(()) });
     /// ```
@@ -265,7 +266,7 @@ impl<T> Async<T> {
     /// use std::net::TcpListener;
     ///
     /// # smol::run(async {
-    /// let listener = Async::<TcpListener>::bind("127.0.0.1:80")?;
+    /// let listener = Async::<TcpListener>::bind("127.0.0.1:0")?;
     /// let inner = listener.into_inner()?;
     /// # std::io::Result::Ok(()) });
     /// ```
@@ -315,6 +316,48 @@ impl<T> Async<T> {
         }
     }
 
+    /// Waits until the I/O handle is readable.
+    ///
+    /// This function completes when a read operation on this I/O handle wouldn't block.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use smol::Async;
+    /// use std::net::TcpListener;
+    ///
+    /// # smol::run(async {
+    /// let mut listener = Async::<TcpListener>::bind("127.0.0.1:0")?;
+    ///
+    /// // Wait until a client can be accepted.
+    /// listener.readable().await?;
+    /// # std::io::Result::Ok(()) });
+    /// ```
+    pub async fn readable(&self) -> io::Result<()> {
+        self.source.readable().await
+    }
+
+    /// Waits until the I/O handle is writable.
+    ///
+    /// This function completes when a write operation on this I/O handle wouldn't block.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use smol::Async;
+    /// use std::net::TcpStream;
+    ///
+    /// # smol::run(async {
+    /// let stream = Async::<TcpStream>::connect("example.com:80").await?;
+    ///
+    /// // Wait until the stream is writable.
+    /// stream.writable().await?;
+    /// # std::io::Result::Ok(()) });
+    /// ```
+    pub async fn writable(&self) -> io::Result<()> {
+        self.source.writable().await
+    }
+
     /// Performs a read operation asynchronously.
     ///
     /// The I/O handle is registered in the reactor and put in non-blocking mode. This function
@@ -331,7 +374,7 @@ impl<T> Async<T> {
     /// use std::net::TcpListener;
     ///
     /// # smol::run(async {
-    /// let listener = Async::<TcpListener>::bind("127.0.0.1:80")?;
+    /// let listener = Async::<TcpListener>::bind("127.0.0.1:0")?;
     ///
     /// // Accept a new client asynchronously.
     /// let (stream, addr) = listener.read_with(|l| l.accept()).await?;
@@ -339,13 +382,15 @@ impl<T> Async<T> {
     /// ```
     pub async fn read_with<R>(&self, op: impl FnMut(&T) -> io::Result<R>) -> io::Result<R> {
         let mut op = op;
-        loop {
+        future::poll_fn(|cx| {
             match op(self.get_ref()) {
                 Err(err) if err.kind() == io::ErrorKind::WouldBlock => {}
-                res => return res,
+                res => return Poll::Ready(res),
             }
-            self.source.readable().await?;
-        }
+            futures_util::ready!(poll_future(cx, self.readable()))?;
+            Poll::Pending
+        })
+        .await
     }
 
     /// Performs a read operation asynchronously.
@@ -364,7 +409,7 @@ impl<T> Async<T> {
     /// use std::net::TcpListener;
     ///
     /// # smol::run(async {
-    /// let mut listener = Async::<TcpListener>::bind("127.0.0.1:80")?;
+    /// let mut listener = Async::<TcpListener>::bind("127.0.0.1:0")?;
     ///
     /// // Accept a new client asynchronously.
     /// let (stream, addr) = listener.read_with_mut(|l| l.accept()).await?;
@@ -375,13 +420,15 @@ impl<T> Async<T> {
         op: impl FnMut(&mut T) -> io::Result<R>,
     ) -> io::Result<R> {
         let mut op = op;
-        loop {
+        future::poll_fn(|cx| {
             match op(self.get_mut()) {
                 Err(err) if err.kind() == io::ErrorKind::WouldBlock => {}
-                res => return res,
+                res => return Poll::Ready(res),
             }
-            self.source.readable().await?;
-        }
+            futures_util::ready!(poll_future(cx, self.readable()))?;
+            Poll::Pending
+        })
+        .await
     }
 
     /// Performs a write operation asynchronously.
@@ -409,13 +456,15 @@ impl<T> Async<T> {
     /// ```
     pub async fn write_with<R>(&self, op: impl FnMut(&T) -> io::Result<R>) -> io::Result<R> {
         let mut op = op;
-        loop {
+        future::poll_fn(|cx| {
             match op(self.get_ref()) {
                 Err(err) if err.kind() == io::ErrorKind::WouldBlock => {}
-                res => return res,
+                res => return Poll::Ready(res),
             }
-            self.source.writable().await?;
-        }
+            futures_util::ready!(poll_future(cx, self.writable()))?;
+            Poll::Pending
+        })
+        .await
     }
 
     /// Performs a write operation asynchronously.
@@ -446,13 +495,15 @@ impl<T> Async<T> {
         op: impl FnMut(&mut T) -> io::Result<R>,
     ) -> io::Result<R> {
         let mut op = op;
-        loop {
+        future::poll_fn(|cx| {
             match op(self.get_mut()) {
                 Err(err) if err.kind() == io::ErrorKind::WouldBlock => {}
-                res => return res,
+                res => return Poll::Ready(res),
             }
-            self.source.writable().await?;
-        }
+            futures_util::ready!(poll_future(cx, self.writable()))?;
+            Poll::Pending
+        })
+        .await
     }
 }
 
@@ -466,12 +517,6 @@ impl<T> Drop for Async<T> {
             self.io.take();
         }
     }
-}
-
-/// Pins a future and then polls it.
-fn poll_future<T>(cx: &mut Context<'_>, fut: impl Future<Output = T>) -> Poll<T> {
-    futures_util::pin_mut!(fut);
-    fut.poll(cx)
 }
 
 impl<T: Read> AsyncRead for Async<T> {
@@ -580,7 +625,7 @@ impl Async<TcpListener> {
     /// use std::net::TcpListener;
     ///
     /// # smol::run(async {
-    /// let listener = Async::<TcpListener>::bind("127.0.0.1:80")?;
+    /// let listener = Async::<TcpListener>::bind("127.0.0.1:0")?;
     /// println!("Listening on {}", listener.get_ref().local_addr()?);
     /// # std::io::Result::Ok(()) });
     /// ```
@@ -604,7 +649,7 @@ impl Async<TcpListener> {
     /// use std::net::TcpListener;
     ///
     /// # smol::run(async {
-    /// let listener = Async::<TcpListener>::bind("127.0.0.1:80")?;
+    /// let listener = Async::<TcpListener>::bind("127.0.0.1:0")?;
     /// let (stream, addr) = listener.accept().await?;
     /// println!("Accepted client: {}", addr);
     /// # std::io::Result::Ok(()) });
@@ -626,7 +671,7 @@ impl Async<TcpListener> {
     /// use std::net::TcpListener;
     ///
     /// # smol::run(async {
-    /// let listener = Async::<TcpListener>::bind("127.0.0.1:80")?;
+    /// let listener = Async::<TcpListener>::bind("127.0.0.1:0")?;
     /// let mut incoming = listener.incoming();
     ///
     /// while let Some(stream) = incoming.next().await {
@@ -691,22 +736,13 @@ impl Async<TcpStream> {
         })?;
         let stream = Async::new(socket.into_tcp_stream())?;
 
-        // Waits for connect to complete.
-        let wait_connect = |mut stream: &TcpStream| match stream.write(&[]) {
-            Err(err) if err.kind() == io::ErrorKind::NotConnected => match stream.take_error()? {
-                Some(err) => Err(err),
-                None => Err(io::ErrorKind::WouldBlock.into()),
-            },
-            res => res.map(|_| ()),
-        };
-
         // The stream becomes writable when connected.
-        match stream.write_with(|io| wait_connect(io)).await {
-            Ok(()) => Ok(stream),
-            Err(err) => match stream.get_ref().take_error()? {
-                Some(err) => Err(err),
-                None => Err(err),
-            },
+        stream.writable().await?;
+
+        // Check if there was an error while connecting.
+        match stream.get_ref().take_error()? {
+            None => Ok(stream),
+            Some(err) => Err(err),
         }
     }
 
@@ -964,7 +1000,7 @@ impl Async<UnixListener> {
     /// use std::os::unix::net::UnixListener;
     ///
     /// # smol::run(async {
-    /// let listener = Async::<UnixListener>::bind("127.0.0.1:80")?;
+    /// let listener = Async::<UnixListener>::bind("127.0.0.1:0")?;
     /// let mut incoming = listener.incoming();
     ///
     /// while let Some(stream) = incoming.next().await {
@@ -1014,23 +1050,10 @@ impl Async<UnixStream> {
             })?;
         let stream = Async::new(socket.into_unix_stream())?;
 
-        // Waits for connect to complete.
-        let wait_connect = |mut stream: &UnixStream| match stream.write(&[]) {
-            Err(err) if err.kind() == io::ErrorKind::NotConnected => match stream.take_error()? {
-                Some(err) => Err(err),
-                None => Err(io::ErrorKind::WouldBlock.into()),
-            },
-            res => res.map(|_| ()),
-        };
-
         // The stream becomes writable when connected.
-        match stream.write_with(|io| wait_connect(io)).await {
-            Ok(()) => Ok(stream),
-            Err(err) => match stream.get_ref().take_error()? {
-                Some(err) => Err(err),
-                None => Err(err),
-            },
-        }
+        stream.writable().await?;
+
+        Ok(stream)
     }
 
     /// Creates an unnamed pair of connected UDS stream sockets.
@@ -1195,4 +1218,10 @@ impl Async<UnixDatagram> {
     pub async fn send(&self, buf: &[u8]) -> io::Result<usize> {
         self.write_with(|io| io.send(buf)).await
     }
+}
+
+/// Pins a future and then polls it.
+fn poll_future<T>(cx: &mut Context<'_>, fut: impl Future<Output = T>) -> Poll<T> {
+    futures_util::pin_mut!(fut);
+    fut.poll(cx)
 }
