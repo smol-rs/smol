@@ -346,6 +346,7 @@ impl Worker {
                             self.global.queue.push(err.into_inner()).unwrap();
                             self.global.notify();
                         }
+                        self.local.flush().unwrap();
                     }
 
                     return true;

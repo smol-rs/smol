@@ -251,13 +251,16 @@ impl ReactorLock<'_> {
 
         // Block on I/O events.
         match self.reactor.sys.wait(&mut self.events, timeout) {
-            // The timeout was hit so fire ready timers.
+            // No I/O events occurred.
             Ok(0) => {
-                self.reactor.fire_timers();
+                if timeout != Some(Duration::from_secs(0)) {
+                    // The non-zero timeout was hit so fire ready timers.
+                    self.reactor.fire_timers();
+                }
                 Ok(())
             }
 
-            // At least one I/O event occured.
+            // At least one I/O event occurred.
             Ok(_) => {
                 // Iterate over sources in the event list.
                 let sources = self.reactor.sources.lock();
