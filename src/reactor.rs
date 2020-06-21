@@ -828,7 +828,7 @@ mod sys {
         pub fn notify(&self) -> io::Result<()> {
             unsafe {
                 let res = winapi::um::ioapiset::PostQueuedCompletionStatus(
-                    self.handle,
+                    self.handle as winapi::um::winnt::HANDLE,
                     0,
                     0,
                     0 as *mut _,
