@@ -1,6 +1,6 @@
 [package]
 name = "smol"
-version = "0.1.16"
+version = "0.1.17"
 authors = ["Stjepan Glavina <stjepang@gmail.com>"]
 edition = "2018"
 description = "A small and fast async runtime"

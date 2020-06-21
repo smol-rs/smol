@@ -1,3 +1,8 @@
+# Version 0.1.17
+
+- Support more platforms by changing `AtomicU64` to `AtomicUsize`.
+- Remove `IoEvent` and simplify reactor notification.
+
 # Version 0.1.16
 
 - Add `Async::readable()` and `Async::writable()`.
