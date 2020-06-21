@@ -1,36 +1,4 @@
 #[cfg(unix)]
-pub mod fcntl {
-    use super::check_err;
-    use std::os::unix::io::RawFd;
-
-    pub type OFlag = libc::c_int;
-    pub type FdFlag = libc::c_int;
-
-    #[allow(non_camel_case_types)]
-    #[allow(dead_code)]
-    /// Arguments passed to `fcntl`.
-    pub enum FcntlArg {
-        F_GETFL,
-        F_SETFL(OFlag),
-        F_SETFD(FdFlag),
-    }
-
-    /// Thin wrapper around `libc::fcntl`.
-    ///
-    /// See [`fcntl(2)`](http://man7.org/linux/man-pages/man2/fcntl.2.html) for details.
-    pub fn fcntl(fd: RawFd, arg: FcntlArg) -> Result<libc::c_int, std::io::Error> {
-        let res = unsafe {
-            match arg {
-                FcntlArg::F_GETFL => libc::fcntl(fd, libc::F_GETFL),
-                FcntlArg::F_SETFL(flag) => libc::fcntl(fd, libc::F_SETFL, flag),
-                FcntlArg::F_SETFD(flag) => libc::fcntl(fd, libc::F_SETFD, flag),
-            }
-        };
-        check_err(res)
-    }
-}
-
-#[cfg(unix)]
 fn check_err(res: libc::c_int) -> Result<libc::c_int, std::io::Error> {
     if res == -1 {
         return Err(std::io::Error::last_os_error());
@@ -193,59 +161,6 @@ pub mod epoll {
     use super::check_err;
     use std::os::unix::io::RawFd;
 
-    #[macro_use]
-    mod dlsym {
-        // Based on https://github.com/tokio-rs/mio/blob/v0.6.x/src/sys/unix/dlsym.rs
-        // I feel very sad including this code, but I have not found a better way
-        // to check for the existence of a symbol in Rust.
-
-        use std::marker;
-        use std::mem;
-        use std::sync::atomic::{AtomicUsize, Ordering};
-
-        macro_rules! dlsym {
-            (fn $name:ident($($t:ty),*) -> $ret:ty) => (
-                #[allow(bad_style)]
-                static $name: $crate::sys::epoll::dlsym::DlSym<unsafe extern fn($($t),*) -> $ret> =
-                    $crate::sys::epoll::dlsym::DlSym {
-                        name: concat!(stringify!($name), "\0"),
-                        addr: std::sync::atomic::AtomicUsize::new(0),
-                        _marker: std::marker::PhantomData,
-                    };
-            )
-        }
-
-        pub struct DlSym<F> {
-            pub name: &'static str,
-            pub addr: AtomicUsize,
-            pub _marker: marker::PhantomData<F>,
-        }
-
-        impl<F> DlSym<F> {
-            pub fn get(&self) -> Option<&F> {
-                assert_eq!(mem::size_of::<F>(), mem::size_of::<usize>());
-                unsafe {
-                    if self.addr.load(Ordering::SeqCst) == 0 {
-                        self.addr.store(fetch(self.name), Ordering::SeqCst);
-                    }
-                    if self.addr.load(Ordering::SeqCst) == 1 {
-                        None
-                    } else {
-                        mem::transmute::<&AtomicUsize, Option<&F>>(&self.addr)
-                    }
-                }
-            }
-        }
-
-        unsafe fn fetch(name: &str) -> usize {
-            assert_eq!(name.as_bytes()[name.len() - 1], 0);
-            match libc::dlsym(libc::RTLD_DEFAULT, name.as_ptr() as *const _) as usize {
-                0 => 1,
-                n => n,
-            }
-        }
-    }
-
     #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
     #[repr(i32)]
     pub enum EpollOp {
@@ -257,34 +172,37 @@ pub mod epoll {
     pub type EpollFlags = libc::c_int;
 
     pub fn epoll_create1() -> Result<RawFd, std::io::Error> {
-        // According to libuv, `EPOLL_CLOEXEC` is not defined on Android API <
-        // 21. But `EPOLL_CLOEXEC` is an alias for `O_CLOEXEC` on that platform,
-        // so we use it instead.
+        // According to libuv, `EPOLL_CLOEXEC` is not defined on Android API < 21.
+        // But `EPOLL_CLOEXEC` is an alias for `O_CLOEXEC` on that platform, so we use it instead.
         #[cfg(target_os = "android")]
         const CLOEXEC: libc::c_int = libc::O_CLOEXEC;
         #[cfg(not(target_os = "android"))]
         const CLOEXEC: libc::c_int = libc::EPOLL_CLOEXEC;
 
         let fd = unsafe {
-            // Emulate epoll_create1 if not available.
+            // Check if the `epoll_create1` symbol is available on this platform.
+            let ptr = libc::dlsym(
+                libc::RTLD_DEFAULT,
+                "epoll_create1\0".as_ptr() as *const libc::c_char,
+            );
 
-            dlsym!(fn epoll_create1(libc::c_int) -> libc::c_int);
-            match epoll_create1.get() {
-                Some(epoll_create1_fn) => check_err(epoll_create1_fn(CLOEXEC))?,
-                None => {
-                    let fd = check_err(libc::epoll_create(1024))?;
-                    drop(set_cloexec(fd));
-                    fd
-                }
+            if ptr.is_null() {
+                // If not, use `epoll_create` and manually set `CLOEXEC`.
+                let fd = check_err(libc::epoll_create(1024))?;
+                let flags = libc::fcntl(fd, libc::F_GETFD);
+                libc::fcntl(fd, libc::F_SETFD, flags | libc::FD_CLOEXEC);
+                fd
+            } else {
+                // Use `epoll_create1` with `CLOEXEC`.
+                let epoll_create1 = std::mem::transmute::<
+                    *mut libc::c_void,
+                    unsafe extern "C" fn(libc::c_int) -> libc::c_int,
+                >(ptr);
+                check_err(epoll_create1(CLOEXEC))?
             }
         };
 
         Ok(fd)
-    }
-
-    unsafe fn set_cloexec(fd: libc::c_int) -> Result<(), std::io::Error> {
-        let flags = libc::fcntl(fd, libc::F_GETFD);
-        check_err(libc::fcntl(fd, libc::F_SETFD, flags | libc::FD_CLOEXEC)).map(|_| ())
     }
 
     pub fn epoll_ctl<'a, T>(
