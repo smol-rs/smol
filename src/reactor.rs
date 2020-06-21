@@ -388,6 +388,7 @@ impl Source {
         future::poll_fn(|cx| {
             let mut wakers = self.wakers.lock();
 
+            // Check if the reactor has delivered a readability event.
             if let Some(tick) = tick {
                 if wakers.tick_readable > tick {
                     return Poll::Ready(Ok(()));
@@ -409,7 +410,7 @@ impl Source {
                 wakers.readers.push(cx.waker().clone());
             }
 
-            // Remember the current tick.
+            // Remember the current reactor tick.
             if tick.is_none() {
                 tick = Some(Reactor::get().ticker.load(Ordering::SeqCst));
             }
@@ -426,6 +427,7 @@ impl Source {
         future::poll_fn(|cx| {
             let mut wakers = self.wakers.lock();
 
+            // Check if the reactor has delivered a writability event.
             if let Some(tick) = tick {
                 if wakers.tick_writable > tick {
                     return Poll::Ready(Ok(()));
@@ -447,7 +449,7 @@ impl Source {
                 wakers.writers.push(cx.waker().clone());
             }
 
-            // Remember the current tick.
+            // Remember the current reactor tick.
             if tick.is_none() {
                 tick = Some(Reactor::get().ticker.load(Ordering::SeqCst));
             }
@@ -528,8 +530,8 @@ mod sys {
         }
         pub fn iter(&self) -> impl Iterator<Item = Event> + '_ {
             self.list[..self.len].iter().map(|ev| Event {
-                readable: (ev.events() & read_flags()) > 0,
-                writable: (ev.events() & write_flags()) > 0,
+                readable: (ev.events() & read_flags()) != 0,
+                writable: (ev.events() & write_flags()) != 0,
                 key: ev.data() as usize,
             })
         }
