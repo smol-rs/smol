@@ -827,15 +827,13 @@ mod sys {
         }
         pub fn notify(&self) -> io::Result<()> {
             unsafe {
-                let res = winapi::um::ioapiset::PostQueuedCompletionStatus(
+                // This errors if a notification has already been posted, but that's okay.
+                winapi::um::ioapiset::PostQueuedCompletionStatus(
                     self.handle as winapi::um::winnt::HANDLE,
                     0,
                     0,
                     0 as *mut _,
                 );
-                if res != 0 {
-                    return Err(io::Error::last_os_error());
-                }
             }
             Ok(())
         }
