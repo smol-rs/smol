@@ -36,6 +36,13 @@ jobs:
         uses: actions-rs/cargo@v1
         with:
           command: check
+          args: --all --bins
+
+      - name: Run full cargo check
+        if: startsWith(matrix.rust, 'nightly')
+        uses: actions-rs/cargo@v1
+        with:
+          command: check
           args: --all --benches --bins --examples --tests --all-features
 
       - name: Run cargo check (without dev-dependencies to catch missing feature flags)
