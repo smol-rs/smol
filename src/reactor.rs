@@ -468,6 +468,7 @@ impl Source {
 mod sys {
     use std::convert::TryInto;
     use std::io;
+    use std::os::raw::c_void;
     use std::os::unix::io::RawFd;
     use std::time::Duration;
 
@@ -478,15 +479,29 @@ mod sys {
         epoll_create1, epoll_ctl, epoll_wait, EpollEvent, EpollFlags, EpollOp,
     };
 
+    macro_rules! syscall {
+        ($fn:ident $args:tt) => {{
+            let res = unsafe { libc::$fn $args };
+            if res == -1 {
+                Err(std::io::Error::last_os_error())
+            } else {
+                Ok(res)
+            }
+        }};
+    }
+
     pub struct Reactor {
         epoll_fd: RawFd,
-        io_event: Lazy<IoEvent>,
+        event_fd: RawFd,
     }
     impl Reactor {
         pub fn new() -> io::Result<Reactor> {
             let epoll_fd = epoll_create1()?;
-            let io_event = Lazy::<IoEvent>::new(|| IoEvent::new().unwrap());
-            Ok(Reactor { epoll_fd, io_event })
+            let event_fd = syscall!(eventfd(0, libc::EFD_CLOEXEC | libc::EFD_NONBLOCK))?;
+            let reactor = Reactor { epoll_fd, event_fd };
+            reactor.register(event_fd, !0)?;
+            reactor.reregister(event_fd, !0, true, false)?;
+            Ok(reactor)
         }
         pub fn register(&self, fd: RawFd, key: usize) -> io::Result<()> {
             let ev = &mut EpollEvent::new(0, key as u64);
@@ -518,11 +533,24 @@ mod sys {
                 .and_then(|t| t.as_millis().try_into().ok())
                 .unwrap_or(-1);
             events.len = epoll_wait(self.epoll_fd, &mut events.list, timeout_ms)?;
-            self.io_event.clear();
+
+            let mut buf = [0u8; 8];
+            let _ = syscall!(read(
+                self.event_fd,
+                &mut buf[0] as *mut u8 as *mut c_void,
+                buf.len()
+            ));
+            self.reregister(self.event_fd, !0, true, false)?;
+
             Ok(events.len)
         }
         pub fn notify(&self) -> io::Result<()> {
-            self.io_event.notify();
+            let buf: [u8; 8] = 1u64.to_ne_bytes();
+            let _ = syscall!(write(
+                self.event_fd,
+                &buf[0] as *const u8 as *const c_void,
+                buf.len()
+            ));
             Ok(())
         }
     }
