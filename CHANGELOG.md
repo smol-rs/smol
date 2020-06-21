@@ -1,3 +1,7 @@
+# Version 0.1.16
+
+- Add `Async::readable()` and `Async::writable()`.
+
 # Version 0.1.15
 
 - Fix wakeups lost inside the executor.
