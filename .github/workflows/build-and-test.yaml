@@ -36,7 +36,7 @@ jobs:
         uses: actions-rs/cargo@v1
         with:
           command: check
-          args: --all --bins
+          args: --all --bins --all-features
 
       - name: Run cargo check
         if: startsWith(matrix.rust, '1.39.0') == false
