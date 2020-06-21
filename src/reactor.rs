@@ -813,7 +813,7 @@ mod sys {
                         t.max(Duration::from_millis(1))
                             .as_millis()
                             .try_into()
-                            .unwrap_or(libc::c_int::MAX)
+                            .unwrap_or(libc::c_int::max_value())
                     }
                 }
             };
