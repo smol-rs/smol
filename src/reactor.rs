@@ -700,14 +700,10 @@ mod sys {
     use std::os::windows::io::{AsRawSocket, RawSocket};
     use std::time::Duration;
 
-    use once_cell::sync::Lazy;
-    use wepoll_sys::*;
-
-    use crate::io_event::IoEvent;
+    use wepoll_sys_stjepang::*;
 
     pub struct Reactor {
         handle: HANDLE,
-        io_event: Lazy<IoEvent>,
     }
     unsafe impl Send for Reactor {}
     unsafe impl Sync for Reactor {}
@@ -717,8 +713,7 @@ mod sys {
             if handle.is_null() {
                 return Err(io::Error::last_os_error());
             }
-            let io_event = Lazy::<IoEvent>::new(|| IoEvent::new().unwrap());
-            Ok(Reactor { handle, io_event })
+            Ok(Reactor { handle })
         }
         pub fn register(&self, sock: RawSocket, key: usize) -> io::Result<()> {
             let mut ev = epoll_event {
@@ -796,12 +791,21 @@ mod sys {
             if ret == -1 {
                 return Err(io::Error::last_os_error());
             }
-            self.io_event.clear();
             events.len = ret as usize;
             Ok(ret as usize)
         }
         pub fn notify(&self) -> io::Result<()> {
-            self.io_event.notify();
+            unsafe {
+                extern "system" {
+                    fn PostQueuedCompletionStatus(
+                        CompletionPort: HANDLE,
+                        dwNumberOfBytesTransferred: u32,
+                        dwCompletionKey: usize,
+                        lpOverlapped: usize,
+                    ) -> c_int;
+                }
+                PostQueuedCompletionStatus(self.handle, 0, 0, 0);
+            }
             Ok(())
         }
     }

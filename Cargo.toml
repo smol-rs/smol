@@ -47,7 +47,7 @@ optional = true
 libc = "0.2.70"
 
 [target.'cfg(windows)'.dependencies]
-wepoll-sys = "2.0.0"
+wepoll-sys-stjepang = { git = "https://github.com/stjepang/wepoll-sys-stjepang.git" }
 
 [dev-dependencies]
 futures = { version = "0.3.5", default-features = false, features = ["std"] }
