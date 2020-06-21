@@ -26,7 +26,7 @@ use std::os::unix::io::RawFd;
 #[cfg(windows)]
 use std::os::windows::io::{FromRawSocket, RawSocket};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::task::{Poll, Waker};
 use std::time::{Duration, Instant};
 
@@ -54,17 +54,17 @@ pub(crate) struct Reactor {
     ticker: AtomicUsize,
 
     /// Registered sources.
-    sources: piper::Mutex<Slab<Arc<Source>>>,
+    sources: Mutex<Slab<Arc<Source>>>,
 
     /// Temporary storage for I/O events when polling the reactor.
-    events: piper::Mutex<sys::Events>,
+    events: Mutex<sys::Events>,
 
     /// An ordered map of registered timers.
     ///
     /// Timers are in the order in which they fire. The `usize` in this type is a timer ID used to
     /// distinguish timers that fire at the same time. The `Waker` represents the task awaiting the
     /// timer.
-    timers: piper::Mutex<BTreeMap<(Instant, usize), Waker>>,
+    timers: Mutex<BTreeMap<(Instant, usize), Waker>>,
 
     /// A queue of timer operations (insert and remove).
     ///
@@ -79,9 +79,9 @@ impl Reactor {
         static REACTOR: Lazy<Reactor> = Lazy::new(|| Reactor {
             sys: sys::Reactor::new().expect("cannot initialize I/O event notification"),
             ticker: AtomicUsize::new(0),
-            sources: piper::Mutex::new(Slab::new()),
-            events: piper::Mutex::new(sys::Events::new()),
-            timers: piper::Mutex::new(BTreeMap::new()),
+            sources: Mutex::new(Slab::new()),
+            events: Mutex::new(sys::Events::new()),
+            timers: Mutex::new(BTreeMap::new()),
             timer_ops: ConcurrentQueue::bounded(1000),
         });
         &REACTOR
@@ -98,7 +98,7 @@ impl Reactor {
         #[cfg(unix)] raw: RawFd,
         #[cfg(windows)] raw: RawSocket,
     ) -> io::Result<Arc<Source>> {
-        let mut sources = self.sources.lock();
+        let mut sources = self.sources.lock().unwrap();
         let vacant = sources.vacant_entry();
 
         // Put the I/O handle in non-blocking mode.
@@ -121,7 +121,7 @@ impl Reactor {
         let source = Arc::new(Source {
             raw,
             key,
-            wakers: piper::Mutex::new(Wakers {
+            wakers: Mutex::new(Wakers {
                 tick_readable: 0,
                 tick_writable: 0,
                 readers: Vec::new(),
@@ -133,7 +133,7 @@ impl Reactor {
 
     /// Deregisters an I/O source from the reactor.
     pub fn remove_io(&self, source: &Source) -> io::Result<()> {
-        let mut sources = self.sources.lock();
+        let mut sources = self.sources.lock().unwrap();
         sources.remove(source.key);
         self.sys.deregister(source.raw)
     }
@@ -173,7 +173,7 @@ impl Reactor {
 
     /// Attempts to lock the reactor.
     pub fn try_lock(&self) -> Option<ReactorLock<'_>> {
-        self.events.try_lock().map(|events| {
+        self.events.try_lock().ok().map(|events| {
             let reactor = self;
             ReactorLock { reactor, events }
         })
@@ -183,7 +183,7 @@ impl Reactor {
     ///
     /// Returns the duration until the next timer before this method was called.
     fn fire_timers(&self) -> Option<Duration> {
-        let mut timers = self.timers.lock();
+        let mut timers = self.timers.lock().unwrap();
 
         // Process timer operations, but no more than the queue capacity because otherwise we could
         // keep popping operations forever.
@@ -232,7 +232,7 @@ impl Reactor {
 /// A lock on the reactor.
 pub(crate) struct ReactorLock<'a> {
     reactor: &'a Reactor,
-    events: piper::MutexGuard<'a, sys::Events>,
+    events: MutexGuard<'a, sys::Events>,
 }
 
 impl ReactorLock<'_> {
@@ -269,13 +269,13 @@ impl ReactorLock<'_> {
             // At least one I/O event occurred.
             Ok(_) => {
                 // Iterate over sources in the event list.
-                let sources = self.reactor.sources.lock();
+                let sources = self.reactor.sources.lock().unwrap();
                 let mut ready = Vec::new();
 
                 for ev in self.events.iter() {
                     // Check if there is a source in the table with this key.
                     if let Some(source) = sources.get(ev.key) {
-                        let mut wakers = source.wakers.lock();
+                        let mut wakers = source.wakers.lock().unwrap();
 
                         // Wake readers if a readability event was emitted.
                         if ev.readable {
@@ -345,7 +345,7 @@ pub(crate) struct Source {
     key: usize,
 
     /// Tasks interested in events on this source.
-    wakers: piper::Mutex<Wakers>,
+    wakers: Mutex<Wakers>,
 }
 
 /// Tasks interested in events on a source.
@@ -370,7 +370,7 @@ impl Source {
         let mut ticks = None;
 
         future::poll_fn(|cx| {
-            let mut wakers = self.wakers.lock();
+            let mut wakers = self.wakers.lock().unwrap();
 
             // Check if the reactor has delivered a readability event.
             if let Some((a, b)) = ticks {
@@ -414,7 +414,7 @@ impl Source {
         let mut ticks = None;
 
         future::poll_fn(|cx| {
-            let mut wakers = self.wakers.lock();
+            let mut wakers = self.wakers.lock().unwrap();
 
             // Check if the reactor has delivered a writability event.
             if let Some((a, b)) = ticks {
