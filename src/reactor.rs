@@ -365,15 +365,6 @@ struct Wakers {
 }
 
 impl Source {
-    /// Re-registers the I/O event to wake the poller.
-    pub(crate) fn reregister_io_event(&self) -> io::Result<()> {
-        let wakers = self.wakers.lock();
-        Reactor::get()
-            .sys
-            .reregister(self.raw, self.key, true, !wakers.writers.is_empty())?;
-        Ok(())
-    }
-
     /// Waits until the I/O source is readable.
     pub(crate) async fn readable(&self) -> io::Result<()> {
         let mut ticks = None;
@@ -471,8 +462,6 @@ mod sys {
     use std::os::raw::c_void;
     use std::os::unix::io::RawFd;
     use std::time::Duration;
-
-    use once_cell::sync::Lazy;
 
     use crate::sys::epoll::{
         epoll_create1, epoll_ctl, epoll_wait, EpollEvent, EpollFlags, EpollOp,
