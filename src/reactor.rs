@@ -474,7 +474,6 @@ mod sys {
 
     use once_cell::sync::Lazy;
 
-    use crate::io_event::IoEvent;
     use crate::sys::epoll::{
         epoll_create1, epoll_ctl, epoll_wait, EpollEvent, EpollFlags, EpollOp,
     };
@@ -596,29 +595,33 @@ mod sys {
     target_os = "dragonfly",
 ))]
 mod sys {
-    use std::io;
-    use std::os::unix::io::RawFd;
+    use std::io::{self, Read, Write};
+    use std::os::unix::io::{AsRawFd, RawFd};
+    use std::os::unix::net::UnixStream;
     use std::time::Duration;
 
-    use once_cell::sync::Lazy;
-
-    use crate::io_event::IoEvent;
     use crate::sys::event::{kevent_ts, kqueue, KEvent};
     use crate::sys::fcntl::{fcntl, FcntlArg};
 
     pub struct Reactor {
         kqueue_fd: RawFd,
-        io_event: Lazy<IoEvent>,
+        read_stream: UnixStream,
+        write_stream: UnixStream,
     }
     impl Reactor {
         pub fn new() -> io::Result<Reactor> {
             let kqueue_fd = kqueue()?;
             fcntl(kqueue_fd, FcntlArg::F_SETFD(libc::FD_CLOEXEC))?;
-            let io_event = Lazy::<IoEvent>::new(|| IoEvent::new().unwrap());
-            Ok(Reactor {
+            let (read_stream, write_stream) = UnixStream::pair()?;
+            read_stream.set_nonblocking(true)?;
+            write_stream.set_nonblocking(true)?;
+            let reactor = Reactor {
                 kqueue_fd,
-                io_event,
-            })
+                read_stream,
+                write_stream,
+            };
+            reactor.reregister(reactor.read_stream.as_raw_fd(), !0, true, false)?;
+            Ok(reactor)
         }
         pub fn register(&self, _fd: RawFd, _key: usize) -> io::Result<()> {
             Ok(())
@@ -678,11 +681,14 @@ mod sys {
                 tv_nsec: t.subsec_nanos() as libc::c_long,
             });
             events.len = kevent_ts(self.kqueue_fd, &[], &mut events.list, timeout)?;
-            self.io_event.clear();
+
+            while (&self.read_stream).read(&mut [0; 64]).is_ok() {}
+            self.reregister(self.read_stream.as_raw_fd(), !0, true, false)?;
+
             Ok(events.len)
         }
         pub fn notify(&self) -> io::Result<()> {
-            self.io_event.notify();
+            let _ = (&self.write_stream).write(&[1]);
             Ok(())
         }
     }
@@ -764,10 +770,10 @@ mod sys {
         ) -> io::Result<()> {
             let mut flags = EPOLLONESHOT;
             if read {
-                flags |= read_flags();
+                flags |= READ_FLAGS;
             }
             if write {
-                flags |= write_flags();
+                flags |= WRITE_FLAGS;
             }
             let mut ev = epoll_event {
                 events: flags as u32,
@@ -843,12 +849,8 @@ mod sys {
             self.0
         }
     }
-    fn read_flags() -> u32 {
-        EPOLLIN | EPOLLRDHUP | EPOLLHUP | EPOLLERR | EPOLLPRI
-    }
-    fn write_flags() -> u32 {
-        EPOLLOUT | EPOLLHUP | EPOLLERR
-    }
+    const READ_FLAGS: u32 = EPOLLIN | EPOLLRDHUP | EPOLLHUP | EPOLLERR | EPOLLPRI;
+    const WRITE_FLAGS: u32 = EPOLLOUT | EPOLLHUP | EPOLLERR;
 
     pub struct Events {
         list: Box<[epoll_event]>,
@@ -869,8 +871,8 @@ mod sys {
         }
         pub fn iter(&self) -> impl Iterator<Item = Event> + '_ {
             self.list[..self.len].iter().map(|ev| Event {
-                readable: (ev.events & read_flags()) != 0,
-                writable: (ev.events & write_flags()) != 0,
+                readable: (ev.events & READ_FLAGS) != 0,
+                writable: (ev.events & WRITE_FLAGS) != 0,
                 key: unsafe { ev.data.u64 } as usize,
             })
         }
