@@ -1,3 +1,7 @@
+# Version 0.1.18
+
+- Support Rust 1.39.0
+
 # Version 0.1.17
 
 - Support more platforms by changing `AtomicU64` to `AtomicUsize`.
