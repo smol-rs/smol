@@ -218,11 +218,6 @@ impl<T: IntoRawSocket> IntoRawSocket for Async<T> {
 }
 
 impl<T> Async<T> {
-    /// Re-registers the I/O event to wake the poller.
-    pub(crate) fn reregister_io_event(&self) -> io::Result<()> {
-        self.source.reregister_io_event()
-    }
-
     /// Gets a reference to the inner I/O handle.
     ///
     /// # Examples

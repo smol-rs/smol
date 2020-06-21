@@ -32,7 +32,6 @@ fastrand = "1.1.0"
 futures-io = { version = "0.3.5", default-features = false, features = ["std"] }
 futures-util = { version = "0.3.5", default-features = false, features = ["std", "io"] }
 once_cell = "1.3.1"
-piper = "0.1.2"
 scoped-tls = "1.0.0"
 slab = "0.4.2"
 socket2 = { version = "0.3.12", features = ["pair", "unix"] }
@@ -47,13 +46,14 @@ optional = true
 libc = "0.2.70"
 
 [target.'cfg(windows)'.dependencies]
-wepoll-binding = "2.0.2"
+wepoll-sys-stjepang = "1.0.0"
 
 [dev-dependencies]
+criterion = "0.3"
 futures = { version = "0.3.5", default-features = false, features = ["std"] }
 num_cpus = "1.13.0"
+piper = "0.1.2"
 tempfile = "3.1.0"
-criterion = "0.3"
 
 [workspace]
 members = [
