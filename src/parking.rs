@@ -7,7 +7,6 @@ use std::time::{Duration, Instant};
 use once_cell::sync::Lazy;
 use slab::Slab;
 
-use crate::io_event::IoEvent;
 use crate::reactor::Reactor;
 
 static REGISTRY: Lazy<Mutex<Slab<Unparker>>> = Lazy::new(|| Mutex::new(Slab::new()));
@@ -132,8 +131,6 @@ const PARKED: usize = 1;
 const POLLING: usize = 2;
 const NOTIFIED: usize = 3;
 
-static EVENT: Lazy<IoEvent> = Lazy::new(|| IoEvent::new().unwrap());
-
 struct Inner {
     state: AtomicUsize,
     lock: Mutex<()>,
@@ -153,7 +150,6 @@ impl Inner {
                 reactor_lock
                     .react(Some(Duration::from_secs(0)))
                     .expect("failure while polling I/O");
-                EVENT.clear();
             }
             return true;
         }
@@ -166,7 +162,6 @@ impl Inner {
                     reactor_lock
                         .react(Some(Duration::from_secs(0)))
                         .expect("failure while polling I/O");
-                    EVENT.clear();
                 }
                 return false;
             }
@@ -206,7 +201,6 @@ impl Inner {
                             drop(m);
 
                             reactor_lock.react(None).expect("failure while polling I/O");
-                            EVENT.clear();
 
                             m = self.lock.lock().unwrap();
                         }
@@ -231,7 +225,6 @@ impl Inner {
                             reactor_lock
                                 .react(Some(deadline.saturating_duration_since(Instant::now())))
                                 .expect("failure while polling I/O");
-                            EVENT.clear();
 
                             if Instant::now() >= deadline {
                                 break;
@@ -274,7 +267,7 @@ impl Inner {
         if state == PARKED {
             self.cvar.notify_one();
         } else {
-            EVENT.notify();
+            Reactor::get().notify();
         }
     }
 }
