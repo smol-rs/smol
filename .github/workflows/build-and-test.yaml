@@ -39,7 +39,7 @@ jobs:
           args: --all --bins
 
       - name: Run cargo check
-        if: !startsWith(matrix.rust, '1.39.0')
+        if: startsWith(matrix.rust, '1.39.0') == false
         uses: actions-rs/cargo@v1
         with:
           command: check
