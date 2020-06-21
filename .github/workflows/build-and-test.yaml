@@ -53,7 +53,7 @@ jobs:
           args: -Z features=dev_dep
 
       - name: Run cargo test
-        if: !startsWith(matrix.rust, '1.39.0')
+        if: startsWith(matrix.rust, '1.39.0') == false
         uses: actions-rs/cargo@v1
         with:
           command: test
