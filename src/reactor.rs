@@ -459,7 +459,6 @@ impl Source {
 mod sys {
     use std::convert::TryInto;
     use std::io;
-    use std::os::raw::c_void;
     use std::os::unix::io::RawFd;
     use std::time::Duration;
 
@@ -525,7 +524,7 @@ mod sys {
             let mut buf = [0u8; 8];
             let _ = syscall!(read(
                 self.event_fd,
-                &mut buf[0] as *mut u8 as *mut c_void,
+                &mut buf[0] as *mut u8 as *mut libc::c_void,
                 buf.len()
             ));
             self.reregister(self.event_fd, !0, true, false)?;
@@ -536,7 +535,7 @@ mod sys {
             let buf: [u8; 8] = 1u64.to_ne_bytes();
             let _ = syscall!(write(
                 self.event_fd,
-                &buf[0] as *const u8 as *const c_void,
+                &buf[0] as *const u8 as *const libc::c_void,
                 buf.len()
             ));
             Ok(())
