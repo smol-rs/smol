@@ -1,36 +1,4 @@
 #[cfg(unix)]
-pub mod fcntl {
-    use super::check_err;
-    use std::os::unix::io::RawFd;
-
-    pub type OFlag = libc::c_int;
-    pub type FdFlag = libc::c_int;
-
-    #[allow(non_camel_case_types)]
-    #[allow(dead_code)]
-    /// Arguments passed to `fcntl`.
-    pub enum FcntlArg {
-        F_GETFL,
-        F_SETFL(OFlag),
-        F_SETFD(FdFlag),
-    }
-
-    /// Thin wrapper around `libc::fcntl`.
-    ///
-    /// See [`fcntl(2)`](http://man7.org/linux/man-pages/man2/fcntl.2.html) for details.
-    pub fn fcntl(fd: RawFd, arg: FcntlArg) -> Result<libc::c_int, std::io::Error> {
-        let res = unsafe {
-            match arg {
-                FcntlArg::F_GETFL => libc::fcntl(fd, libc::F_GETFL),
-                FcntlArg::F_SETFL(flag) => libc::fcntl(fd, libc::F_SETFL, flag),
-                FcntlArg::F_SETFD(flag) => libc::fcntl(fd, libc::F_SETFD, flag),
-            }
-        };
-        check_err(res)
-    }
-}
-
-#[cfg(unix)]
 fn check_err(res: libc::c_int) -> Result<libc::c_int, std::io::Error> {
     if res == -1 {
         return Err(std::io::Error::last_os_error());
