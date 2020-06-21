@@ -745,7 +745,7 @@ mod sys {
                 }
             });
             events.0.clear();
-            let res = self.epoll.poll(&mut events.epoll, timeout);
+            let res = self.epoll.poll(&mut events.0, timeout);
             self.io_event.clear();
             res
         }
