@@ -102,11 +102,11 @@ impl<T: Send + 'static> Task<T> {
     ///
     /// [`run()`]: `crate::run()`
     pub fn spawn(future: impl Future<Output = T> + Send + 'static) -> Task<T> {
-        QUEUE.spawn(future)
-        // WORKER.with(|w| match &*w.borrow() {
-        //     None => QUEUE.spawn(future),
-        //     Some(w) => w.spawn(future),
-        // })
+        if WORKER.is_set() {
+            WORKER.with(|w| w.spawn_local(future))
+        } else {
+            QUEUE.spawn(future)
+        }
     }
 
     /// Spawns a future onto the blocking executor.
