@@ -306,10 +306,9 @@ impl Worker {
                 }
                 Some(r) => {
                     // Wake up.
-                    if !self.wake() {
-                        // If already woken, notify another worker.
-                        self.global.notify();
-                    }
+                    self.wake();
+                    // Notify another worker.
+                    self.global.notify();
 
                     // Bump the ticker.
                     let ticker = self.ticker.get();
