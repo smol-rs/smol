@@ -17,8 +17,6 @@ pub(crate) struct Parker {
     unparker: Unparker,
 }
 
-unsafe impl Send for Parker {}
-
 impl Parker {
     /// Creates a new [`Parker`].
     pub fn new() -> Parker {
@@ -101,9 +99,6 @@ impl fmt::Debug for Parker {
 pub(crate) struct Unparker {
     inner: Arc<Inner>,
 }
-
-unsafe impl Send for Unparker {}
-unsafe impl Sync for Unparker {}
 
 impl Unparker {
     /// Atomically makes the token available if it is not already.
