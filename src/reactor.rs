@@ -106,6 +106,8 @@ impl Reactor {
             wakers: Mutex::new(Wakers {
                 tick_readable: 0,
                 tick_writable: 0,
+                last_tick_readable: None,
+                last_tick_writable: None,
                 readers: Vec::new(),
                 writers: Vec::new(),
             }),
@@ -339,6 +341,9 @@ struct Wakers {
     /// Last reactor tick that delivered a writability event.
     tick_writable: usize,
 
+    last_tick_readable: Option<(usize, usize)>,
+    last_tick_writable: Option<(usize, usize)>,
+
     /// Tasks waiting for the next readability event.
     readers: Vec<Waker>,
 
@@ -347,15 +352,27 @@ struct Wakers {
 }
 
 impl Source {
+    pub(crate) fn clear_readable(&self) -> io::Result<()> {
+        let mut wakers = self.wakers.lock().unwrap();
+
+        wakers.last_tick_readable.take();
+        Ok(())
+    }
+
+    pub(crate) fn clear_writable(&self) -> io::Result<()> {
+        let mut wakers = self.wakers.lock().unwrap();
+
+        wakers.last_tick_writable.take();
+        Ok(())
+    }
+
     /// Waits until the I/O source is readable.
     pub(crate) async fn readable(&self) -> io::Result<()> {
-        let mut ticks = None;
-
         future::poll_fn(|cx| {
             let mut wakers = self.wakers.lock().unwrap();
 
             // Check if the reactor has delivered a readability event.
-            if let Some((a, b)) = ticks {
+            if let Some((a, b)) = wakers.last_tick_readable {
                 // If `tick_readable` has changed to a value other than the old reactor tick, that
                 // means a newer reactor tick has delivered a readability event.
                 if wakers.tick_readable != a && wakers.tick_readable != b {
@@ -379,8 +396,8 @@ impl Source {
             }
 
             // Remember the current ticks.
-            if ticks.is_none() {
-                ticks = Some((
+            if wakers.last_tick_readable.is_none() {
+                wakers.last_tick_readable = Some((
                     Reactor::get().ticker.load(Ordering::SeqCst),
                     wakers.tick_readable,
                 ));
@@ -393,13 +410,11 @@ impl Source {
 
     /// Waits until the I/O source is writable.
     pub(crate) async fn writable(&self) -> io::Result<()> {
-        let mut ticks = None;
-
         future::poll_fn(|cx| {
             let mut wakers = self.wakers.lock().unwrap();
 
             // Check if the reactor has delivered a writability event.
-            if let Some((a, b)) = ticks {
+            if let Some((a, b)) = wakers.last_tick_writable {
                 // If `tick_writable` has changed to a value other than the old reactor tick, that
                 // means a newer reactor tick has delivered a writability event.
                 if wakers.tick_writable != a && wakers.tick_writable != b {
@@ -423,8 +438,8 @@ impl Source {
             }
 
             // Remember the current ticks.
-            if ticks.is_none() {
-                ticks = Some((
+            if wakers.last_tick_writable.is_none() {
+                wakers.last_tick_writable = Some((
                     Reactor::get().ticker.load(Ordering::SeqCst),
                     wakers.tick_writable,
                 ));

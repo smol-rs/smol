@@ -377,13 +377,14 @@ impl<T> Async<T> {
     /// ```
     pub async fn read_with<R>(&self, op: impl FnMut(&T) -> io::Result<R>) -> io::Result<R> {
         let mut op = op;
-        future::poll_fn(|cx| {
+        future::poll_fn(|cx| loop {
+            futures_util::ready!(poll_future(cx, self.readable()))?;
             match op(self.get_ref()) {
-                Err(err) if err.kind() == io::ErrorKind::WouldBlock => {}
+                Err(err) if err.kind() == io::ErrorKind::WouldBlock => {
+                    self.source.clear_readable()?;
+                }
                 res => return Poll::Ready(res),
             }
-            futures_util::ready!(poll_future(cx, self.readable()))?;
-            Poll::Pending
         })
         .await
     }
@@ -415,13 +416,14 @@ impl<T> Async<T> {
         op: impl FnMut(&mut T) -> io::Result<R>,
     ) -> io::Result<R> {
         let mut op = op;
-        future::poll_fn(|cx| {
+        future::poll_fn(|cx| loop {
+            futures_util::ready!(poll_future(cx, self.readable()))?;
             match op(self.get_mut()) {
-                Err(err) if err.kind() == io::ErrorKind::WouldBlock => {}
+                Err(err) if err.kind() == io::ErrorKind::WouldBlock => {
+                    self.source.clear_readable()?;
+                }
                 res => return Poll::Ready(res),
             }
-            futures_util::ready!(poll_future(cx, self.readable()))?;
-            Poll::Pending
         })
         .await
     }
@@ -451,13 +453,14 @@ impl<T> Async<T> {
     /// ```
     pub async fn write_with<R>(&self, op: impl FnMut(&T) -> io::Result<R>) -> io::Result<R> {
         let mut op = op;
-        future::poll_fn(|cx| {
+        future::poll_fn(|cx| loop {
+            futures_util::ready!(poll_future(cx, self.writable()))?;
             match op(self.get_ref()) {
-                Err(err) if err.kind() == io::ErrorKind::WouldBlock => {}
+                Err(err) if err.kind() == io::ErrorKind::WouldBlock => {
+                    self.source.clear_writable()?;
+                }
                 res => return Poll::Ready(res),
             }
-            futures_util::ready!(poll_future(cx, self.writable()))?;
-            Poll::Pending
         })
         .await
     }
@@ -490,13 +493,14 @@ impl<T> Async<T> {
         op: impl FnMut(&mut T) -> io::Result<R>,
     ) -> io::Result<R> {
         let mut op = op;
-        future::poll_fn(|cx| {
+        future::poll_fn(|cx| loop {
+            futures_util::ready!(poll_future(cx, self.writable()))?;
             match op(self.get_mut()) {
-                Err(err) if err.kind() == io::ErrorKind::WouldBlock => {}
+                Err(err) if err.kind() == io::ErrorKind::WouldBlock => {
+                    self.source.clear_writable()?;
+                }
                 res => return Poll::Ready(res),
             }
-            futures_util::ready!(poll_future(cx, self.writable()))?;
-            Poll::Pending
         })
         .await
     }
