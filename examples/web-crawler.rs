@@ -10,17 +10,18 @@
 use std::collections::{HashSet, VecDeque};
 
 use anyhow::Result;
-use piper::Sender;
+use async_channel::Sender;
 use scraper::{Html, Selector};
 use smol::Task;
 
 const ROOT: &str = "https://www.rust-lang.org";
 
 /// Fetches the HTML contents of a web page.
-async fn fetch(url: String, sender: Sender<String>) {
+async fn fetch(url: String, sender: Sender<String>) -> Result<()> {
     let body = surf::get(&url).recv_string().await;
     let body = body.unwrap_or_default();
-    sender.send(body).await;
+    sender.send(body).await?;
+    Ok(())
 }
 
 /// Extracts links from a HTML body.
@@ -41,20 +42,20 @@ fn main() -> Result<()> {
         seen.insert(ROOT.to_string());
         queue.push_back(ROOT.to_string());
 
-        let (s, r) = piper::chan(200);
+        let (s, r) = async_channel::bounded(200);
         let mut tasks = 0;
 
         // Loop while the queue is not empty or tasks are fetching pages.
         while queue.len() + tasks > 0 {
             // Limit the number of concurrent tasks.
-            while tasks < s.capacity() {
+            while tasks < s.capacity().unwrap() {
                 // Process URLs in the queue and fetch more pages.
                 match queue.pop_front() {
                     None => break,
                     Some(url) => {
                         println!("{}", url);
                         tasks += 1;
-                        Task::spawn(fetch(url, s.clone())).detach();
+                        Task::spawn(fetch(url, s.clone())).unwrap().detach();
                     }
                 }
             }
