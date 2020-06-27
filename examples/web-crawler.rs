@@ -17,11 +17,10 @@ use smol::Task;
 const ROOT: &str = "https://www.rust-lang.org";
 
 /// Fetches the HTML contents of a web page.
-async fn fetch(url: String, sender: Sender<String>) -> Result<()> {
+async fn fetch(url: String, sender: Sender<String>) {
     let body = surf::get(&url).recv_string().await;
     let body = body.unwrap_or_default();
-    sender.send(body).await?;
-    Ok(())
+    sender.send(body).await.unwrap();
 }
 
 /// Extracts links from a HTML body.
@@ -55,7 +54,7 @@ fn main() -> Result<()> {
                     Some(url) => {
                         println!("{}", url);
                         tasks += 1;
-                        Task::spawn(fetch(url, s.clone())).unwrap().detach();
+                        Task::spawn(fetch(url, s.clone())).detach();
                     }
                 }
             }
