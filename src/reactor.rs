@@ -799,7 +799,7 @@ mod sys {
                 self.handle,
                 we::EPOLL_CTL_DEL as libc::c_int,
                 sock as we::SOCKET,
-                0 as *mut we::epoll_event,
+                std::ptr::null_mut::<we::epoll_event>(), //0 as *mut we::epoll_event
             ))?;
             Ok(())
         }
@@ -832,7 +832,7 @@ mod sys {
                     self.handle as winapi::um::winnt::HANDLE,
                     0,
                     0,
-                    0 as *mut _,
+                    std::ptr::null_mut(), //0 as *mut _
                 );
             }
             Ok(())

@@ -14,7 +14,7 @@ use crate::parking::Parker;
 use scoped_tls::scoped_thread_local;
 
 /// The global task queue.
-pub(crate) static QUEUE: Lazy<multitask::Queue> = Lazy::new(|| multitask::Queue::new());
+pub(crate) static QUEUE: Lazy<multitask::Queue> = Lazy::new(multitask::Queue::new);
 
 scoped_thread_local! {
     /// Thread-local worker queue.
