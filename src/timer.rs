@@ -8,8 +8,6 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 
-use crate::reactor::Reactor;
-
 /// Fires at the chosen point in time.
 ///
 /// Timers are futures that output the [`Instant`] at which they fired.
@@ -61,15 +59,7 @@ use crate::reactor::Reactor;
 /// # io::Result::Ok(()) });
 /// ```
 #[derive(Debug)]
-pub struct Timer {
-    /// This timer's ID.
-    ///
-    /// When this field is set to `None`, this timer is not registered in the reactor.
-    id: Option<usize>,
-
-    /// When this timer fires.
-    when: Instant,
-}
+pub struct Timer(async_io::Timer);
 
 impl Timer {
     /// Fires after the specified duration of time.
@@ -85,7 +75,7 @@ impl Timer {
     /// # });
     /// ```
     pub fn after(dur: Duration) -> Timer {
-        Timer::at(Instant::now() + dur)
+        Timer(async_io::Timer::new(dur))
     }
 
     /// Fires at the specified instant in time.
@@ -103,17 +93,7 @@ impl Timer {
     /// # });
     /// ```
     pub fn at(when: Instant) -> Timer {
-        let id = None;
-        Timer { id, when }
-    }
-}
-
-impl Drop for Timer {
-    fn drop(&mut self) {
-        if let Some(id) = self.id.take() {
-            // Deregister the timer from the reactor.
-            Reactor::get().remove_timer(self.when, id);
-        }
+        Timer::after(when.saturating_duration_since(Instant::now()))
     }
 }
 
@@ -121,19 +101,6 @@ impl Future for Timer {
     type Output = Instant;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        // Check if the timer has already fired.
-        if Instant::now() >= self.when {
-            if let Some(id) = self.id.take() {
-                // Deregister the timer from the reactor.
-                Reactor::get().remove_timer(self.when, id);
-            }
-            Poll::Ready(self.when)
-        } else {
-            if self.id.is_none() {
-                // Register the timer in the reactor.
-                self.id = Some(Reactor::get().insert_timer(self.when, cx.waker()));
-            }
-            Poll::Pending
-        }
+        Pin::new(&mut self.0).poll(cx)
     }
 }

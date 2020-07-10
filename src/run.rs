@@ -6,11 +6,11 @@ use std::future::Future;
 use std::task::{Context, Poll};
 use std::time::Duration;
 
+use async_io::parking::Parker;
 use once_cell::sync::Lazy;
 
 use crate::context;
 use crate::multitask;
-use crate::parking::Parker;
 use scoped_tls::scoped_thread_local;
 
 /// The global task queue.

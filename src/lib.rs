@@ -120,15 +120,12 @@ mod block_on;
 mod blocking;
 mod context;
 mod multitask;
-mod parking;
-mod reactor;
 mod run;
-mod sys;
 mod task;
 mod timer;
 
 pub use self::blocking::{iter, reader, writer};
-pub use async_io::Async;
+pub use crate::async_io::Async;
 pub use block_on::block_on;
 pub use run::run;
 pub use task::Task;

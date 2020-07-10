@@ -4,13 +4,11 @@
 //! [kqueue]: https://en.wikipedia.org/wiki/Kqueue
 //! [wepoll]: https://github.com/piscisaureus/wepoll
 
-use std::future::Future;
 use std::io::{self, IoSlice, IoSliceMut, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream, ToSocketAddrs, UdpSocket};
 #[cfg(windows)]
 use std::os::windows::io::{AsRawSocket, IntoRawSocket, RawSocket};
 use std::pin::Pin;
-use std::sync::Arc;
 use std::task::{Context, Poll};
 #[cfg(unix)]
 use std::{
@@ -21,10 +19,8 @@ use std::{
 
 use futures_io::{AsyncRead, AsyncWrite};
 use futures_util::future;
-use futures_util::stream::{self, Stream};
-use socket2::{Domain, Protocol, Socket, Type};
+use futures_util::stream::{Stream, StreamExt};
 
-use crate::reactor::{Reactor, Source};
 use crate::task::Task;
 
 /// Async I/O.
@@ -95,13 +91,7 @@ use crate::task::Task;
 /// [kqueue]: https://en.wikipedia.org/wiki/Kqueue
 /// [wepoll]: https://github.com/piscisaureus/wepoll
 #[derive(Debug)]
-pub struct Async<T> {
-    /// A source registered in the reactor.
-    source: Arc<Source>,
-
-    /// The inner I/O handle.
-    io: Option<Box<T>>,
-}
+pub struct Async<T>(async_io::Async<T>);
 
 #[cfg(unix)]
 impl<T: AsRawFd> Async<T> {
@@ -139,24 +129,7 @@ impl<T: AsRawFd> Async<T> {
     /// # std::io::Result::Ok(()) });
     /// ```
     pub fn new(io: T) -> io::Result<Async<T>> {
-        Ok(Async {
-            source: Reactor::get().insert_io(io.as_raw_fd())?,
-            io: Some(Box::new(io)),
-        })
-    }
-}
-
-#[cfg(unix)]
-impl<T: AsRawFd> AsRawFd for Async<T> {
-    fn as_raw_fd(&self) -> RawFd {
-        self.source.raw
-    }
-}
-
-#[cfg(unix)]
-impl<T: IntoRawFd> IntoRawFd for Async<T> {
-    fn into_raw_fd(self) -> RawFd {
-        self.into_inner().unwrap().into_raw_fd()
+        async_io::Async::new(io).map(Async)
     }
 }
 
@@ -176,7 +149,7 @@ impl<T: AsRawSocket> Async<T> {
     ///
     /// **NOTE**: Do not use this type with [`File`][`std::fs::File`], [`Stdin`][`std::io::Stdin`],
     /// [`Stdout`][`std::io::Stdout`], or [`Stderr`][`std::io::Stderr`] because they're not
-    /// supported by epoll/kqueue/wepoll.
+    /// supported by [epoll]/[kqueue]/[wepoll].
     /// Use [`reader()`][`crate::reader()`] and [`writer()`][`crate::writer()`] functions instead
     /// to read/write on a thread.
     ///
@@ -196,17 +169,28 @@ impl<T: AsRawSocket> Async<T> {
     /// # std::io::Result::Ok(()) });
     /// ```
     pub fn new(io: T) -> io::Result<Async<T>> {
-        Ok(Async {
-            source: Reactor::get().insert_io(io.as_raw_socket())?,
-            io: Some(Box::new(io)),
-        })
+        async_io::Async::new(io).map(Async)
+    }
+}
+
+#[cfg(unix)]
+impl<T: AsRawFd> AsRawFd for Async<T> {
+    fn as_raw_fd(&self) -> RawFd {
+        self.0.as_raw_fd()
+    }
+}
+
+#[cfg(unix)]
+impl<T: IntoRawFd> IntoRawFd for Async<T> {
+    fn into_raw_fd(self) -> RawFd {
+        self.into_inner().unwrap().into_raw_fd()
     }
 }
 
 #[cfg(windows)]
 impl<T: AsRawSocket> AsRawSocket for Async<T> {
     fn as_raw_socket(&self) -> RawSocket {
-        self.source.raw
+        self.0.as_raw_socket()
     }
 }
 
@@ -232,7 +216,7 @@ impl<T> Async<T> {
     /// # std::io::Result::Ok(()) });
     /// ```
     pub fn get_ref(&self) -> &T {
-        self.io.as_ref().unwrap()
+        self.0.get_ref()
     }
 
     /// Gets a mutable reference to the inner I/O handle.
@@ -249,7 +233,7 @@ impl<T> Async<T> {
     /// # std::io::Result::Ok(()) });
     /// ```
     pub fn get_mut(&mut self) -> &mut T {
-        self.io.as_mut().unwrap()
+        self.0.get_mut()
     }
 
     /// Unwraps the inner non-blocking I/O handle.
@@ -265,17 +249,15 @@ impl<T> Async<T> {
     /// let inner = listener.into_inner()?;
     /// # std::io::Result::Ok(()) });
     /// ```
-    pub fn into_inner(mut self) -> io::Result<T> {
-        let io = *self.io.take().unwrap();
-        Reactor::get().remove_io(&self.source)?;
-        Ok(io)
+    pub fn into_inner(self) -> io::Result<T> {
+        self.0.into_inner()
     }
 
     #[doc(hidden)]
     #[deprecated(note = "use `read_with()` or `write_with()` instead")]
     pub async fn with<R>(&self, op: impl FnMut(&T) -> io::Result<R>) -> io::Result<R> {
         let mut op = op;
-        let io = self.io.as_ref().unwrap();
+        let io = self.get_ref();
         loop {
             match op(io) {
                 Err(err) if err.kind() == io::ErrorKind::WouldBlock => {}
@@ -283,8 +265,8 @@ impl<T> Async<T> {
             }
 
             // Wait until the I/O handle is readable or writable.
-            let readable = self.source.readable();
-            let writable = self.source.writable();
+            let readable = self.0.readable();
+            let writable = self.0.writable();
             futures_util::pin_mut!(readable);
             futures_util::pin_mut!(writable);
             let _ = future::select(readable, writable).await;
@@ -295,16 +277,15 @@ impl<T> Async<T> {
     #[deprecated(note = "use `read_with_mut()` or `write_with_mut()` instead")]
     pub async fn with_mut<R>(&mut self, op: impl FnMut(&mut T) -> io::Result<R>) -> io::Result<R> {
         let mut op = op;
-        let io = self.io.as_mut().unwrap();
         loop {
-            match op(io) {
+            match op(self.get_mut()) {
                 Err(err) if err.kind() == io::ErrorKind::WouldBlock => {}
                 res => return res,
             }
 
             // Wait until the I/O handle is readable or writable.
-            let readable = self.source.readable();
-            let writable = self.source.writable();
+            let readable = self.0.readable();
+            let writable = self.0.writable();
             futures_util::pin_mut!(readable);
             futures_util::pin_mut!(writable);
             let _ = future::select(readable, writable).await;
@@ -329,7 +310,7 @@ impl<T> Async<T> {
     /// # std::io::Result::Ok(()) });
     /// ```
     pub async fn readable(&self) -> io::Result<()> {
-        self.source.readable().await
+        self.0.readable().await
     }
 
     /// Waits until the I/O handle is writable.
@@ -350,7 +331,7 @@ impl<T> Async<T> {
     /// # std::io::Result::Ok(()) });
     /// ```
     pub async fn writable(&self) -> io::Result<()> {
-        self.source.writable().await
+        self.0.writable().await
     }
 
     /// Performs a read operation asynchronously.
@@ -376,16 +357,7 @@ impl<T> Async<T> {
     /// # std::io::Result::Ok(()) });
     /// ```
     pub async fn read_with<R>(&self, op: impl FnMut(&T) -> io::Result<R>) -> io::Result<R> {
-        let mut op = op;
-        future::poll_fn(|cx| {
-            match op(self.get_ref()) {
-                Err(err) if err.kind() == io::ErrorKind::WouldBlock => {}
-                res => return Poll::Ready(res),
-            }
-            futures_util::ready!(poll_future(cx, self.readable()))?;
-            Poll::Pending
-        })
-        .await
+        self.0.read_with(op).await
     }
 
     /// Performs a read operation asynchronously.
@@ -414,16 +386,7 @@ impl<T> Async<T> {
         &mut self,
         op: impl FnMut(&mut T) -> io::Result<R>,
     ) -> io::Result<R> {
-        let mut op = op;
-        future::poll_fn(|cx| {
-            match op(self.get_mut()) {
-                Err(err) if err.kind() == io::ErrorKind::WouldBlock => {}
-                res => return Poll::Ready(res),
-            }
-            futures_util::ready!(poll_future(cx, self.readable()))?;
-            Poll::Pending
-        })
-        .await
+        self.0.read_with_mut(op).await
     }
 
     /// Performs a write operation asynchronously.
@@ -450,16 +413,7 @@ impl<T> Async<T> {
     /// # std::io::Result::Ok(()) });
     /// ```
     pub async fn write_with<R>(&self, op: impl FnMut(&T) -> io::Result<R>) -> io::Result<R> {
-        let mut op = op;
-        future::poll_fn(|cx| {
-            match op(self.get_ref()) {
-                Err(err) if err.kind() == io::ErrorKind::WouldBlock => {}
-                res => return Poll::Ready(res),
-            }
-            futures_util::ready!(poll_future(cx, self.writable()))?;
-            Poll::Pending
-        })
-        .await
+        self.0.write_with(op).await
     }
 
     /// Performs a write operation asynchronously.
@@ -489,28 +443,7 @@ impl<T> Async<T> {
         &mut self,
         op: impl FnMut(&mut T) -> io::Result<R>,
     ) -> io::Result<R> {
-        let mut op = op;
-        future::poll_fn(|cx| {
-            match op(self.get_mut()) {
-                Err(err) if err.kind() == io::ErrorKind::WouldBlock => {}
-                res => return Poll::Ready(res),
-            }
-            futures_util::ready!(poll_future(cx, self.writable()))?;
-            Poll::Pending
-        })
-        .await
-    }
-}
-
-impl<T> Drop for Async<T> {
-    fn drop(&mut self) {
-        if self.io.is_some() {
-            // Deregister and ignore errors because destructors should not panic.
-            let _ = Reactor::get().remove_io(&self.source);
-
-            // Drop the I/O handle to close it.
-            self.io.take();
-        }
+        self.0.write_with_mut(op).await
     }
 }
 
@@ -520,7 +453,7 @@ impl<T: Read> AsyncRead for Async<T> {
         cx: &mut Context<'_>,
         buf: &mut [u8],
     ) -> Poll<io::Result<usize>> {
-        poll_future(cx, self.read_with_mut(|io| io.read(buf)))
+        Pin::new(&mut self.0).poll_read(cx, buf)
     }
 
     fn poll_read_vectored(
@@ -528,7 +461,7 @@ impl<T: Read> AsyncRead for Async<T> {
         cx: &mut Context<'_>,
         bufs: &mut [IoSliceMut<'_>],
     ) -> Poll<io::Result<usize>> {
-        poll_future(cx, self.read_with_mut(|io| io.read_vectored(bufs)))
+        Pin::new(&mut self.0).poll_read_vectored(cx, bufs)
     }
 }
 
@@ -541,7 +474,7 @@ where
         cx: &mut Context<'_>,
         buf: &mut [u8],
     ) -> Poll<io::Result<usize>> {
-        poll_future(cx, self.read_with(|io| (&*io).read(buf)))
+        Pin::new(&mut &self.0).poll_read(cx, buf)
     }
 
     fn poll_read_vectored(
@@ -549,7 +482,7 @@ where
         cx: &mut Context<'_>,
         bufs: &mut [IoSliceMut<'_>],
     ) -> Poll<io::Result<usize>> {
-        poll_future(cx, self.read_with(|io| (&*io).read_vectored(bufs)))
+        Pin::new(&mut &self.0).poll_read_vectored(cx, bufs)
     }
 }
 
@@ -559,7 +492,7 @@ impl<T: Write> AsyncWrite for Async<T> {
         cx: &mut Context<'_>,
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
-        poll_future(cx, self.write_with_mut(|io| io.write(buf)))
+        Pin::new(&mut self.0).poll_write(cx, buf)
     }
 
     fn poll_write_vectored(
@@ -567,15 +500,15 @@ impl<T: Write> AsyncWrite for Async<T> {
         cx: &mut Context<'_>,
         bufs: &[IoSlice<'_>],
     ) -> Poll<io::Result<usize>> {
-        poll_future(cx, self.write_with_mut(|io| io.write_vectored(bufs)))
+        Pin::new(&mut self.0).poll_write_vectored(cx, bufs)
     }
 
     fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        poll_future(cx, self.write_with_mut(|io| io.flush()))
+        Pin::new(&mut self.0).poll_flush(cx)
     }
 
-    fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        self.poll_flush(cx)
+    fn poll_close(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.0).poll_close(cx)
     }
 }
 
@@ -588,7 +521,7 @@ where
         cx: &mut Context<'_>,
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
-        poll_future(cx, self.write_with(|io| (&*io).write(buf)))
+        Pin::new(&mut &self.0).poll_write(cx, buf)
     }
 
     fn poll_write_vectored(
@@ -596,15 +529,15 @@ where
         cx: &mut Context<'_>,
         bufs: &[IoSlice<'_>],
     ) -> Poll<io::Result<usize>> {
-        poll_future(cx, self.write_with(|io| (&*io).write_vectored(bufs)))
+        Pin::new(&mut &self.0).poll_write_vectored(cx, bufs)
     }
 
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        poll_future(cx, self.write_with(|io| (&*io).flush()))
+        Pin::new(&mut &self.0).poll_flush(cx)
     }
 
     fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        self.poll_flush(cx)
+        Pin::new(&mut &self.0).poll_close(cx)
     }
 }
 
@@ -629,7 +562,7 @@ impl Async<TcpListener> {
             .to_string()
             .parse::<SocketAddr>()
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
-        Ok(Async::new(TcpListener::bind(addr)?)?)
+        async_io::Async::<TcpListener>::bind(addr).map(Async)
     }
 
     /// Accepts a new incoming TCP connection.
@@ -650,8 +583,8 @@ impl Async<TcpListener> {
     /// # std::io::Result::Ok(()) });
     /// ```
     pub async fn accept(&self) -> io::Result<(Async<TcpStream>, SocketAddr)> {
-        let (stream, addr) = self.read_with(|io| io.accept()).await?;
-        Ok((Async::new(stream)?, addr))
+        let (stream, addr) = self.0.accept().await?;
+        Ok((Async(stream), addr))
     }
 
     /// Returns a stream of incoming TCP connections.
@@ -676,10 +609,7 @@ impl Async<TcpListener> {
     /// # std::io::Result::Ok(()) });
     /// ```
     pub fn incoming(&self) -> impl Stream<Item = io::Result<Async<TcpStream>>> + Send + Unpin + '_ {
-        Box::pin(stream::unfold(self, |listener| async move {
-            let res = listener.accept().await.map(|(stream, _)| stream);
-            Some((res, listener))
-        }))
+        self.0.incoming().map(|res| res.map(Async))
     }
 }
 
@@ -705,40 +635,7 @@ impl Async<TcpStream> {
         })
         .await?;
 
-        // Create a socket.
-        let domain = if addr.is_ipv6() {
-            Domain::ipv6()
-        } else {
-            Domain::ipv4()
-        };
-        let socket = Socket::new(domain, Type::stream(), Some(Protocol::tcp()))?;
-
-        // Begin async connect and ignore the inevitable "in progress" error.
-        socket.set_nonblocking(true)?;
-        socket.connect(&addr.into()).or_else(|err| {
-            // Check for EINPROGRESS on Unix and WSAEWOULDBLOCK on Windows.
-            #[cfg(unix)]
-            let in_progress = err.raw_os_error() == Some(libc::EINPROGRESS);
-            #[cfg(windows)]
-            let in_progress = err.kind() == io::ErrorKind::WouldBlock;
-
-            // If connect results with an "in progress" error, that's not an error.
-            if in_progress {
-                Ok(())
-            } else {
-                Err(err)
-            }
-        })?;
-        let stream = Async::new(socket.into_tcp_stream())?;
-
-        // The stream becomes writable when connected.
-        stream.writable().await?;
-
-        // Check if there was an error while connecting.
-        match stream.get_ref().take_error()? {
-            None => Ok(stream),
-            Some(err) => Err(err),
-        }
+        async_io::Async::<TcpStream>::connect(addr).await.map(Async)
     }
 
     /// Reads data from the stream without removing it from the buffer.
@@ -759,7 +656,7 @@ impl Async<TcpStream> {
     /// # std::io::Result::Ok(()) });
     /// ```
     pub async fn peek(&self, buf: &mut [u8]) -> io::Result<usize> {
-        self.read_with(|io| io.peek(buf)).await
+        self.0.peek(buf).await
     }
 }
 
@@ -784,7 +681,7 @@ impl Async<UdpSocket> {
             .to_string()
             .parse::<SocketAddr>()
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
-        Ok(Async::new(UdpSocket::bind(addr)?)?)
+        async_io::Async::<UdpSocket>::bind(addr).map(Async)
     }
 
     /// Receives a single datagram message.
@@ -808,7 +705,7 @@ impl Async<UdpSocket> {
     /// # std::io::Result::Ok(()) });
     /// ```
     pub async fn recv_from(&self, buf: &mut [u8]) -> io::Result<(usize, SocketAddr)> {
-        self.read_with(|io| io.recv_from(buf)).await
+        self.0.recv_from(buf).await
     }
 
     /// Receives a single datagram message without removing it from the queue.
@@ -832,7 +729,7 @@ impl Async<UdpSocket> {
     /// # std::io::Result::Ok(()) });
     /// ```
     pub async fn peek_from(&self, buf: &mut [u8]) -> io::Result<(usize, SocketAddr)> {
-        self.read_with(|io| io.peek_from(buf)).await
+        self.0.peek_from(buf).await
     }
 
     /// Sends data to the specified address.
@@ -854,8 +751,7 @@ impl Async<UdpSocket> {
     /// # std::io::Result::Ok(()) });
     /// ```
     pub async fn send_to<A: Into<SocketAddr>>(&self, buf: &[u8], addr: A) -> io::Result<usize> {
-        let addr = addr.into();
-        self.write_with(|io| io.send_to(buf, addr)).await
+        self.0.send_to(buf, addr).await
     }
 
     /// Receives a single datagram message from the connected peer.
@@ -883,7 +779,7 @@ impl Async<UdpSocket> {
     /// # std::io::Result::Ok(()) });
     /// ```
     pub async fn recv(&self, buf: &mut [u8]) -> io::Result<usize> {
-        self.read_with(|io| io.recv(buf)).await
+        self.0.recv(buf).await
     }
 
     /// Receives a single datagram message from the connected peer without removing it from the
@@ -912,7 +808,7 @@ impl Async<UdpSocket> {
     /// # std::io::Result::Ok(()) });
     /// ```
     pub async fn peek(&self, buf: &mut [u8]) -> io::Result<usize> {
-        self.read_with(|io| io.peek(buf)).await
+        self.0.peek(buf).await
     }
 
     /// Sends data to the connected peer.
@@ -937,7 +833,7 @@ impl Async<UdpSocket> {
     /// # std::io::Result::Ok(()) });
     /// ```
     pub async fn send(&self, buf: &[u8]) -> io::Result<usize> {
-        self.write_with(|io| io.send(buf)).await
+        self.0.send(buf).await
     }
 }
 
@@ -957,8 +853,7 @@ impl Async<UnixListener> {
     /// # std::io::Result::Ok(()) });
     /// ```
     pub fn bind<P: AsRef<Path>>(path: P) -> io::Result<Async<UnixListener>> {
-        let path = path.as_ref().to_owned();
-        Ok(Async::new(UnixListener::bind(path)?)?)
+        async_io::Async::<UnixListener>::bind(path).map(Async)
     }
 
     /// Accepts a new incoming UDS stream connection.
@@ -979,8 +874,8 @@ impl Async<UnixListener> {
     /// # std::io::Result::Ok(()) });
     /// ```
     pub async fn accept(&self) -> io::Result<(Async<UnixStream>, UnixSocketAddr)> {
-        let (stream, addr) = self.read_with(|io| io.accept()).await?;
-        Ok((Async::new(stream)?, addr))
+        let (stream, addr) = self.0.accept().await?;
+        Ok((Async(stream), addr))
     }
 
     /// Returns a stream of incoming UDS connections.
@@ -1007,10 +902,7 @@ impl Async<UnixListener> {
     pub fn incoming(
         &self,
     ) -> impl Stream<Item = io::Result<Async<UnixStream>>> + Send + Unpin + '_ {
-        Box::pin(stream::unfold(self, |listener| async move {
-            let res = listener.accept().await.map(|(stream, _)| stream);
-            Some((res, listener))
-        }))
+        self.0.incoming().map(|res| res.map(Async))
     }
 }
 
@@ -1029,26 +921,7 @@ impl Async<UnixStream> {
     /// # std::io::Result::Ok(()) });
     /// ```
     pub async fn connect<P: AsRef<Path>>(path: P) -> io::Result<Async<UnixStream>> {
-        // Create a socket.
-        let socket = Socket::new(Domain::unix(), Type::stream(), None)?;
-
-        // Begin async connect and ignore the inevitable "in progress" error.
-        socket.set_nonblocking(true)?;
-        socket
-            .connect(&socket2::SockAddr::unix(path)?)
-            .or_else(|err| {
-                if err.raw_os_error() == Some(libc::EINPROGRESS) {
-                    Ok(())
-                } else {
-                    Err(err)
-                }
-            })?;
-        let stream = Async::new(socket.into_unix_stream())?;
-
-        // The stream becomes writable when connected.
-        stream.writable().await?;
-
-        Ok(stream)
+        async_io::Async::<UnixStream>::connect(path).await.map(Async)
     }
 
     /// Creates an unnamed pair of connected UDS stream sockets.
@@ -1064,8 +937,8 @@ impl Async<UnixStream> {
     /// # std::io::Result::Ok(()) });
     /// ```
     pub fn pair() -> io::Result<(Async<UnixStream>, Async<UnixStream>)> {
-        let (stream1, stream2) = UnixStream::pair()?;
-        Ok((Async::new(stream1)?, Async::new(stream2)?))
+        let (stream1, stream2) = async_io::Async::<UnixStream>::pair()?;
+        Ok((Async(stream1), Async(stream2)))
     }
 }
 
@@ -1084,8 +957,7 @@ impl Async<UnixDatagram> {
     /// # std::io::Result::Ok(()) });
     /// ```
     pub fn bind<P: AsRef<Path>>(path: P) -> io::Result<Async<UnixDatagram>> {
-        let path = path.as_ref().to_owned();
-        Ok(Async::new(UnixDatagram::bind(path)?)?)
+        async_io::Async::<UnixDatagram>::bind(path).map(Async)
     }
 
     /// Creates a UDS datagram socket not bound to any address.
@@ -1101,7 +973,7 @@ impl Async<UnixDatagram> {
     /// # std::io::Result::Ok(()) });
     /// ```
     pub fn unbound() -> io::Result<Async<UnixDatagram>> {
-        Ok(Async::new(UnixDatagram::unbound()?)?)
+        async_io::Async::<UnixDatagram>::unbound().map(Async)
     }
 
     /// Creates an unnamed pair of connected Unix datagram sockets.
@@ -1117,8 +989,8 @@ impl Async<UnixDatagram> {
     /// # std::io::Result::Ok(()) });
     /// ```
     pub fn pair() -> io::Result<(Async<UnixDatagram>, Async<UnixDatagram>)> {
-        let (socket1, socket2) = UnixDatagram::pair()?;
-        Ok((Async::new(socket1)?, Async::new(socket2)?))
+        let (socket1, socket2) = async_io::Async::<UnixDatagram>::pair()?;
+        Ok((Async(socket1), Async(socket2)))
     }
 
     /// Receives data from the socket.
@@ -1139,7 +1011,7 @@ impl Async<UnixDatagram> {
     /// # std::io::Result::Ok(()) });
     /// ```
     pub async fn recv_from(&self, buf: &mut [u8]) -> io::Result<(usize, UnixSocketAddr)> {
-        self.read_with(|io| io.recv_from(buf)).await
+        self.0.recv_from(buf).await
     }
 
     /// Sends data to the specified address.
@@ -1161,7 +1033,7 @@ impl Async<UnixDatagram> {
     /// # std::io::Result::Ok(()) });
     /// ```
     pub async fn send_to<P: AsRef<Path>>(&self, buf: &[u8], path: P) -> io::Result<usize> {
-        self.write_with(|io| io.send_to(buf, &path)).await
+        self.0.send_to(buf, path).await
     }
 
     /// Receives data from the connected peer.
@@ -1186,7 +1058,7 @@ impl Async<UnixDatagram> {
     /// # std::io::Result::Ok(()) });
     /// ```
     pub async fn recv(&self, buf: &mut [u8]) -> io::Result<usize> {
-        self.read_with(|io| io.recv(buf)).await
+        self.0.recv(buf).await
     }
 
     /// Sends data to the connected peer.
@@ -1211,12 +1083,6 @@ impl Async<UnixDatagram> {
     /// # std::io::Result::Ok(()) });
     /// ```
     pub async fn send(&self, buf: &[u8]) -> io::Result<usize> {
-        self.write_with(|io| io.send(buf)).await
+        self.0.send(buf).await
     }
-}
-
-/// Pins a future and then polls it.
-fn poll_future<T>(cx: &mut Context<'_>, fut: impl Future<Output = T>) -> Poll<T> {
-    futures_util::pin_mut!(fut);
-    fut.poll(cx)
 }
