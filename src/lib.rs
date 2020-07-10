@@ -119,7 +119,6 @@ mod async_io;
 mod block_on;
 mod blocking;
 mod context;
-mod multitask;
 mod parking;
 mod reactor;
 mod run;

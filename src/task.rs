@@ -77,7 +77,7 @@ impl<T: 'static> Task<T> {
     /// [`run()`]: `crate::run()`
     pub fn local(future: impl Future<Output = T> + 'static) -> Task<T> {
         if WORKER.is_set() {
-            WORKER.with(|w| w.spawn_local(future))
+            WORKER.with(|w| w.spawn_local(future).into())
         } else {
             panic!("cannot spawn a thread-local task if not inside an executor")
         }
@@ -103,9 +103,9 @@ impl<T: Send + 'static> Task<T> {
     /// [`run()`]: `crate::run()`
     pub fn spawn(future: impl Future<Output = T> + Send + 'static) -> Task<T> {
         if WORKER.is_set() {
-            WORKER.with(|w| w.spawn_local(future))
+            WORKER.with(|w| w.spawn_local(future).into())
         } else {
-            QUEUE.spawn(future)
+            QUEUE.spawn(future).into()
         }
     }
 
@@ -271,6 +271,12 @@ impl<T> Future for Task<T> {
             Poll::Pending => Poll::Pending,
             Poll::Ready(output) => Poll::Ready(output.expect("task has failed")),
         }
+    }
+}
+
+impl<T> From<multitask::Task<T>> for Task<T> {
+    fn from(task: multitask::Task<T>) -> Self {
+        Self(Some(task.into()))
     }
 }
 
