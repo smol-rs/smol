@@ -43,10 +43,6 @@ default-features = false
 features = ["rt-threaded"]
 optional = true
 
-[target.'cfg(windows)'.dependencies]
-wepoll-sys-stjepang = "1.0.6"
-winapi = { version = "0.3.8", features = ["ioapiset"] }
-
 [dev-dependencies]
 criterion = "0.3.2"
 futures = { version = "0.3.5", default-features = false, features = ["std"] }
