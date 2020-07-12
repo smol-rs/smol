@@ -12,6 +12,9 @@ uds_windows = "0.1.4"
 inotify = { version = "0.8.2", default-features = false }
 nix = "0.17.0"
 timerfd = "1.1.1"
+netlink-sys = "0.2"
+netlink-packet-core = "0.1"
+netlink-packet-route = "0.2"
 
 [dev-dependencies]
 anyhow = "1.0.28"
@@ -38,6 +41,10 @@ tempfile = "3.1.0"
 tokio = { version = "0.2", default-features = false }
 tungstenite = "0.10.1"
 url = "2.1.1"
+
+[[example]]
+name = "netlink-route"
+path = "netlink-route.rs"
 
 [[example]]
 name = "async-h1-client"
