@@ -108,6 +108,12 @@ My personal crate recommendation list:
 [ctrlc]: https://docs.rs/ctrlc
 [signal-hook]: https://docs.rs/signal-hook
 
+Crates useful with smol:
+
+* Ergonomic async main wrapper that creates thread pools: [smol-potat]
+
+[smol-potat]: https://github.com/wusyong/smol-potat
+
 ## TLS certificate
 
 Some code examples are using TLS for authentication. The repository
