@@ -21,6 +21,7 @@ use async_net::{TcpListener, TcpStream};
 use async_tungstenite::WebSocketStream;
 use blocking::block_on;
 use futures::prelude::*;
+use smol::Task;
 use tungstenite::Message;
 
 /// Echoes messages from the client back to it.
@@ -46,13 +47,13 @@ async fn listen(listener: TcpListener, tls: Option<TlsAcceptor>) -> Result<()> {
         match &tls {
             None => {
                 let stream = WsStream::Plain(async_tungstenite::accept_async(stream).await?);
-                smol::spawn(echo(stream)).detach();
+                Task::spawn(echo(stream)).detach();
             }
             Some(tls) => {
                 // In case of WSS, establish a secure TLS connection first.
                 let stream = tls.accept(stream).await?;
                 let stream = WsStream::Tls(async_tungstenite::accept_async(stream).await?);
-                smol::spawn(echo(stream)).detach();
+                Task::spawn(echo(stream)).detach();
             }
         }
     }

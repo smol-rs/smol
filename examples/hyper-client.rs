@@ -18,6 +18,7 @@ use blocking::block_on;
 use futures::prelude::*;
 use http::Uri;
 use hyper::{Body, Client, Request, Response};
+use smol::Task;
 
 /// Sends a request and fetches the response.
 async fn fetch(req: Request<Body>) -> Result<Response<Body>> {
@@ -57,7 +58,7 @@ struct SmolExecutor;
 
 impl<F: Future + Send + 'static> hyper::rt::Executor<F> for SmolExecutor {
     fn execute(&self, fut: F) {
-        smol::spawn(async { drop(fut.await) }).detach();
+        Task::spawn(async { drop(fut.await) }).detach();
     }
 }
 

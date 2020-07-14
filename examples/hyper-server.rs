@@ -25,6 +25,7 @@ use blocking::block_on;
 use futures::prelude::*;
 use hyper::service::{make_service_fn, service_fn};
 use hyper::{Body, Request, Response, Server};
+use smol::Task;
 
 /// Serves a request and returns a response.
 async fn serve(req: Request<Body>, host: String) -> Result<Response<Body>> {
@@ -73,7 +74,7 @@ struct SmolExecutor;
 
 impl<F: Future + Send + 'static> hyper::rt::Executor<F> for SmolExecutor {
     fn execute(&self, fut: F) {
-        smol::spawn(async { drop(fut.await) }).detach();
+        Task::spawn(async { drop(fut.await) }).detach();
     }
 }
 

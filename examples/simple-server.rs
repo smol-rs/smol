@@ -18,6 +18,7 @@ use async_native_tls::{Identity, TlsAcceptor};
 use async_net::{TcpListener, TcpStream};
 use blocking::block_on;
 use futures::prelude::*;
+use smol::Task;
 
 const RESPONSE: &[u8] = br#"
 HTTP/1.1 200 OK
@@ -65,7 +66,7 @@ async fn listen(listener: TcpListener, tls: Option<TlsAcceptor>) -> Result<()> {
         let tls = tls.clone();
 
         // Spawn a background task serving this connection.
-        smol::spawn(async move {
+        Task::spawn(async move {
             if let Err(err) = serve(stream, tls).await {
                 println!("Connection error: {:#?}", err);
             }

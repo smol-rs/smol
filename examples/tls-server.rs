@@ -17,6 +17,7 @@ use async_native_tls::{Identity, TlsAcceptor, TlsStream};
 use async_net::{TcpListener, TcpStream};
 use blocking::block_on;
 use futures::io;
+use smol::Task;
 
 /// Echoes messages from the client back to it.
 async fn echo(stream: TlsStream<TcpStream>) -> Result<()> {
@@ -43,7 +44,7 @@ fn main() -> Result<()> {
             println!("Accepted client: {}", stream.get_ref().peer_addr()?);
 
             // Spawn a task that echoes messages from the client back to it.
-            smol::spawn(echo(stream)).detach();
+            Task::spawn(echo(stream)).detach();
         }
     })
 }

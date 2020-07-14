@@ -19,6 +19,7 @@ use async_net::TcpListener;
 use blocking::block_on;
 use futures::prelude::*;
 use http_types::{Request, Response, StatusCode};
+use smol::Task;
 
 /// Serves a request and returns a response.
 async fn serve(req: Request) -> http_types::Result<Response> {
@@ -48,7 +49,7 @@ async fn listen(listener: TcpListener, tls: Option<TlsAcceptor>) -> Result<()> {
         let task = match &tls {
             None => {
                 let stream = async_dup::Arc::new(stream);
-                smol::spawn(async move {
+                Task::spawn(async move {
                     if let Err(err) = async_h1::accept(&host, stream, serve).await {
                         println!("Connection error: {:#?}", err);
                     }
@@ -59,7 +60,7 @@ async fn listen(listener: TcpListener, tls: Option<TlsAcceptor>) -> Result<()> {
                 match tls.accept(stream).await {
                     Ok(stream) => {
                         let stream = async_dup::Arc::new(async_dup::Mutex::new(stream));
-                        smol::spawn(async move {
+                        Task::spawn(async move {
                             if let Err(err) = async_h1::accept(&host, stream, serve).await {
                                 println!("Connection error: {:#?}", err);
                             }

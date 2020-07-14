@@ -20,6 +20,7 @@ use async_net::{TcpListener, TcpStream};
 use blocking::block_on;
 use futures::io::{self, BufReader};
 use futures::prelude::*;
+use smol::Task;
 
 /// An event on the chat server.
 enum Event {
@@ -88,7 +89,7 @@ fn main() -> io::Result<()> {
 
         // Spawn a background task that dispatches events to clients.
         let (sender, receiver) = bounded(100);
-        smol::spawn(dispatch(receiver)).detach();
+        Task::spawn(dispatch(receiver)).detach();
 
         loop {
             // Accept the next connection.
@@ -97,7 +98,7 @@ fn main() -> io::Result<()> {
             let sender = sender.clone();
 
             // Spawn a background task reading messages from the client.
-            smol::spawn(async move {
+            Task::spawn(async move {
                 // Client starts with a `Join` event.
                 let _ = sender.send(Event::Join(addr, client.clone())).await;
 
