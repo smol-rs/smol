@@ -24,7 +24,7 @@ readme = "README.md"
 tokio02 = ["tokio"]
 
 [dependencies]
-async-io = { path = "../async-io" }
+async-io = "0.1.1"
 multitask = "0.2.0"
 num_cpus = "1.13.0"
 once_cell = "1.4.0"
