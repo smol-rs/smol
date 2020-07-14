@@ -3,21 +3,21 @@
 //! Run with:
 //!
 //! ```
-//! cd examples  # make sure to be in this directory
 //! cargo run --example hyper-client
 //! ```
 
 use std::io;
-use std::net::{Shutdown, TcpStream};
+use std::net::Shutdown;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use anyhow::{bail, Context as _, Error, Result};
 use async_native_tls::TlsStream;
+use async_net::TcpStream;
+use blocking::block_on;
 use futures::prelude::*;
 use http::Uri;
 use hyper::{Body, Client, Request, Response};
-use smol::{Async, Task};
 
 /// Sends a request and fetches the response.
 async fn fetch(req: Request<Body>) -> Result<Response<Body>> {
@@ -29,7 +29,7 @@ async fn fetch(req: Request<Body>) -> Result<Response<Body>> {
 }
 
 fn main() -> Result<()> {
-    smol::run(async {
+    block_on(async {
         // Create a request.
         let req = Request::get("https://www.rust-lang.org").body(Body::empty())?;
 
@@ -57,7 +57,7 @@ struct SmolExecutor;
 
 impl<F: Future + Send + 'static> hyper::rt::Executor<F> for SmolExecutor {
     fn execute(&self, fut: F) {
-        Task::spawn(async { drop(fut.await) }).detach();
+        smol::spawn(async { drop(fut.await) }).detach();
     }
 }
 
@@ -81,13 +81,13 @@ impl hyper::service::Service<Uri> for SmolConnector {
             match uri.scheme_str() {
                 Some("http") => {
                     let addr = format!("{}:{}", uri.host().unwrap(), uri.port_u16().unwrap_or(80));
-                    let stream = Async::<TcpStream>::connect(addr).await?;
+                    let stream = TcpStream::connect(addr).await?;
                     Ok(SmolStream::Plain(stream))
                 }
                 Some("https") => {
                     // In case of HTTPS, establish a secure TLS connection first.
                     let addr = format!("{}:{}", uri.host().unwrap(), uri.port_u16().unwrap_or(443));
-                    let stream = Async::<TcpStream>::connect(addr).await?;
+                    let stream = TcpStream::connect(addr).await?;
                     let stream = async_native_tls::connect(host, stream).await?;
                     Ok(SmolStream::Tls(stream))
                 }
@@ -100,10 +100,10 @@ impl hyper::service::Service<Uri> for SmolConnector {
 /// A TCP or TCP+TLS connection.
 enum SmolStream {
     /// A plain TCP connection.
-    Plain(Async<TcpStream>),
+    Plain(TcpStream),
 
     /// A TCP connection secured by TLS.
-    Tls(TlsStream<Async<TcpStream>>),
+    Tls(TlsStream<TcpStream>),
 }
 
 impl hyper::client::connect::Connection for SmolStream {
@@ -147,7 +147,7 @@ impl tokio::io::AsyncWrite for SmolStream {
     fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         match &mut *self {
             SmolStream::Plain(s) => {
-                s.get_ref().shutdown(Shutdown::Write)?;
+                s.shutdown(Shutdown::Write)?;
                 Poll::Ready(Ok(()))
             }
             SmolStream::Tls(s) => Pin::new(s).poll_close(cx),

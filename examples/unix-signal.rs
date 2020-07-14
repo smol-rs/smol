@@ -3,7 +3,6 @@
 //! Run with:
 //!
 //! ```
-//! cd examples  # make sure to be in this directory
 //! cargo run --example unix-signal
 //! ```
 
@@ -11,10 +10,11 @@
 fn main() -> std::io::Result<()> {
     use std::os::unix::net::UnixStream;
 
+    use async_io::Async;
+    use blocking::block_on;
     use futures::prelude::*;
-    use smol::Async;
 
-    smol::run(async {
+    block_on(async {
         // Create a Unix stream that receives a byte on each signal occurrence.
         let (a, mut b) = Async::<UnixStream>::pair()?;
         signal_hook::pipe::register(signal_hook::SIGINT, a)?;

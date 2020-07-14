@@ -13,16 +13,16 @@
 //! Run with:
 //!
 //! ```
-//! cd examples  # make sure to be in this directory
 //! cargo run --example other-runtimes
 //! ```
 
 use std::time::{Duration, Instant};
 
 use anyhow::{Error, Result};
+use blocking::block_on;
 
 fn main() -> Result<()> {
-    smol::run(async {
+    block_on(async {
         // Sleep using async-std.
         let start = Instant::now();
         println!("Sleeping using async-std...");

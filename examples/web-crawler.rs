@@ -3,16 +3,15 @@
 //! Run with:
 //!
 //! ```
-//! cd examples  # make sure to be in this directory
 //! cargo run --example web-crawler
 //! ```
 
 use std::collections::{HashSet, VecDeque};
 
 use anyhow::Result;
-use piper::Sender;
+use async_channel::{bounded, Sender};
+use blocking::block_on;
 use scraper::{Html, Selector};
-use smol::Task;
 
 const ROOT: &str = "https://www.rust-lang.org";
 
@@ -20,7 +19,7 @@ const ROOT: &str = "https://www.rust-lang.org";
 async fn fetch(url: String, sender: Sender<String>) {
     let body = surf::get(&url).recv_string().await;
     let body = body.unwrap_or_default();
-    sender.send(body).await;
+    let _ = sender.send(body).await;
 }
 
 /// Extracts links from a HTML body.
@@ -35,26 +34,26 @@ fn links(body: String) -> Vec<String> {
 }
 
 fn main() -> Result<()> {
-    smol::run(async {
+    block_on(async {
         let mut seen = HashSet::new();
         let mut queue = VecDeque::new();
         seen.insert(ROOT.to_string());
         queue.push_back(ROOT.to_string());
 
-        let (s, r) = piper::chan(200);
+        let (s, r) = bounded(200);
         let mut tasks = 0;
 
         // Loop while the queue is not empty or tasks are fetching pages.
         while queue.len() + tasks > 0 {
             // Limit the number of concurrent tasks.
-            while tasks < s.capacity() {
+            while tasks < s.capacity().unwrap() {
                 // Process URLs in the queue and fetch more pages.
                 match queue.pop_front() {
                     None => break,
                     Some(url) => {
                         println!("{}", url);
                         tasks += 1;
-                        Task::spawn(fetch(url, s.clone())).detach();
+                        smol::spawn(fetch(url, s.clone())).detach();
                     }
                 }
             }

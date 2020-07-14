@@ -3,7 +3,6 @@
 //! Run with:
 //!
 //! ```
-//! cd examples  # make sure to be in this directory
 //! cargo run --example windows-uds
 //! ```
 

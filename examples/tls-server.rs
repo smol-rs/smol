@@ -3,28 +3,24 @@
 //! First start a server:
 //!
 //! ```
-//! cd examples  # make sure to be in this directory
 //! cargo run --example tls-server
 //! ```
 //!
 //! Then start a client:
 //!
 //! ```
-//! cd examples  # make sure to be in this directory
 //! cargo run --example tls-client
 //! ```
 
-use std::net::{TcpListener, TcpStream};
-
 use anyhow::Result;
 use async_native_tls::{Identity, TlsAcceptor, TlsStream};
+use async_net::{TcpListener, TcpStream};
+use blocking::block_on;
 use futures::io;
-use piper::Mutex;
-use smol::{Async, Task};
 
 /// Echoes messages from the client back to it.
-async fn echo(stream: TlsStream<Async<TcpStream>>) -> Result<()> {
-    let stream = Mutex::new(stream);
+async fn echo(stream: TlsStream<TcpStream>) -> Result<()> {
+    let stream = async_dup::Mutex::new(stream);
     io::copy(&stream, &mut &stream).await?;
     Ok(())
 }
@@ -34,23 +30,20 @@ fn main() -> Result<()> {
     let identity = Identity::from_pkcs12(include_bytes!("identity.pfx"), "password")?;
     let tls = TlsAcceptor::from(native_tls::TlsAcceptor::new(identity)?);
 
-    smol::run(async {
+    block_on(async {
         // Create a listener.
-        let listener = Async::<TcpListener>::bind("127.0.0.1:7001")?;
-        println!("Listening on {}", listener.get_ref().local_addr()?);
+        let listener = TcpListener::bind("127.0.0.1:7001").await?;
+        println!("Listening on {}", listener.local_addr()?);
         println!("Now start a TLS client.");
 
         // Accept clients in a loop.
         loop {
             let (stream, _) = listener.accept().await?;
             let stream = tls.accept(stream).await?;
-            println!(
-                "Accepted client: {}",
-                stream.get_ref().get_ref().peer_addr()?
-            );
+            println!("Accepted client: {}", stream.get_ref().peer_addr()?);
 
             // Spawn a task that echoes messages from the client back to it.
-            Task::spawn(echo(stream)).unwrap().detach();
+            smol::spawn(echo(stream)).detach();
         }
     })
 }
