@@ -42,7 +42,7 @@ async-channel = "1.1.1"
 async-dup = "1.1.0"
 async-h1 = "1.1.2"
 async-native-tls = "0.3.3"
-async-net = { path = "../async-net" }
+async-net = "0.1.0"
 async-std = "1.5.0"
 async-tungstenite = { version = "0.4.2", features = ["async-native-tls"] }
 base64 = "0.12.0"
