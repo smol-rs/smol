@@ -3,21 +3,23 @@
 //! Run with:
 //!
 //! ```
-//! cd examples  # make sure to be in this directory
 //! cargo run --example hyper-client
 //! ```
 
 use std::io;
-use std::net::{Shutdown, TcpStream};
+use std::net::Shutdown;
+use std::net::{TcpStream, ToSocketAddrs};
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use anyhow::{bail, Context as _, Error, Result};
+use async_io::Async;
 use async_native_tls::TlsStream;
+use blocking::{block_on, unblock};
 use futures::prelude::*;
 use http::Uri;
 use hyper::{Body, Client, Request, Response};
-use smol::{Async, Task};
+use smol::Task;
 
 /// Sends a request and fetches the response.
 async fn fetch(req: Request<Body>) -> Result<Response<Body>> {
@@ -29,7 +31,7 @@ async fn fetch(req: Request<Body>) -> Result<Response<Body>> {
 }
 
 fn main() -> Result<()> {
-    smol::run(async {
+    block_on(async {
         // Create a request.
         let req = Request::get("https://www.rust-lang.org").body(Body::empty())?;
 
@@ -80,14 +82,26 @@ impl hyper::service::Service<Uri> for SmolConnector {
 
             match uri.scheme_str() {
                 Some("http") => {
-                    let addr = format!("{}:{}", uri.host().unwrap(), uri.port_u16().unwrap_or(80));
-                    let stream = Async::<TcpStream>::connect(addr).await?;
+                    let socket_addr = {
+                        let host = host.to_string();
+                        let port = uri.port_u16().unwrap_or(80);
+                        unblock!((host.as_str(), port).to_socket_addrs())?
+                            .next()
+                            .context("cannot resolve address")?
+                    };
+                    let stream = Async::<TcpStream>::connect(socket_addr).await?;
                     Ok(SmolStream::Plain(stream))
                 }
                 Some("https") => {
                     // In case of HTTPS, establish a secure TLS connection first.
-                    let addr = format!("{}:{}", uri.host().unwrap(), uri.port_u16().unwrap_or(443));
-                    let stream = Async::<TcpStream>::connect(addr).await?;
+                    let socket_addr = {
+                        let host = host.to_string();
+                        let port = uri.port_u16().unwrap_or(443);
+                        unblock!((host.as_str(), port).to_socket_addrs())?
+                            .next()
+                            .context("cannot resolve address")?
+                    };
+                    let stream = Async::<TcpStream>::connect(socket_addr).await?;
                     let stream = async_native_tls::connect(host, stream).await?;
                     Ok(SmolStream::Tls(stream))
                 }

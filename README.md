@@ -11,12 +11,7 @@ https://docs.rs/smol)
 [![Chat](https://img.shields.io/discord/701824908866617385.svg?logo=discord)](
 https://discord.gg/x6m5Vvt)
 
-A small and fast async runtime for Rust.
-
-This runtime extends [the standard library][std] with async combinators
-and is only 1500 lines of code long.
-
-[std]: https://docs.rs/std
+A small and fast executor.
 
 Reading the [docs] or looking at the [examples] is a great way to start learning
 async Rust.
@@ -42,16 +37,6 @@ Read this [blog post](https://stjepang.github.io/2020/04/03/why-im-building-a-ne
 * Blocking executor for files, processes, and standard I/O.
 * Tasks that support cancellation.
 * Userspace timers.
-
-## Examples
-
-You need to be in the [examples] directory to run them:
-
-```terminal
-$ cd examples
-$ ls
-$ cargo run --example ctrl-c
-```
 
 ## Compatibility
 
@@ -107,12 +92,6 @@ My personal crate recommendation list:
 [native-tls]: https://docs.rs/native-tls
 [ctrlc]: https://docs.rs/ctrlc
 [signal-hook]: https://docs.rs/signal-hook
-
-Crates useful with smol:
-
-* Ergonomic async main wrapper that creates thread pools: [smol-potat]
-
-[smol-potat]: https://github.com/wusyong/smol-potat
 
 ## TLS certificate
 

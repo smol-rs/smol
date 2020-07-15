@@ -3,7 +3,6 @@
 //! Run with:
 //!
 //! ```
-//! cd examples  # make sure to be in this directory
 //! cargo run --example hyper-server
 //! ```
 //!
@@ -15,17 +14,19 @@
 //! Refer to `README.md` to see how to the TLS certificate was generated.
 
 use std::io;
-use std::net::{Shutdown, TcpListener, TcpStream};
+use std::net::Shutdown;
+use std::net::{TcpListener, TcpStream};
 use std::pin::Pin;
 use std::task::{Context, Poll};
-use std::thread;
 
 use anyhow::{Error, Result};
+use async_io::Async;
 use async_native_tls::{Identity, TlsAcceptor, TlsStream};
+use blocking::block_on;
 use futures::prelude::*;
 use hyper::service::{make_service_fn, service_fn};
 use hyper::{Body, Request, Response, Server};
-use smol::{Async, Task};
+use smol::Task;
 
 /// Serves a request and returns a response.
 async fn serve(req: Request<Body>, host: String) -> Result<Response<Body>> {
@@ -59,15 +60,13 @@ fn main() -> Result<()> {
     let identity = Identity::from_pkcs12(include_bytes!("identity.pfx"), "password")?;
     let tls = TlsAcceptor::from(native_tls::TlsAcceptor::new(identity)?);
 
-    // Create an executor thread pool.
-    for _ in 0..num_cpus::get().max(1) {
-        thread::spawn(|| smol::run(future::pending::<()>()));
-    }
-
     // Start HTTP and HTTPS servers.
-    smol::block_on(async {
-        let http = listen(Async::<TcpListener>::bind("127.0.0.1:8000")?, None);
-        let https = listen(Async::<TcpListener>::bind("127.0.0.1:8001")?, Some(tls));
+    block_on(async {
+        let http = listen(Async::<TcpListener>::bind(([127, 0, 0, 1], 8000))?, None);
+        let https = listen(
+            Async::<TcpListener>::bind(([127, 0, 0, 1], 8001))?,
+            Some(tls),
+        );
         future::try_join(http, https).await?;
         Ok(())
     })

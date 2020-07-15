@@ -11,7 +11,6 @@ documentation = "https://docs.rs/smol"
 keywords = ["async", "await", "future", "io", "networking"]
 categories = ["asynchronous", "concurrency", "network-programming"]
 readme = "README.md"
-autoexamples = false
 
 [features]
 # Optional feature for seamless integration with crates depending on tokio.
@@ -25,17 +24,11 @@ autoexamples = false
 tokio02 = ["tokio"]
 
 [dependencies]
-async-task = "3.0.0"
-blocking = "0.4.6"
-concurrent-queue = "1.1.1"
-fastrand = "1.2.4"
-futures-io = { version = "0.3.5", default-features = false, features = ["std"] }
-futures-util = { version = "0.3.5", default-features = false, features = ["std", "io"] }
-libc = "0.2.71"
+async-io = "0.1.1"
+multitask = "0.2.0"
+num_cpus = "1.13.0"
 once_cell = "1.4.0"
-scoped-tls = "1.0.0"
-slab = "0.4.2"
-socket2 = { version = "0.3.12", features = ["pair", "unix"] }
+blocking = "0.4.6"
 
 [dependencies.tokio]
 version = "0.2"
@@ -43,23 +36,35 @@ default-features = false
 features = ["rt-threaded"]
 optional = true
 
-[target.'cfg(windows)'.dependencies]
-wepoll-sys-stjepang = "1.0.6"
-winapi = { version = "0.3.8", features = ["ioapiset"] }
-
 [dev-dependencies]
-criterion = "0.3.2"
-futures = { version = "0.3.5", default-features = false, features = ["std"] }
+anyhow = "1.0.28"
+async-channel = "1.1.1"
+async-dup = "1.1.0"
+async-h1 = "1.1.2"
+async-native-tls = "0.3.3"
+async-std = "1.5.0"
+async-tungstenite = { version = "0.4.2", features = ["async-native-tls"] }
+base64 = "0.12.0"
+ctrlc = "3.1.4"
+futures = "0.3.4"
+http = "0.2.1"
+http-types = "1.2.0"
+hyper = { version = "0.13.5", default-features = false, features = ["stream"] }
+native-tls = "0.2.4"
 num_cpus = "1.13.0"
-piper = "0.1.3"
+reqwest = "0.10.4"
+scraper = "0.11.0"
+signal-hook = "0.1.13"
+surf = { version = "2.0.0-alpha.1", default-features = false, features = ["h1-client"] }
 tempfile = "3.1.0"
+tokio = { version = "0.2", default-features = false }
+tungstenite = "0.10.1"
+url = "2.1.1"
 
-[workspace]
-members = [
-  ".",
-  "examples",
-]
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+inotify = { version = "0.8.2", default-features = false }
+nix = "0.17.0"
+timerfd = "1.1.1"
 
-[[bench]]
-name = "spawn"
-harness = false
+[target.'cfg(windows)'.dev-dependencies]
+uds_windows = "0.1.4"

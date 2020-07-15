@@ -3,7 +3,6 @@
 //! Run with:
 //!
 //! ```
-//! cd examples  # make sure to be in this directory
 //! cargo run --example windows-uds
 //! ```
 
@@ -11,9 +10,11 @@
 fn main() -> std::io::Result<()> {
     use std::path::PathBuf;
 
+    use async_io::Async;
+    use blocking::{block_on, Unblock};
     use futures::io;
     use futures::prelude::*;
-    use smol::{Async, Task};
+    use smol::Task;
     use tempfile::tempdir;
     use uds_windows::{UnixListener, UnixStream};
 
@@ -23,7 +24,7 @@ fn main() -> std::io::Result<()> {
         println!("Connected to {:?}", stream.get_ref().peer_addr()?);
 
         // Pipe the stream to stdout.
-        let mut stdout = smol::writer(std::io::stdout());
+        let mut stdout = Unblock::new(std::io::stdout());
         io::copy(&stream, &mut stdout).await?;
         Ok(())
     }
@@ -31,7 +32,7 @@ fn main() -> std::io::Result<()> {
     let dir = tempdir()?;
     let path = dir.path().join("socket");
 
-    smol::run(async {
+    block_on(async {
         // Create a listener.
         let listener = Async::new(UnixListener::bind(&path)?)?;
         println!("Listening on {:?}", listener.get_ref().local_addr()?);

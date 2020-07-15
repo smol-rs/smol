@@ -3,31 +3,30 @@
 //! First start a server:
 //!
 //! ```
-//! cd examples  # make sure to be in this directory
 //! cargo run --example tcp-server
 //! ```
 //!
 //! Then start a client:
 //!
 //! ```
-//! cd examples  # make sure to be in this directory
 //! cargo run --example tcp-client
 //! ```
 
 use std::net::TcpStream;
 
+use async_io::Async;
+use blocking::{block_on, Unblock};
 use futures::io;
 use futures::prelude::*;
-use smol::Async;
 
 fn main() -> io::Result<()> {
-    smol::run(async {
+    block_on(async {
         // Create async stdin and stdout handles.
-        let stdin = smol::reader(std::io::stdin());
-        let mut stdout = smol::writer(std::io::stdout());
+        let stdin = Unblock::new(std::io::stdin());
+        let mut stdout = Unblock::new(std::io::stdout());
 
         // Connect to the server.
-        let stream = Async::<TcpStream>::connect("127.0.0.1:7000").await?;
+        let stream = Async::<TcpStream>::connect(([127, 0, 0, 1], 7000)).await?;
         println!("Connected to {}", stream.get_ref().peer_addr()?);
         println!("Type a message and hit enter!\n");
 
