@@ -11,7 +11,7 @@ fn main() -> std::io::Result<()> {
     use std::path::PathBuf;
 
     use async_io::Async;
-    use blocking::block_on;
+    use blocking::{block_on, Unblock};
     use futures::io;
     use futures::prelude::*;
     use smol::Task;
@@ -24,7 +24,7 @@ fn main() -> std::io::Result<()> {
         println!("Connected to {:?}", stream.get_ref().peer_addr()?);
 
         // Pipe the stream to stdout.
-        let mut stdout = smol::writer(std::io::stdout());
+        let mut stdout = Unblock::new(std::io::stdout());
         io::copy(&stream, &mut stdout).await?;
         Ok(())
     }
