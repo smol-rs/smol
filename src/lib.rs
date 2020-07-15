@@ -8,11 +8,13 @@
 //!
 //! * For async I/O and timers, use [`async-io`].
 //! * For higher-level networking primitives, use [`async-net`].
+//! * For executors, use [`multitask`].
 //! * To call blocking code from async code or the other way around, use [`blocking`].
 //!
 //! [`async-io`]: https://docs.rs/async-io
 //! [`async-net`]: https://docs.rs/async-net
 //! [`blocking`]: https://docs.rs/blocking
+//! [`multitask`]: https://docs.rs/multitask
 //! [`tokio`]: https://docs.rs/tokio
 //!
 //! # TCP server
@@ -20,14 +22,15 @@
 //! A simple TCP server that prints messages received from clients:
 //!
 //! ```no_run
-//! use async_net::TcpListener;
+//! use async_io::Async;
 //! use blocking::{block_on, Unblock};
 //! use smol::Task;
+//! use std::net::TcpListener;
 //!
 //! fn main() -> std::io::Result<()> {
 //!     block_on(async {
 //!         // Start listening on port 9000.
-//!         let listener = TcpListener::bind("127.0.0.1:9000").await?;
+//!         let listener = Async::<TcpListener>::bind(([127, 0, 0, 1], 9000))?;
 //!
 //!         loop {
 //!             // Accept a new client.

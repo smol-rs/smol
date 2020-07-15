@@ -13,9 +13,11 @@
 //!
 //! Refer to `README.md` to see how to the TLS certificate was generated.
 
+use std::net::TcpListener;
+
 use anyhow::Result;
+use async_io::Async;
 use async_native_tls::{Identity, TlsAcceptor};
-use async_net::TcpListener;
 use blocking::block_on;
 use futures::prelude::*;
 use http_types::{Request, Response, StatusCode};
@@ -32,11 +34,11 @@ async fn serve(req: Request) -> http_types::Result<Response> {
 }
 
 /// Listens for incoming connections and serves them.
-async fn listen(listener: TcpListener, tls: Option<TlsAcceptor>) -> Result<()> {
+async fn listen(listener: Async<TcpListener>, tls: Option<TlsAcceptor>) -> Result<()> {
     // Format the full host address.
     let host = match &tls {
-        None => format!("http://{}", listener.local_addr()?),
-        Some(_) => format!("https://{}", listener.local_addr()?),
+        None => format!("http://{}", listener.get_ref().local_addr()?),
+        Some(_) => format!("https://{}", listener.get_ref().local_addr()?),
     };
     println!("Listening on {}", host);
 
@@ -86,8 +88,11 @@ fn main() -> Result<()> {
 
     // Start HTTP and HTTPS servers.
     block_on(async {
-        let http = listen(TcpListener::bind("127.0.0.1:8000").await?, None);
-        let https = listen(TcpListener::bind("127.0.0.1:8001").await?, Some(tls));
+        let http = listen(Async::<TcpListener>::bind(([127, 0, 0, 1], 8000))?, None);
+        let https = listen(
+            Async::<TcpListener>::bind(([127, 0, 0, 1], 8001))?,
+            Some(tls),
+        );
         future::try_join(http, https).await?;
         Ok(())
     })

@@ -12,7 +12,9 @@
 //! cargo run --example chat-client
 //! ```
 
-use async_net::TcpStream;
+use std::net::TcpStream;
+
+use async_io::Async;
 use blocking::{block_on, Unblock};
 use futures::io;
 use futures::prelude::*;
@@ -20,17 +22,17 @@ use futures::prelude::*;
 fn main() -> io::Result<()> {
     block_on(async {
         // Connect to the server and create async stdin and stdout.
-        let stream = TcpStream::connect("127.0.0.1:6000").await?;
+        let stream = Async::<TcpStream>::connect(([127, 0, 0, 1], 6000)).await?;
         let stdin = Unblock::new(std::io::stdin());
         let mut stdout = Unblock::new(std::io::stdout());
 
         // Intro messages.
-        println!("Connected to {}", stream.peer_addr()?);
-        println!("My nickname: {}", stream.local_addr()?);
+        println!("Connected to {}", stream.get_ref().peer_addr()?);
+        println!("My nickname: {}", stream.get_ref().local_addr()?);
         println!("Type a message and hit enter!\n");
 
         let reader = &stream;
-        let mut writer = stream.clone();
+        let mut writer = &stream;
 
         // Wait until the standard input is closed or the connection is closed.
         futures::select! {

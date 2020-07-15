@@ -12,22 +12,24 @@
 //! cargo run --example tcp-client
 //! ```
 
-use async_net::{TcpListener, TcpStream};
+use std::net::{TcpListener, TcpStream};
+
+use async_io::Async;
 use blocking::block_on;
 use futures::io;
 use smol::Task;
 
 /// Echoes messages from the client back to it.
-async fn echo(mut stream: TcpStream) -> io::Result<()> {
-    io::copy(stream.clone(), &mut stream).await?;
+async fn echo(stream: Async<TcpStream>) -> io::Result<()> {
+    io::copy(&stream, &mut &stream).await?;
     Ok(())
 }
 
 fn main() -> io::Result<()> {
     block_on(async {
         // Create a listener.
-        let listener = TcpListener::bind("127.0.0.1:7000").await?;
-        println!("Listening on {}", listener.local_addr()?);
+        let listener = Async::<TcpListener>::bind(([127, 0, 0, 1], 7000))?;
+        println!("Listening on {}", listener.get_ref().local_addr()?);
         println!("Now start a TCP client.");
 
         // Accept clients in a loop.

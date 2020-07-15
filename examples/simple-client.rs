@@ -6,9 +6,11 @@
 //! cargo run --example simple-client
 //! ```
 
+use std::net::{TcpStream, ToSocketAddrs};
+
 use anyhow::{bail, Context as _, Result};
-use async_net::TcpStream;
-use blocking::block_on;
+use async_io::Async;
+use blocking::{block_on, unblock};
 use futures::prelude::*;
 use url::Url;
 
@@ -31,7 +33,13 @@ async fn fetch(addr: &str) -> Result<Vec<u8>> {
     );
 
     // Connect to the host.
-    let mut stream = TcpStream::connect(format!("{}:{}", host, port)).await?;
+    let socket_addr = {
+        let host = host.clone();
+        unblock!((host.as_str(), port).to_socket_addrs())?
+            .next()
+            .context("cannot resolve address")?
+    };
+    let mut stream = Async::<TcpStream>::connect(socket_addr).await?;
 
     // Send the request and wait for the response.
     let mut resp = Vec::new();

@@ -12,12 +12,13 @@
 //! cargo run --example websocket-client
 //! ```
 
+use std::net::{TcpListener, TcpStream};
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use anyhow::{Context as _, Result};
+use async_io::Async;
 use async_native_tls::{Identity, TlsAcceptor, TlsStream};
-use async_net::{TcpListener, TcpStream};
 use async_tungstenite::WebSocketStream;
 use blocking::block_on;
 use futures::prelude::*;
@@ -32,17 +33,17 @@ async fn echo(mut stream: WsStream) -> Result<()> {
 }
 
 /// Listens for incoming connections and serves them.
-async fn listen(listener: TcpListener, tls: Option<TlsAcceptor>) -> Result<()> {
+async fn listen(listener: Async<TcpListener>, tls: Option<TlsAcceptor>) -> Result<()> {
     let host = match &tls {
-        None => format!("ws://{}", listener.local_addr()?),
-        Some(_) => format!("wss://{}", listener.local_addr()?),
+        None => format!("ws://{}", listener.get_ref().local_addr()?),
+        Some(_) => format!("wss://{}", listener.get_ref().local_addr()?),
     };
     println!("Listening on {}", host);
 
     loop {
         // Accept the next connection.
         let (stream, _) = listener.accept().await?;
-        println!("Accepted client: {}", stream.peer_addr()?);
+        println!("Accepted client: {}", stream.get_ref().peer_addr()?);
 
         match &tls {
             None => {
@@ -66,8 +67,11 @@ fn main() -> Result<()> {
 
     // Start WS and WSS servers.
     block_on(async {
-        let ws = listen(TcpListener::bind("127.0.0.1:9000").await?, None);
-        let wss = listen(TcpListener::bind("127.0.0.1:9001").await?, Some(tls));
+        let ws = listen(Async::<TcpListener>::bind(([127, 0, 0, 1], 9000))?, None);
+        let wss = listen(
+            Async::<TcpListener>::bind(([127, 0, 0, 1], 9001))?,
+            Some(tls),
+        );
         future::try_join(ws, wss).await?;
         Ok(())
     })
@@ -76,10 +80,10 @@ fn main() -> Result<()> {
 /// A WebSocket or WebSocket+TLS connection.
 enum WsStream {
     /// A plain WebSocket connection.
-    Plain(WebSocketStream<TcpStream>),
+    Plain(WebSocketStream<Async<TcpStream>>),
 
     /// A WebSocket connection secured by TLS.
-    Tls(WebSocketStream<TlsStream<TcpStream>>),
+    Tls(WebSocketStream<TlsStream<Async<TcpStream>>>),
 }
 
 impl Sink<Message> for WsStream {

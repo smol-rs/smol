@@ -12,9 +12,11 @@
 //! cargo run --example tls-client
 //! ```
 
+use std::net::TcpStream;
+
 use anyhow::Result;
+use async_io::Async;
 use async_native_tls::{Certificate, TlsConnector};
-use async_net::TcpStream;
 use blocking::{block_on, Unblock};
 use futures::io;
 use futures::prelude::*;
@@ -31,9 +33,9 @@ fn main() -> Result<()> {
         let mut stdout = Unblock::new(std::io::stdout());
 
         // Connect to the server.
-        let stream = TcpStream::connect("127.0.0.1:7001").await?;
+        let stream = Async::<TcpStream>::connect(([127, 0, 0, 1], 7001)).await?;
         let stream = tls.connect("127.0.0.1", stream).await?;
-        println!("Connected to {}", stream.get_ref().peer_addr()?);
+        println!("Connected to {}", stream.get_ref().get_ref().peer_addr()?);
         println!("Type a message and hit enter!\n");
 
         // Pipe messages from stdin to the server and pipe messages from the server to stdout.

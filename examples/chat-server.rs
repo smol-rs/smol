@@ -13,10 +13,11 @@
 //! ```
 
 use std::collections::HashMap;
-use std::net::SocketAddr;
+use std::net::{SocketAddr, TcpListener, TcpStream};
 
 use async_channel::{bounded, Receiver, Sender};
-use async_net::{TcpListener, TcpStream};
+use async_dup::Arc;
+use async_io::Async;
 use blocking::block_on;
 use futures::io::{self, BufReader};
 use futures::prelude::*;
@@ -25,7 +26,7 @@ use smol::Task;
 /// An event on the chat server.
 enum Event {
     /// A client has joined.
-    Join(SocketAddr, TcpStream),
+    Join(SocketAddr, Arc<Async<TcpStream>>),
 
     /// A client has left.
     Leave(SocketAddr),
@@ -37,7 +38,7 @@ enum Event {
 /// Dispatches events to clients.
 async fn dispatch(receiver: Receiver<Event>) -> io::Result<()> {
     // Currently active clients.
-    let mut map = HashMap::<SocketAddr, TcpStream>::new();
+    let mut map = HashMap::<SocketAddr, Arc<Async<TcpStream>>>::new();
 
     // Receive incoming events.
     while let Ok(event) = receiver.recv().await {
@@ -67,8 +68,8 @@ async fn dispatch(receiver: Receiver<Event>) -> io::Result<()> {
 }
 
 /// Reads messages from the client and forwards them to the dispatcher task.
-async fn read_messages(sender: Sender<Event>, client: TcpStream) -> io::Result<()> {
-    let addr = client.peer_addr()?;
+async fn read_messages(sender: Sender<Event>, client: Arc<Async<TcpStream>>) -> io::Result<()> {
+    let addr = client.get_ref().peer_addr()?;
     let mut lines = BufReader::new(client).lines();
 
     while let Some(line) = lines.next().await {
@@ -81,10 +82,10 @@ async fn read_messages(sender: Sender<Event>, client: TcpStream) -> io::Result<(
 fn main() -> io::Result<()> {
     block_on(async {
         // Create a listener for incoming client connections.
-        let listener = TcpListener::bind("127.0.0.1:6000").await?;
+        let listener = Async::<TcpListener>::bind(([127, 0, 0, 1], 6000))?;
 
         // Intro messages.
-        println!("Listening on {}", listener.local_addr()?);
+        println!("Listening on {}", listener.get_ref().local_addr()?);
         println!("Start a chat client now!\n");
 
         // Spawn a background task that dispatches events to clients.
@@ -94,7 +95,7 @@ fn main() -> io::Result<()> {
         loop {
             // Accept the next connection.
             let (stream, addr) = listener.accept().await?;
-            let client = stream;
+            let client = Arc::new(stream);
             let sender = sender.clone();
 
             // Spawn a background task reading messages from the client.

@@ -6,9 +6,11 @@
 //! cargo run --example async-h1-client
 //! ```
 
+use std::net::{TcpStream, ToSocketAddrs};
+
 use anyhow::{bail, Context as _, Error, Result};
-use async_net::TcpStream;
-use blocking::block_on;
+use async_io::Async;
+use blocking::{block_on, unblock};
 use futures::prelude::*;
 use http_types::{Method, Request, Response};
 use url::Url;
@@ -23,8 +25,13 @@ async fn fetch(req: Request) -> Result<Response> {
         .context("cannot guess port")?;
 
     // Connect to the host.
-    let addr = format!("{}:{}", host, port);
-    let stream = TcpStream::connect(addr).await?;
+    let socket_addr = {
+        let host = host.clone();
+        unblock!((host.as_str(), port).to_socket_addrs())?
+            .next()
+            .context("cannot resolve address")?
+    };
+    let stream = Async::<TcpStream>::connect(socket_addr).await?;
 
     // Send the request and wait for the response.
     let resp = match req.url().scheme() {

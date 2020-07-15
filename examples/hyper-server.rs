@@ -15,12 +15,13 @@
 
 use std::io;
 use std::net::Shutdown;
+use std::net::{TcpListener, TcpStream};
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use anyhow::{Error, Result};
+use async_io::Async;
 use async_native_tls::{Identity, TlsAcceptor, TlsStream};
-use async_net::{TcpListener, TcpStream};
 use blocking::block_on;
 use futures::prelude::*;
 use hyper::service::{make_service_fn, service_fn};
@@ -34,11 +35,11 @@ async fn serve(req: Request<Body>, host: String) -> Result<Response<Body>> {
 }
 
 /// Listens for incoming connections and serves them.
-async fn listen(listener: TcpListener, tls: Option<TlsAcceptor>) -> Result<()> {
+async fn listen(listener: Async<TcpListener>, tls: Option<TlsAcceptor>) -> Result<()> {
     // Format the full host address.
     let host = &match tls {
-        None => format!("http://{}", listener.local_addr()?),
-        Some(_) => format!("https://{}", listener.local_addr()?),
+        None => format!("http://{}", listener.get_ref().local_addr()?),
+        Some(_) => format!("https://{}", listener.get_ref().local_addr()?),
     };
     println!("Listening on {}", host);
 
@@ -61,8 +62,11 @@ fn main() -> Result<()> {
 
     // Start HTTP and HTTPS servers.
     block_on(async {
-        let http = listen(TcpListener::bind("127.0.0.1:8000").await?, None);
-        let https = listen(TcpListener::bind("127.0.0.1:8001").await?, Some(tls));
+        let http = listen(Async::<TcpListener>::bind(([127, 0, 0, 1], 8000))?, None);
+        let https = listen(
+            Async::<TcpListener>::bind(([127, 0, 0, 1], 8001))?,
+            Some(tls),
+        );
         future::try_join(http, https).await?;
         Ok(())
     })
@@ -80,12 +84,12 @@ impl<F: Future + Send + 'static> hyper::rt::Executor<F> for SmolExecutor {
 
 /// Listens for incoming connections.
 struct SmolListener {
-    listener: TcpListener,
+    listener: Async<TcpListener>,
     tls: Option<TlsAcceptor>,
 }
 
 impl SmolListener {
-    fn new(listener: TcpListener, tls: Option<TlsAcceptor>) -> Self {
+    fn new(listener: Async<TcpListener>, tls: Option<TlsAcceptor>) -> Self {
         Self { listener, tls }
     }
 }
@@ -122,13 +126,13 @@ impl hyper::server::accept::Accept for SmolListener {
 /// A TCP or TCP+TLS connection.
 enum SmolStream {
     /// A plain TCP connection.
-    Plain(TcpStream),
+    Plain(Async<TcpStream>),
 
     /// A TCP connection secured by TLS.
-    Tls(TlsStream<TcpStream>),
+    Tls(TlsStream<Async<TcpStream>>),
 
     /// A TCP connection that is in process of getting secured by TLS.
-    Handshake(future::BoxFuture<'static, io::Result<TlsStream<TcpStream>>>),
+    Handshake(future::BoxFuture<'static, io::Result<TlsStream<Async<TcpStream>>>>),
 }
 
 impl hyper::client::connect::Connection for SmolStream {
@@ -185,7 +189,7 @@ impl tokio::io::AsyncWrite for SmolStream {
     fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         match &mut *self {
             SmolStream::Plain(s) => {
-                s.shutdown(Shutdown::Write)?;
+                s.get_ref().shutdown(Shutdown::Write)?;
                 Poll::Ready(Ok(()))
             }
             SmolStream::Tls(s) => Pin::new(s).poll_close(cx),

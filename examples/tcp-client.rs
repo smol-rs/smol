@@ -12,7 +12,9 @@
 //! cargo run --example tcp-client
 //! ```
 
-use async_net::TcpStream;
+use std::net::TcpStream;
+
+use async_io::Async;
 use blocking::{block_on, Unblock};
 use futures::io;
 use futures::prelude::*;
@@ -24,8 +26,8 @@ fn main() -> io::Result<()> {
         let mut stdout = Unblock::new(std::io::stdout());
 
         // Connect to the server.
-        let stream = TcpStream::connect("127.0.0.1:7000").await?;
-        println!("Connected to {}", stream.peer_addr()?);
+        let stream = Async::<TcpStream>::connect(([127, 0, 0, 1], 7000)).await?;
+        println!("Connected to {}", stream.get_ref().peer_addr()?);
         println!("Type a message and hit enter!\n");
 
         // Pipe messages from stdin to the server and pipe messages from the server to stdout.

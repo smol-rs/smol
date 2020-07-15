@@ -12,15 +12,17 @@
 //! cargo run --example tls-client
 //! ```
 
+use std::net::{TcpListener, TcpStream};
+
 use anyhow::Result;
+use async_io::Async;
 use async_native_tls::{Identity, TlsAcceptor, TlsStream};
-use async_net::{TcpListener, TcpStream};
 use blocking::block_on;
 use futures::io;
 use smol::Task;
 
 /// Echoes messages from the client back to it.
-async fn echo(stream: TlsStream<TcpStream>) -> Result<()> {
+async fn echo(stream: TlsStream<Async<TcpStream>>) -> Result<()> {
     let stream = async_dup::Mutex::new(stream);
     io::copy(&stream, &mut &stream).await?;
     Ok(())
@@ -33,15 +35,18 @@ fn main() -> Result<()> {
 
     block_on(async {
         // Create a listener.
-        let listener = TcpListener::bind("127.0.0.1:7001").await?;
-        println!("Listening on {}", listener.local_addr()?);
+        let listener = Async::<TcpListener>::bind(([127, 0, 0, 1], 7001))?;
+        println!("Listening on {}", listener.get_ref().local_addr()?);
         println!("Now start a TLS client.");
 
         // Accept clients in a loop.
         loop {
             let (stream, _) = listener.accept().await?;
             let stream = tls.accept(stream).await?;
-            println!("Accepted client: {}", stream.get_ref().peer_addr()?);
+            println!(
+                "Accepted client: {}",
+                stream.get_ref().get_ref().peer_addr()?
+            );
 
             // Spawn a task that echoes messages from the client back to it.
             Task::spawn(echo(stream)).detach();
