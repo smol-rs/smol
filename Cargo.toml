@@ -62,4 +62,6 @@ tungstenite = "0.10.1"
 url = "2.1.1"
 
 [target.'cfg(target_os = "linux")'.dev-dependencies]
+inotify = { version = "0.8.2", default-features = false }
 nix = "0.17.0"
+timerfd = "1.1.1"
