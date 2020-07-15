@@ -12,7 +12,8 @@ fn main() -> std::io::Result<()> {
     use std::os::unix::io::AsRawFd;
     use std::time::{Duration, Instant};
 
-    use smol::Async;
+    use async_io::Async;
+    use blocking::block_on;
     use timerfd::{SetTimeFlags, TimerFd, TimerState};
 
     /// Converts a [`nix::Error`] into [`std::io::Error`].
@@ -36,7 +37,7 @@ fn main() -> std::io::Result<()> {
         Ok(())
     }
 
-    smol::run(async {
+    block_on(async {
         let start = Instant::now();
         println!("Sleeping...");
 
