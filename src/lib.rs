@@ -255,7 +255,6 @@ fn enter<T>(f: impl FnOnce() -> T) -> T {
 
     #[cfg(feature = "tokio02")]
     {
-        use once_cell::sync::Lazy;
         use std::cell::Cell;
         use tokio::runtime::Runtime;
 
