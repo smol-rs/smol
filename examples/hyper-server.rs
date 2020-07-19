@@ -23,7 +23,7 @@ use anyhow::{Error, Result};
 use async_io::Async;
 use async_native_tls::{Identity, TlsAcceptor, TlsStream};
 use blocking::block_on;
-use futures::prelude::*;
+use futures_lite::*;
 use hyper::service::{make_service_fn, service_fn};
 use hyper::{Body, Request, Response, Server};
 use smol::Task;
@@ -103,7 +103,7 @@ impl hyper::server::accept::Accept for SmolListener {
         cx: &mut Context,
     ) -> Poll<Option<Result<Self::Conn, Self::Error>>> {
         let poll = Pin::new(&mut self.listener.incoming()).poll_next(cx);
-        let stream = futures::ready!(poll).unwrap()?;
+        let stream = ready!(poll).unwrap()?;
 
         let stream = match &self.tls {
             None => SmolStream::Plain(stream),
@@ -132,7 +132,7 @@ enum SmolStream {
     Tls(TlsStream<Async<TcpStream>>),
 
     /// A TCP connection that is in process of getting secured by TLS.
-    Handshake(future::BoxFuture<'static, io::Result<TlsStream<Async<TcpStream>>>>),
+    Handshake(Pin<Box<dyn Future<Output = io::Result<TlsStream<Async<TcpStream>>>> + Send>>),
 }
 
 impl hyper::client::connect::Connection for SmolStream {
@@ -152,7 +152,7 @@ impl tokio::io::AsyncRead for SmolStream {
                 SmolStream::Plain(s) => return Pin::new(s).poll_read(cx, buf),
                 SmolStream::Tls(s) => return Pin::new(s).poll_read(cx, buf),
                 SmolStream::Handshake(f) => {
-                    let s = futures::ready!(f.as_mut().poll(cx))?;
+                    let s = ready!(f.as_mut().poll(cx))?;
                     *self = SmolStream::Tls(s);
                 }
             }
@@ -171,7 +171,7 @@ impl tokio::io::AsyncWrite for SmolStream {
                 SmolStream::Plain(s) => return Pin::new(s).poll_write(cx, buf),
                 SmolStream::Tls(s) => return Pin::new(s).poll_write(cx, buf),
                 SmolStream::Handshake(f) => {
-                    let s = futures::ready!(f.as_mut().poll(cx))?;
+                    let s = ready!(f.as_mut().poll(cx))?;
                     *self = SmolStream::Tls(s);
                 }
             }

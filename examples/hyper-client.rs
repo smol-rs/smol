@@ -16,7 +16,7 @@ use anyhow::{bail, Context as _, Error, Result};
 use async_io::Async;
 use async_native_tls::TlsStream;
 use blocking::{block_on, unblock};
-use futures::prelude::*;
+use futures_lite::*;
 use http::Uri;
 use hyper::{Body, Client, Request, Response};
 use smol::Task;
@@ -42,7 +42,7 @@ fn main() -> Result<()> {
         // Read the message body.
         let body = resp
             .into_body()
-            .try_fold(Vec::new(), |mut body, chunk| async move {
+            .try_fold(Vec::new(), |mut body, chunk| {
                 body.extend_from_slice(&chunk);
                 Ok(body)
             })
@@ -70,7 +70,7 @@ struct SmolConnector;
 impl hyper::service::Service<Uri> for SmolConnector {
     type Response = SmolStream;
     type Error = Error;
-    type Future = future::BoxFuture<'static, Result<Self::Response, Self::Error>>;
+    type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;
 
     fn poll_ready(&mut self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         Poll::Ready(Ok(()))

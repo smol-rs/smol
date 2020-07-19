@@ -19,7 +19,7 @@ use anyhow::Result;
 use async_io::Async;
 use async_native_tls::{Identity, TlsAcceptor};
 use blocking::block_on;
-use futures::prelude::*;
+use futures_lite::*;
 use http_types::{Request, Response, StatusCode};
 use smol::Task;
 

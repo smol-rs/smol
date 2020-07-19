@@ -16,7 +16,7 @@ use std::net::{TcpListener, TcpStream};
 
 use async_io::Async;
 use blocking::block_on;
-use futures::io;
+use futures_lite::*;
 use smol::Task;
 
 /// Echoes messages from the client back to it.

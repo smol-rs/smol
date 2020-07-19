@@ -18,8 +18,7 @@ use anyhow::Result;
 use async_io::Async;
 use async_native_tls::{Certificate, TlsConnector};
 use blocking::{block_on, Unblock};
-use futures::io;
-use futures::prelude::*;
+use futures_lite::*;
 
 fn main() -> Result<()> {
     // Initialize TLS with the local certificate.

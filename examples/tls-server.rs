@@ -18,7 +18,7 @@ use anyhow::Result;
 use async_io::Async;
 use async_native_tls::{Identity, TlsAcceptor, TlsStream};
 use blocking::block_on;
-use futures::io;
+use futures_lite::*;
 use smol::Task;
 
 /// Echoes messages from the client back to it.
