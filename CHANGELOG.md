@@ -1,3 +1,8 @@
+# Version 0.2.0
+
+- Split `smol` into `async-io`, `blocking`, and `multitask`.
+- Big breaking change - there is now only one type `Task`.
+
 # Version 0.1.18
 
 - Support Rust 1.39.0
