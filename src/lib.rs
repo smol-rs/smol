@@ -10,10 +10,12 @@
 //! * For higher-level networking primitives, use [`async-net`].
 //! * For executors, use [`multitask`].
 //! * To call blocking code from async code or the other way around, use [`blocking`].
+//! * For async traits and combinators, use [`futures-lite`].
 //!
 //! [`async-io`]: https://docs.rs/async-io
 //! [`async-net`]: https://docs.rs/async-net
 //! [`blocking`]: https://docs.rs/blocking
+//! [`futures-lite`]: https://docs.rs/futures-lite
 //! [`multitask`]: https://docs.rs/multitask
 //! [`tokio`]: https://docs.rs/tokio
 //!
