@@ -17,11 +17,11 @@
 //! A simple TCP server that prints messages received from clients:
 //!
 //! ```no_run
-//! use smol::{block_on, io, Async, Task, Unblock};
+//! use smol::{Async, Task, Unblock};
 //! use std::net::TcpListener;
 //!
-//! fn main() -> io::Result<()> {
-//!     block_on(async {
+//! fn main() -> std::io::Result<()> {
+//!     smol::block_on(async {
 //!         // Start listening on port 9000.
 //!         let listener = Async::<TcpListener>::bind(([127, 0, 0, 1], 9000))?;
 //!
@@ -35,7 +35,7 @@
 //!                 let mut stdout = Unblock::new(std::io::stdout());
 //!
 //!                 // Copy data received from the client into stdout.
-//!                 io::copy(&stream, &mut stdout).await
+//!                 smol::io::copy(&stream, &mut stdout).await
 //!             });
 //!
 //!             // Keep running the task in the background.
