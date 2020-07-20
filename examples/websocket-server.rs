@@ -21,7 +21,8 @@ use async_io::Async;
 use async_native_tls::{Identity, TlsAcceptor, TlsStream};
 use async_tungstenite::WebSocketStream;
 use blocking::block_on;
-use futures::prelude::*;
+use futures::sink::{Sink, SinkExt};
+use futures_lite::*;
 use smol::Task;
 use tungstenite::Message;
 

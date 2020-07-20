@@ -7,13 +7,13 @@
 //! ```
 
 use blocking::block_on;
-use futures::prelude::*;
+use futures_lite::*;
 
 fn main() {
     // Set a handler that sends a message through a channel.
     let (s, ctrl_c) = async_channel::bounded(100);
     let handle = move || {
-        let _ = s.send(()).now_or_never();
+        let _ = future::poll_once(s.send(()));
     };
     ctrlc::set_handler(handle).unwrap();
 

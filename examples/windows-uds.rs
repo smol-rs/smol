@@ -12,8 +12,7 @@ fn main() -> std::io::Result<()> {
 
     use async_io::Async;
     use blocking::{block_on, Unblock};
-    use futures::io;
-    use futures::prelude::*;
+    use futures_lite::*;
     use smol::Task;
     use tempfile::tempdir;
     use uds_windows::{UnixListener, UnixStream};

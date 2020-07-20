@@ -12,7 +12,7 @@ fn main() -> std::io::Result<()> {
 
     use async_io::Async;
     use blocking::block_on;
-    use futures::prelude::*;
+    use futures_lite::*;
 
     block_on(async {
         // Create a Unix stream that receives a byte on each signal occurrence.

@@ -19,8 +19,7 @@ use async_channel::{bounded, Receiver, Sender};
 use async_dup::Arc;
 use async_io::Async;
 use blocking::block_on;
-use futures::io::{self, BufReader};
-use futures::prelude::*;
+use futures_lite::*;
 use smol::Task;
 
 /// An event on the chat server.
@@ -70,7 +69,7 @@ async fn dispatch(receiver: Receiver<Event>) -> io::Result<()> {
 /// Reads messages from the client and forwards them to the dispatcher task.
 async fn read_messages(sender: Sender<Event>, client: Arc<Async<TcpStream>>) -> io::Result<()> {
     let addr = client.get_ref().peer_addr()?;
-    let mut lines = BufReader::new(client).lines();
+    let mut lines = io::BufReader::new(client).lines();
 
     while let Some(line) = lines.next().await {
         let line = line?;

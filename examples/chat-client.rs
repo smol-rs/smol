@@ -16,8 +16,7 @@ use std::net::TcpStream;
 
 use async_io::Async;
 use blocking::{block_on, Unblock};
-use futures::io;
-use futures::prelude::*;
+use futures_lite::*;
 
 fn main() -> io::Result<()> {
     block_on(async {
@@ -35,10 +34,19 @@ fn main() -> io::Result<()> {
         let mut writer = &stream;
 
         // Wait until the standard input is closed or the connection is closed.
-        futures::select! {
-            _ = io::copy(stdin, &mut writer).fuse() => println!("Quit!"),
-            _ = io::copy(reader, &mut stdout).fuse() => println!("Server disconnected!"),
-        }
+        future::race(
+            async {
+                let res = io::copy(stdin, &mut writer).await;
+                println!("Quit!");
+                res
+            },
+            async {
+                let res = io::copy(reader, &mut stdout).await;
+                println!("Server disconnected!");
+                res
+            },
+        )
+        .await?;
 
         Ok(())
     })

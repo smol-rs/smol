@@ -11,7 +11,7 @@ use std::net::{TcpStream, ToSocketAddrs};
 use anyhow::{bail, Context as _, Result};
 use async_io::Async;
 use blocking::{block_on, unblock};
-use futures::prelude::*;
+use futures_lite::*;
 use url::Url;
 
 /// Sends a GET request and fetches the response.

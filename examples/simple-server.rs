@@ -19,7 +19,7 @@ use anyhow::Result;
 use async_io::Async;
 use async_native_tls::{Identity, TlsAcceptor};
 use blocking::block_on;
-use futures::prelude::*;
+use futures_lite::*;
 use smol::Task;
 
 const RESPONSE: &[u8] = br#"
