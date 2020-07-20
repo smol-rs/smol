@@ -19,7 +19,7 @@ readme = "README.md"
 # Enable the feature as follows:
 # ```
 # [dependencies]
-# smol = { version = "0.1", features = ["tokio02"] }
+# smol = { version = "0.2", features = ["tokio02"] }
 # ```
 tokio02 = ["tokio"]
 
