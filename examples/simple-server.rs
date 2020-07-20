@@ -16,11 +16,8 @@
 use std::net::{TcpListener, TcpStream};
 
 use anyhow::Result;
-use async_io::Async;
 use async_native_tls::{Identity, TlsAcceptor};
-use blocking::block_on;
-use futures_lite::*;
-use smol::Task;
+use smol::{block_on, future, io::AsyncWriteExt, Async, Task};
 
 const RESPONSE: &[u8] = br#"
 HTTP/1.1 200 OK

@@ -13,20 +13,18 @@
 //!
 //! Refer to `README.md` to see how to the TLS certificate was generated.
 
-use std::io;
-use std::net::Shutdown;
-use std::net::{TcpListener, TcpStream};
+use std::net::{Shutdown, TcpListener, TcpStream};
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use anyhow::{Error, Result};
-use async_io::Async;
 use async_native_tls::{Identity, TlsAcceptor, TlsStream};
-use blocking::block_on;
-use futures_lite::*;
 use hyper::service::{make_service_fn, service_fn};
 use hyper::{Body, Request, Response, Server};
-use smol::Task;
+use smol::{
+    block_on, future, future::Future, io, io::AsyncRead, io::AsyncWrite, ready, stream::Stream,
+    Async, Task,
+};
 
 /// Serves a request and returns a response.
 async fn serve(req: Request<Body>, host: String) -> Result<Response<Body>> {

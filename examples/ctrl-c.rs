@@ -6,8 +6,7 @@
 //! cargo run --example ctrl-c
 //! ```
 
-use blocking::block_on;
-use futures_lite::*;
+use smol::{block_on, future};
 
 fn main() {
     // Set a handler that sends a message through a channel.

@@ -16,12 +16,9 @@
 use std::net::TcpListener;
 
 use anyhow::Result;
-use async_io::Async;
 use async_native_tls::{Identity, TlsAcceptor};
-use blocking::block_on;
-use futures_lite::*;
 use http_types::{Request, Response, StatusCode};
-use smol::Task;
+use smol::{block_on, future, Async, Task};
 
 /// Serves a request and returns a response.
 async fn serve(req: Request) -> http_types::Result<Response> {

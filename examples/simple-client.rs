@@ -9,9 +9,7 @@
 use std::net::{TcpStream, ToSocketAddrs};
 
 use anyhow::{bail, Context as _, Result};
-use async_io::Async;
-use blocking::{block_on, unblock};
-use futures_lite::*;
+use smol::{block_on, io::AsyncReadExt, io::AsyncWriteExt, unblock, Async};
 use url::Url;
 
 /// Sends a GET request and fetches the response.

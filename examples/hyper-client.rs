@@ -6,20 +6,19 @@
 //! cargo run --example hyper-client
 //! ```
 
-use std::io;
 use std::net::Shutdown;
 use std::net::{TcpStream, ToSocketAddrs};
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use anyhow::{bail, Context as _, Error, Result};
-use async_io::Async;
 use async_native_tls::TlsStream;
-use blocking::{block_on, unblock};
-use futures_lite::*;
 use http::Uri;
 use hyper::{Body, Client, Request, Response};
-use smol::Task;
+use smol::{
+    block_on, future::Future, io, io::AsyncRead, io::AsyncWrite, stream::StreamExt, unblock, Async,
+    Task,
+};
 
 /// Sends a request and fetches the response.
 async fn fetch(req: Request<Body>) -> Result<Response<Body>> {

@@ -19,7 +19,7 @@
 use std::time::{Duration, Instant};
 
 use anyhow::{Error, Result};
-use blocking::block_on;
+use smol::block_on;
 
 fn main() -> Result<()> {
     block_on(async {

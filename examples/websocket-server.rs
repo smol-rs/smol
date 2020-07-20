@@ -17,13 +17,10 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use anyhow::{Context as _, Result};
-use async_io::Async;
 use async_native_tls::{Identity, TlsAcceptor, TlsStream};
 use async_tungstenite::WebSocketStream;
-use blocking::block_on;
 use futures::sink::{Sink, SinkExt};
-use futures_lite::*;
-use smol::Task;
+use smol::{block_on, future, stream::Stream, stream::StreamExt, Async, Task};
 use tungstenite::Message;
 
 /// Echoes messages from the client back to it.

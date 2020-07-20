@@ -4,19 +4,6 @@
 //! trivially simple codebase, this executor and its related crates offer performance and features
 //! comparable to more complex frameworks like [tokio].
 //!
-//! Related async crates:
-//!
-//! * For async I/O and timers, use [`async-io`].
-//! * For higher-level networking primitives, use [`async-net`].
-//! * For executors, use [`multitask`].
-//! * To call blocking code from async code or the other way around, use [`blocking`].
-//! * For async traits and combinators, use [`futures-lite`].
-//!
-//! [`async-io`]: https://docs.rs/async-io
-//! [`async-net`]: https://docs.rs/async-net
-//! [`blocking`]: https://docs.rs/blocking
-//! [`futures-lite`]: https://docs.rs/futures-lite
-//! [`multitask`]: https://docs.rs/multitask
 //! [`tokio`]: https://docs.rs/tokio
 //!
 //! # TCP server
@@ -24,12 +11,10 @@
 //! A simple TCP server that prints messages received from clients:
 //!
 //! ```no_run
-//! use async_io::Async;
-//! use blocking::{block_on, Unblock};
-//! use smol::Task;
+//! use smol::{block_on, io, Async, Task, Unblock};
 //! use std::net::TcpListener;
 //!
-//! fn main() -> std::io::Result<()> {
+//! fn main() -> io::Result<()> {
 //!     block_on(async {
 //!         // Start listening on port 9000.
 //!         let listener = Async::<TcpListener>::bind(([127, 0, 0, 1], 9000))?;
@@ -44,7 +29,7 @@
 //!                 let mut stdout = Unblock::new(std::io::stdout());
 //!
 //!                 // Copy data received from the client into stdout.
-//!                 futures::io::copy(&stream, &mut stdout).await
+//!                 io::copy(&stream, &mut stdout).await
 //!             });
 //!
 //!             // Keep running the task in the background.
@@ -166,7 +151,7 @@ impl<T> Task<T> {
         T: Send + 'static,
     {
         static EXECUTOR: Lazy<Executor> = Lazy::new(|| {
-            for _ in 0..num_cpus::get().max(1) {
+            for _ in 0..2 {
                 thread::spawn(|| {
                     enter(|| {
                         let (p, u) = async_io::parking::pair();
@@ -282,3 +267,13 @@ fn enter<T>(f: impl FnOnce() -> T) -> T {
         })
     }
 }
+
+#[doc(no_inline)]
+pub use {
+    async_io::Async,
+    async_io::Timer,
+    blocking::{block_on, BlockOn},
+    blocking::{unblock, Unblock},
+    futures_lite::{future, io, stream},
+    futures_lite::{pin, ready},
+};

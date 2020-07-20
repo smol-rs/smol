@@ -10,9 +10,8 @@ use std::collections::{HashSet, VecDeque};
 
 use anyhow::Result;
 use async_channel::{bounded, Sender};
-use blocking::block_on;
 use scraper::{Html, Selector};
-use smol::Task;
+use smol::{block_on, Task};
 
 const ROOT: &str = "https://www.rust-lang.org";
 

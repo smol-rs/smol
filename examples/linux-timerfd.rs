@@ -8,12 +8,10 @@
 
 #[cfg(target_os = "linux")]
 fn main() -> std::io::Result<()> {
-    use std::io;
     use std::os::unix::io::AsRawFd;
     use std::time::{Duration, Instant};
 
-    use async_io::Async;
-    use blocking::block_on;
+    use smol::{block_on, io, Async};
     use timerfd::{SetTimeFlags, TimerFd, TimerState};
 
     /// Converts a [`nix::Error`] into [`std::io::Error`].

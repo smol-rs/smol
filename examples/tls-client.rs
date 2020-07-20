@@ -15,10 +15,8 @@
 use std::net::TcpStream;
 
 use anyhow::Result;
-use async_io::Async;
 use async_native_tls::{Certificate, TlsConnector};
-use blocking::{block_on, Unblock};
-use futures_lite::*;
+use smol::{block_on, future, io, Async, Unblock};
 
 fn main() -> Result<()> {
     // Initialize TLS with the local certificate.

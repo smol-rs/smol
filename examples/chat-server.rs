@@ -17,10 +17,7 @@ use std::net::{SocketAddr, TcpListener, TcpStream};
 
 use async_channel::{bounded, Receiver, Sender};
 use async_dup::Arc;
-use async_io::Async;
-use blocking::block_on;
-use futures_lite::*;
-use smol::Task;
+use smol::{block_on, io, io::AsyncBufReadExt, io::AsyncWriteExt, stream::StreamExt, Async, Task};
 
 /// An event on the chat server.
 enum Event {

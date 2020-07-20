@@ -10,10 +10,7 @@
 fn main() -> std::io::Result<()> {
     use std::path::PathBuf;
 
-    use async_io::Async;
-    use blocking::{block_on, Unblock};
-    use futures_lite::*;
-    use smol::Task;
+    use smol::{block_on, io, io::AsyncWriteExt, Async, Task, Unblock};
     use tempfile::tempdir;
     use uds_windows::{UnixListener, UnixStream};
 

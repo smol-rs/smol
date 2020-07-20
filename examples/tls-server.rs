@@ -15,11 +15,8 @@
 use std::net::{TcpListener, TcpStream};
 
 use anyhow::Result;
-use async_io::Async;
 use async_native_tls::{Identity, TlsAcceptor, TlsStream};
-use blocking::block_on;
-use futures_lite::*;
-use smol::Task;
+use smol::{block_on, io, Async, Task};
 
 /// Echoes messages from the client back to it.
 async fn echo(stream: TlsStream<Async<TcpStream>>) -> Result<()> {

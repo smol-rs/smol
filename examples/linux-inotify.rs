@@ -9,11 +9,9 @@
 #[cfg(target_os = "linux")]
 fn main() -> std::io::Result<()> {
     use std::ffi::OsString;
-    use std::io;
 
-    use async_io::Async;
-    use blocking::block_on;
     use inotify::{EventMask, Inotify, WatchMask};
+    use smol::{block_on, io, Async};
 
     type Event = (OsString, EventMask);
 

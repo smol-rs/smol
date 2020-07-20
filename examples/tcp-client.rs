@@ -14,9 +14,7 @@
 
 use std::net::TcpStream;
 
-use async_io::Async;
-use blocking::{block_on, Unblock};
-use futures_lite::*;
+use smol::{block_on, future, io, Async, Unblock};
 
 fn main() -> io::Result<()> {
     block_on(async {
