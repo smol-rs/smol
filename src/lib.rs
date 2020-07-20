@@ -151,7 +151,7 @@ impl<T> Task<T> {
         T: Send + 'static,
     {
         static EXECUTOR: Lazy<Executor> = Lazy::new(|| {
-            for _ in 0..2 {
+            for _ in 0..num_cpus::get().max(1) {
                 thread::spawn(|| {
                     enter(|| {
                         let (p, u) = async_io::parking::pair();
