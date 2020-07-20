@@ -28,7 +28,7 @@ async fn serve(req: Request) -> http_types::Result<Response> {
     println!("Serving {}", req.url());
 
     let mut res = Response::new(StatusCode::Ok);
-    res.insert_header("Content-Type", "text/plain")?;
+    res.insert_header("Content-Type", "text/plain");
     res.set_body("Hello from async-h1!");
     Ok(res)
 }
@@ -45,14 +45,13 @@ async fn listen(listener: Async<TcpListener>, tls: Option<TlsAcceptor>) -> Resul
     loop {
         // Accept the next connection.
         let (stream, _) = listener.accept().await?;
-        let host = host.clone();
 
         // Spawn a background task serving this connection.
         let task = match &tls {
             None => {
                 let stream = async_dup::Arc::new(stream);
                 Task::spawn(async move {
-                    if let Err(err) = async_h1::accept(&host, stream, serve).await {
+                    if let Err(err) = async_h1::accept(stream, serve).await {
                         println!("Connection error: {:#?}", err);
                     }
                 })
@@ -63,7 +62,7 @@ async fn listen(listener: Async<TcpListener>, tls: Option<TlsAcceptor>) -> Resul
                     Ok(stream) => {
                         let stream = async_dup::Arc::new(async_dup::Mutex::new(stream));
                         Task::spawn(async move {
-                            if let Err(err) = async_h1::accept(&host, stream, serve).await {
+                            if let Err(err) = async_h1::accept(stream, serve).await {
                                 println!("Connection error: {:#?}", err);
                             }
                         })
