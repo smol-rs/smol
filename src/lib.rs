@@ -1,12 +1,18 @@
-//! A small and fast executor.
+//! A small and fast async runtime.
 //!
-//! This crate runs a global executor thread pool and only has one type, [`Task`]. Despite the
-//! trivially simple codebase, this executor and its related crates offer performance and features
-//! comparable to more complex frameworks like [tokio].
+//! This library provides:
 //!
-//! [`tokio`]: https://docs.rs/tokio
+//! * Tools for working with [`future`]s, [`stream`]s, and async [I/O][`io`].
+//! * Hooks into epoll/kqueue/wepoll for [`Async`] I/O and [`Timer`]s.
+//! * Glue between async and blocking code: [`block_on()`], [`BlockOn`], [`unblock()`], [`Unblock`].
+//! * An executor for spawning [`Task`]s.
 //!
-//! # TCP server
+//! The whole implementation is a trivial amount of code - it mostly reexports types and functions
+//! from other small and independent crates.
+//!
+//! The focus of the crate is on simplicity
+//!
+//! # Examples
 //!
 //! A simple TCP server that prints messages received from clients:
 //!
@@ -41,7 +47,7 @@
 //!
 //! To interact with the server, run `nc 127.0.0.1 9000` and type a few lines of text.
 //!
-//! # Examples
+//! ### More examples
 //!
 //! Look inside the [examples] directory for more:
 //! a [web crawler][web-crawler],
@@ -102,6 +108,15 @@ use std::thread;
 
 use multitask::Executor;
 use once_cell::sync::Lazy;
+
+pub use {
+    async_io::Async,
+    async_io::Timer,
+    blocking::{block_on, BlockOn},
+    blocking::{unblock, Unblock},
+    futures_lite::{future, io, stream},
+    futures_lite::{pin, ready},
+};
 
 /// A spawned future.
 ///
@@ -267,13 +282,3 @@ fn enter<T>(f: impl FnOnce() -> T) -> T {
         })
     }
 }
-
-#[doc(no_inline)]
-pub use {
-    async_io::Async,
-    async_io::Timer,
-    blocking::{block_on, BlockOn},
-    blocking::{unblock, Unblock},
-    futures_lite::{future, io, stream},
-    futures_lite::{pin, ready},
-};
