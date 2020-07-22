@@ -28,7 +28,6 @@ async-io = "0.1.3"
 multitask = "0.2.0"
 num_cpus = "1.13.0"
 once_cell = "1.4.0"
-blocking = "0.4.7"
 
 [dependencies.tokio]
 version = "0.2.21"
@@ -45,6 +44,7 @@ async-native-tls = "0.3.3"
 async-std = "1.6.2"
 async-tungstenite = { version = "0.7.1", features = ["async-native-tls"] }
 base64 = "0.12.3"
+blocking = "0.4.7"
 ctrlc = "3.1.5"
 futures = "0.3.5"
 futures-lite = "0.1.5"
