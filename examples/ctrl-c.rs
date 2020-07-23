@@ -6,8 +6,7 @@
 //! cargo run --example ctrl-c
 //! ```
 
-use blocking::block_on;
-use futures_lite::*;
+use smol::future;
 
 fn main() {
     // Set a handler that sends a message through a channel.
@@ -17,7 +16,7 @@ fn main() {
     };
     ctrlc::set_handler(handle).unwrap();
 
-    block_on(async {
+    smol::run(async {
         println!("Waiting for Ctrl-C...");
 
         // Receive a message that indicates the Ctrl-C signal occurred.

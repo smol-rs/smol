@@ -16,12 +16,9 @@
 use std::net::TcpListener;
 
 use anyhow::Result;
-use async_io::Async;
 use async_native_tls::{Identity, TlsAcceptor};
-use blocking::block_on;
-use futures_lite::*;
 use http_types::{Request, Response, StatusCode};
-use smol::Task;
+use smol::{future, Async, Task};
 
 /// Serves a request and returns a response.
 async fn serve(req: Request) -> http_types::Result<Response> {
@@ -86,7 +83,7 @@ fn main() -> Result<()> {
     let tls = TlsAcceptor::from(native_tls::TlsAcceptor::new(identity)?);
 
     // Start HTTP and HTTPS servers.
-    block_on(async {
+    smol::run(async {
         let http = listen(Async::<TcpListener>::bind(([127, 0, 0, 1], 8000))?, None);
         let https = listen(
             Async::<TcpListener>::bind(([127, 0, 0, 1], 8001))?,

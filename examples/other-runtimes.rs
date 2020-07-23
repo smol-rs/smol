@@ -1,9 +1,6 @@
 //! Demonstrates how to use `async-std`, `tokio`, `surf`, and `request`.
 //!
-//! There is an optional feature for seamless integration with crates depending on tokio.
-//! It creates a global tokio runtime and sets up its context inside smol.
-//!
-//! Enable the feature as follows:
+//! For compatibility with tokio-based libraries, enable the `tokio02` feature flag:
 //!
 //! ```toml
 //! [dependencies]
@@ -19,10 +16,9 @@
 use std::time::{Duration, Instant};
 
 use anyhow::{Error, Result};
-use blocking::block_on;
 
 fn main() -> Result<()> {
-    block_on(async {
+    smol::run(async {
         // Sleep using async-std.
         let start = Instant::now();
         println!("Sleeping using async-std...");

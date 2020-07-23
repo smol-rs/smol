@@ -14,12 +14,10 @@
 
 use std::net::TcpStream;
 
-use async_io::Async;
-use blocking::{block_on, Unblock};
-use futures_lite::*;
+use smol::{future, io, Async, Unblock};
 
 fn main() -> io::Result<()> {
-    block_on(async {
+    smol::run(async {
         // Create async stdin and stdout handles.
         let stdin = Unblock::new(std::io::stdin());
         let mut stdout = Unblock::new(std::io::stdout());

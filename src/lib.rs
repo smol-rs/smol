@@ -1,284 +1,156 @@
-//! A small and fast executor.
+//! A small and fast async runtime.
 //!
-//! This crate runs a global executor thread pool and only has one type, [`Task`]. Despite the
-//! trivially simple codebase, this executor and its related crates offer performance and features
-//! comparable to more complex frameworks like [tokio].
+//! # Examples
 //!
-//! Related async crates:
+//! Connect to an HTTP website, make a GET request, and pipe the response to the standard output:
 //!
-//! * For async I/O and timers, use [`async-io`].
-//! * For higher-level networking primitives, use [`async-net`].
-//! * For executors, use [`multitask`].
-//! * To call blocking code from async code or the other way around, use [`blocking`].
-//! * For async traits and combinators, use [`futures-lite`].
+//! ```
+//! use async_net::TcpStream;
+//! use smol::{io, prelude::*, Unblock};
 //!
-//! [`async-io`]: https://docs.rs/async-io
-//! [`async-net`]: https://docs.rs/async-net
-//! [`blocking`]: https://docs.rs/blocking
-//! [`futures-lite`]: https://docs.rs/futures-lite
-//! [`multitask`]: https://docs.rs/multitask
-//! [`tokio`]: https://docs.rs/tokio
+//! fn main() -> io::Result<()> {
+//!     smol::run(async {
+//!         let mut stream = TcpStream::connect("example.com:80").await?;
+//!         let req = b"GET / HTTP/1.1\r\nHost: example.com\r\nConnection: close\r\n\r\n";
+//!         stream.write_all(req).await?;
 //!
-//! # TCP server
-//!
-//! A simple TCP server that prints messages received from clients:
-//!
-//! ```no_run
-//! use async_io::Async;
-//! use blocking::{block_on, Unblock};
-//! use smol::Task;
-//! use std::net::TcpListener;
-//!
-//! fn main() -> std::io::Result<()> {
-//!     block_on(async {
-//!         // Start listening on port 9000.
-//!         let listener = Async::<TcpListener>::bind(([127, 0, 0, 1], 9000))?;
-//!
-//!         loop {
-//!             // Accept a new client.
-//!             let (stream, _) = listener.accept().await?;
-//!
-//!             // Spawn a task handling this client.
-//!             let task = Task::spawn(async move {
-//!                 // Create an async stdio handle.
-//!                 let mut stdout = Unblock::new(std::io::stdout());
-//!
-//!                 // Copy data received from the client into stdout.
-//!                 futures::io::copy(&stream, &mut stdout).await
-//!             });
-//!
-//!             // Keep running the task in the background.
-//!             task.detach();
-//!         }
+//!         let mut stdout = Unblock::new(std::io::stdout());
+//!         io::copy(&stream, &mut stdout).await?;
+//!         Ok(())
 //!     })
 //! }
 //! ```
 //!
-//! To interact with the server, run `nc 127.0.0.1 9000` and type a few lines of text.
+//! This example uses [`async-net`] for networking, but you can also use the primitive [`Async`]
+//! type. See the [full code][get-request].
 //!
-//! # Examples
+//! Look inside the [examples] directory for more.
 //!
-//! Look inside the [examples] directory for more:
-//! a [web crawler][web-crawler],
-//! a [Ctrl-C handler][ctrl-c],
-//! a TCP [client][tcp-client]/[server][tcp-server],
-//! a TCP chat [client][chat-client]/[server][chat-server],
-//! a TLS [client][tls-client]/[server][tls-server],
-//! an HTTP+TLS [client][simple-client]/[server][simple-server],
-//! an [async-h1] [client][async-h1-client]/[server][async-h1-server],
-//! a [hyper] [client][hyper-client]/[server][hyper-server],
-//! and a WebSocket+TLS [client][websocket-client]/[server][websocket-server].
+//! [`async-net`]: https://docs.rs/async-net
+//! [examples]: https://github.com/stjepang/smol/tree/master/examples
+//! [get-request]: https://github.com/stjepang/smol/blob/master/examples/get-request.rs
 //!
-//! It's also possible to plug non-async libraries into the runtime: see
-//! [inotify], [timerfd], [signal-hook], and [uds_windows].
+//! # Compatibility
 //!
-//! Finally, there's an [example][other-runtimes] showing how to use smol with
-//! [async-std], [tokio], [surf], and [reqwest].
+//! All async libraries work with smol out of the box.
 //!
-//! [examples]: https://github.com/stjepang/smol/tree/master/examples/!
-//! [async-h1]: https://docs.rs/async-h1
-//! [hyper]: https://docs.rs/hyper
-//! [hyper]: https://docs.rs/tokio
-//! [async-std]: https://docs.rs/async-std
+//! However, [tokio] is generally hostile towards non-tokio libraries, insists on non-standard I/O
+//! traits, and deliberately lacks documentation on integration with the larger Rust ecosystem.
+//! Fortunately, there are ways around it.
+//!
+//! Enable the `tokio02` feature flag and [`smol::run()`][`crate::run()`] will create a minimal
+//! tokio runtime for its libraries:
+//!
+//! ```toml
+//! [dependencies]
+//! smol = { version = "0.2", features = ["tokio02"] }
+//! ```
+//!
 //! [tokio]: https://docs.rs/tokio
-//! [surf]: https://docs.rs/surf
-//! [reqwest]: https://docs.rs/reqwest
-//!
-//! [async-h1-client]: https://github.com/stjepang/smol/blob/master/examples/async-h1-client.rs
-//! [async-h1-server]: https://github.com/stjepang/smol/blob/master/examples/async-h1-server.rs
-//! [chat-client]: https://github.com/stjepang/smol/blob/master/examples/chat-client.rs
-//! [chat-server]: https://github.com/stjepang/smol/blob/master/examples/chat-server.rs
-//! [ctrl-c]: https://github.com/stjepang/smol/blob/master/examples/ctrl-c.rs
-//! [hyper-client]: https://github.com/stjepang/smol/blob/master/examples/hyper-client.rs
-//! [hyper-server]: https://github.com/stjepang/smol/blob/master/examples/hyper-server.rs
-//! [inotify]: https://github.com/stjepang/smol/blob/master/examples/linux-inotify.rs
-//! [other-runtimes]: https://github.com/stjepang/smol/blob/master/examples/other-runtimes.rs
-//! [signal-hook]: https://github.com/stjepang/smol/blob/master/examples/unix-signal.rs
-//! [simple-client]: https://github.com/stjepang/smol/blob/master/examples/simple-client.rs
-//! [simple-server]: https://github.com/stjepang/smol/blob/master/examples/simple-server.rs
-//! [tcp-client]: https://github.com/stjepang/smol/blob/master/examples/tcp-client.rs
-//! [tcp-server]: https://github.com/stjepang/smol/blob/master/examples/tcp-server.rs
-//! [timerfd]: https://github.com/stjepang/smol/blob/master/examples/linux-timerfd.rs
-//! [tls-client]: https://github.com/stjepang/smol/blob/master/examples/tls-client.rs
-//! [tls-server]: https://github.com/stjepang/smol/blob/master/examples/tls-server.rs
-//! [uds_windows]: https://github.com/stjepang/smol/blob/master/examples/windows-uds.rs
-//! [web-crawler]: https://github.com/stjepang/smol/blob/master/examples/web-crawler.rs
-//! [websocket-client]: https://github.com/stjepang/smol/blob/master/examples/websocket-client.rs
-//! [websocket-server]: https://github.com/stjepang/smol/blob/master/examples/websocket-server.rs
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs, missing_debug_implementations, rust_2018_idioms)]
 
 use std::future::Future;
-use std::panic::catch_unwind;
-use std::pin::Pin;
-use std::task::{Context, Poll};
-use std::thread;
 
-use multitask::Executor;
-use once_cell::sync::Lazy;
+use async_executor::{Executor, LocalExecutor};
+use easy_parallel::Parallel;
 
-/// A spawned future.
+#[doc(inline)]
+pub use {
+    async_executor::Task,
+    async_io::Async,
+    async_io::Timer,
+    blocking::{unblock, Unblock},
+    futures_lite::{future, io, stream},
+    futures_lite::{pin, ready},
+};
+
+/// Async traits and their extensions.
 ///
-/// Tasks are also futures themselves and yield the output of the spawned future.
+/// # Examples
 ///
-/// When a task is dropped, its gets canceled and won't be polled again. To cancel a task a bit
-/// more gracefully and wait until it stops running, use the [`cancel()`][Task::cancel()] method.
+/// ```
+/// use smol::prelude::*;
+/// ```
+pub mod prelude {
+    #[doc(no_inline)]
+    pub use futures_lite::{
+        future::Future,
+        io::{AsyncBufRead, AsyncBufReadExt},
+        io::{AsyncRead, AsyncReadExt},
+        io::{AsyncSeek, AsyncSeekExt},
+        io::{AsyncWrite, AsyncWriteExt},
+        stream::{Stream, StreamExt},
+    };
+}
+
+/// Starts an executor and runs the future on it.
 ///
-/// Tasks that panic get immediately canceled. Awaiting a canceled task also causes a panic.
+/// This function runs two executors at the same time:
+///
+/// 1. The current thread runs a [`LocalExecutor`] and the main `future` on it.
+/// 2. A thread pool runs an [`Executor`] until the main `future` completes.
+///
+/// The number of spawned threads matches the number of logical CPU cores on the system.
 ///
 /// # Examples
 ///
 /// ```
 /// use smol::Task;
 ///
-/// # blocking::block_on(async {
-/// // Spawn a task onto the work-stealing executor.
-/// let task = Task::spawn(async {
-///     println!("Hello from a task!");
-///     1 + 2
-/// });
-///
-/// // Wait for the task to complete.
-/// assert_eq!(task.await, 3);
-/// # });
+/// smol::run(async {
+///     let task = Task::spawn(async {
+///         println!("Hello world");
+///     });
+///     task.await;
+/// })
 /// ```
-#[must_use = "tasks get canceled when dropped, use `.detach()` to run them in the background"]
-#[derive(Debug)]
-pub struct Task<T>(multitask::Task<T>);
-
-impl<T> Task<T> {
-    /// Spawns a future.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use smol::Task;
-    ///
-    /// # blocking::block_on(async {
-    /// let task = Task::spawn(async { 1 + 2 });
-    /// assert_eq!(task.await, 3);
-    /// # });
-    /// ```
-    pub fn spawn<F>(future: F) -> Task<T>
-    where
-        F: Future<Output = T> + Send + 'static,
-        T: Send + 'static,
-    {
-        static EXECUTOR: Lazy<Executor> = Lazy::new(|| {
-            for _ in 0..num_cpus::get().max(1) {
-                thread::spawn(|| {
-                    enter(|| {
-                        let (p, u) = async_io::parking::pair();
-                        let ticker = EXECUTOR.ticker(move || u.unpark());
-
-                        loop {
-                            if let Ok(false) = catch_unwind(|| ticker.tick()) {
-                                p.park();
-                            }
-                        }
-                    })
-                });
-            }
-
-            Executor::new()
-        });
-
-        Task(EXECUTOR.spawn(future))
-    }
-
-    /// Detaches the task to let it keep running in the background.
-    ///
-    /// # Examples
-    ///
-    /// ```no_run
-    /// use async_io::Timer;
-    /// use smol::Task;
-    /// use std::time::Duration;
-    ///
-    /// # blocking::block_on(async {
-    /// Task::spawn(async {
-    ///     loop {
-    ///         println!("I'm a daemon task looping forever.");
-    ///         Timer::new(Duration::from_secs(1)).await;
-    ///     }
-    /// })
-    /// .detach();
-    /// # })
-    /// ```
-    pub fn detach(self) {
-        self.0.detach();
-    }
-
-    /// Cancels the task and waits for it to stop running.
-    ///
-    /// Returns the task's output if it was completed just before it got canceled, or [`None`] if
-    /// it didn't complete.
-    ///
-    /// While it's possible to simply drop the [`Task`] to cancel it, this is a cleaner way of
-    /// canceling because it also waits for the task to stop running.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use async_io::Timer;
-    /// use smol::Task;
-    /// use std::time::Duration;
-    ///
-    /// # blocking::block_on(async {
-    /// let task = Task::spawn(async {
-    ///     loop {
-    ///         println!("Even though I'm in an infinite loop, you can still cancel me!");
-    ///         Timer::new(Duration::from_secs(1)).await;
-    ///     }
-    /// });
-    ///
-    /// Timer::new(Duration::from_secs(3)).await;
-    /// task.cancel().await;
-    /// # })
-    /// ```
-    pub async fn cancel(self) -> Option<T> {
-        self.0.cancel().await
-    }
+pub fn run<T>(future: impl Future<Output = T>) -> T {
+    setup(num_cpus::get(), future)
 }
 
-impl<T> Future for Task<T> {
-    type Output = T;
+#[cfg(not(feature = "tokio02"))]
+fn setup<T>(num_threads: usize, future: impl Future<Output = T>) -> T {
+    let ex = Executor::new();
+    let local_ex = LocalExecutor::new();
 
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        Pin::new(&mut self.0).poll(cx)
-    }
+    // A channel that coordinates shutdown when the main future completes.
+    let (trigger, shutdown) = async_channel::unbounded::<()>();
+    let future = async move {
+        let _trigger = trigger; // Dropped at the end of this async block.
+        future.await
+    };
+
+    Parallel::new()
+        .each(0..num_threads, |_| ex.run(shutdown.recv()))
+        .finish(|| ex.enter(|| local_ex.run(future)))
+        .1
 }
 
-/// Enters the tokio context if the `tokio` feature is enabled.
-fn enter<T>(f: impl FnOnce() -> T) -> T {
-    #[cfg(not(feature = "tokio02"))]
-    return f();
+#[cfg(feature = "tokio02")]
+fn setup<T>(num_threads: usize, future: impl Future<Output = T>) -> T {
+    let ex = Executor::new();
+    let local_ex = LocalExecutor::new();
 
-    #[cfg(feature = "tokio02")]
-    {
-        use std::cell::Cell;
-        use tokio::runtime::Runtime;
+    // A channel that signals shutdown to the thread pool when the main future completes.
+    let (s, shutdown) = async_channel::unbounded::<()>();
+    let future = async move {
+        let _s = s; // Drops sender at the end of this async block.
+        future.await
+    };
 
-        thread_local! {
-            /// The level of nested `enter` calls we are in, to ensure that the outermost always
-            /// has a runtime spawned.
-            static NESTING: Cell<usize> = Cell::new(0);
-        }
+    // A minimal tokio runtime.
+    let mut rt = tokio::runtime::Builder::new()
+        .enable_all()
+        .basic_scheduler()
+        .build()
+        .expect("cannot start tokio runtime");
+    let handle = rt.handle().clone();
 
-        /// The global tokio runtime.
-        static RT: Lazy<Runtime> = Lazy::new(|| Runtime::new().expect("cannot initialize tokio"));
-
-        NESTING.with(|nesting| {
-            let res = if nesting.get() == 0 {
-                nesting.replace(1);
-                RT.enter(f)
-            } else {
-                nesting.replace(nesting.get() + 1);
-                f()
-            };
-            nesting.replace(nesting.get() - 1);
-            res
-        })
-    }
+    Parallel::new()
+        .add(|| ex.enter(|| rt.block_on(shutdown.recv())))
+        .each(0..num_threads, |_| handle.enter(|| ex.run(shutdown.recv())))
+        .finish(|| handle.enter(|| ex.enter(|| local_ex.run(future))))
+        .1
 }

@@ -10,7 +10,6 @@ use std::collections::{HashSet, VecDeque};
 
 use anyhow::Result;
 use async_channel::{bounded, Sender};
-use blocking::block_on;
 use scraper::{Html, Selector};
 use smol::Task;
 
@@ -35,7 +34,7 @@ fn links(body: String) -> Vec<String> {
 }
 
 fn main() -> Result<()> {
-    block_on(async {
+    smol::run(async {
         let mut seen = HashSet::new();
         let mut queue = VecDeque::new();
         seen.insert(ROOT.to_string());

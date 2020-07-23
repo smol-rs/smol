@@ -10,11 +10,9 @@
 fn main() -> std::io::Result<()> {
     use std::os::unix::net::UnixStream;
 
-    use async_io::Async;
-    use blocking::block_on;
-    use futures_lite::*;
+    use smol::{prelude::*, Async};
 
-    block_on(async {
+    smol::run(async {
         // Create a Unix stream that receives a byte on each signal occurrence.
         let (a, mut b) = Async::<UnixStream>::pair()?;
         signal_hook::pipe::register(signal_hook::SIGINT, a)?;

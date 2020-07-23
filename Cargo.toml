@@ -13,25 +13,20 @@ categories = ["asynchronous", "concurrency", "network-programming"]
 readme = "README.md"
 
 [features]
-# Optional feature for seamless integration with crates depending on tokio.
-# It creates a global tokio runtime and sets up its context inside smol.
-#
-# Enable the feature as follows:
-# ```
-# [dependencies]
-# smol = { version = "0.2", features = ["tokio02"] }
-# ```
-tokio02 = ["tokio"]
+default = []
+tokio02 = ["tokio"] # Optional feature for compatibility with tokio-based libraries.
 
 [dependencies]
-async-io = "0.1.3"
-multitask = "0.2.0"
+async-channel = "1.1.1"
+async-executor = "0.1.1"
+async-io = "0.1.5"
+blocking = "0.5.0"
+easy-parallel = "3.1.0"
+futures-lite = "0.1.8"
 num_cpus = "1.13.0"
-once_cell = "1.4.0"
-blocking = "0.4.7"
 
 [dependencies.tokio]
-version = "0.2.21"
+version = "0.2.22"
 default-features = false
 features = ["rt-threaded"]
 optional = true
@@ -42,12 +37,12 @@ async-channel = "1.1.1"
 async-dup = "1.2.1"
 async-h1 = "2.1.0"
 async-native-tls = "0.3.3"
+async-net = "0.1.1"
 async-std = "1.6.2"
 async-tungstenite = { version = "0.7.1", features = ["async-native-tls"] }
 base64 = "0.12.3"
 ctrlc = "3.1.5"
 futures = "0.3.5"
-futures-lite = "0.1.5"
 http = "0.2.1"
 http-types = "2.3.0"
 hyper = { version = "0.13.7", default-features = false, features = ["stream"] }
@@ -56,11 +51,13 @@ num_cpus = "1.13.0"
 reqwest = "0.10.6"
 scraper = "0.12.0"
 signal-hook = "0.1.16"
+smol = { path = ".", features = ["tokio02"] }
 surf = { version = "2.0.0-alpha.4", default-features = false, features = ["h1-client"] }
 tempfile = "3.1.0"
-tokio = { version = "0.2.21", default-features = false }
+tide = "0.12.0"
 tungstenite = "0.11.0"
 url = "2.1.1"
+warp = "0.2.4"
 
 [target.'cfg(target_os = "linux")'.dev-dependencies]
 inotify = { version = "0.8.3", default-features = false }

@@ -11,87 +11,55 @@ https://docs.rs/smol)
 [![Chat](https://img.shields.io/discord/701824908866617385.svg?logo=discord)](
 https://discord.gg/x6m5Vvt)
 
-A small and fast executor.
+A small and fast async runtime.
 
-Reading the [docs] or looking at the [examples] is a great way to start learning
-async Rust.
+## Examples
 
-[docs]: https://docs.rs/smol
-[examples]: ./examples
+Connect to an HTTP website, make a GET request, and pipe the response to the standard output:
 
-Async I/O is implemented using [epoll] on Linux/Android, [kqueue] on
-macOS/iOS/BSD, and [wepoll] on Windows.
+```rust
+use async_net::TcpStream;
+use smol::{io, prelude::*, Unblock};
 
-What makes smol different from [async-std] and [tokio]? 
-Read this [blog post](https://stjepang.github.io/2020/04/03/why-im-building-a-new-async-runtime.html).
+fn main() -> io::Result<()> {
+    smol::run(async {
+        let mut stream = TcpStream::connect("example.com:80").await?;
+        let req = b"GET / HTTP/1.1\r\nHost: example.com\r\nConnection: close\r\n\r\n";
+        stream.write_all(req).await?;
 
-[epoll]: https://en.wikipedia.org/wiki/Epoll
-[kqueue]: https://en.wikipedia.org/wiki/Kqueue
-[wepoll]: https://github.com/piscisaureus/wepoll
+        let mut stdout = Unblock::new(std::io::stdout());
+        io::copy(&stream, &mut stdout).await?;
+        Ok(())
+    })
+}
+```
 
-## Features
+This example uses [`async-net`] for networking, but you can also use the primitive `Async`
+type. See the [full code][get-request].
 
-* Async TCP, UDP, Unix domain sockets, and custom file descriptors.
-* Thread-local executor for `!Send` futures.
-* Work-stealing executor that adapts to uneven workloads.
-* Blocking executor for files, processes, and standard I/O.
-* Tasks that support cancellation.
-* Userspace timers.
+Look inside the [examples] directory for more.
+
+[`async-net`]: https://docs.rs/async-net
+[examples]: https://github.com/stjepang/smol/tree/master/examples
+[get-request]: https://github.com/stjepang/smol/blob/master/examples/get-request.rs
 
 ## Compatibility
 
-See [this example](./examples/other-runtimes.rs) for how to use smol with
-[async-std], [tokio], [surf], and [reqwest].
+All async libraries work with smol out of the box.
 
-There is an optional feature for seamless integration with crates depending
-on tokio. It creates a global tokio runtime and sets up its context inside smol.
-Enable the feature as follows:
+However, [tokio] is generally hostile towards non-tokio libraries, insists on non-standard I/O
+traits, and deliberately lacks documentation on integration with the larger Rust ecosystem.
+Fortunately, there are ways around it.
+
+Enable the `tokio02` feature flag and `smol::run()` will create a minimal
+tokio runtime for its libraries:
 
 ```toml
 [dependencies]
 smol = { version = "0.2", features = ["tokio02"] }
 ```
 
-[async-std]: https://docs.rs/async-std
 [tokio]: https://docs.rs/tokio
-[surf]: https://docs.rs/surf
-[reqwest]: https://docs.rs/reqwest
-
-## Documentation
-
-You can read the docs [here][docs], or generate them on your own.
-
-If you'd like to explore the implementation in more depth, the following
-command generates docs for the whole crate, including private modules:
-
-```
-cargo doc --document-private-items --no-deps --open
-```
-
-[docs]: https://docs.rs/smol
-
-## Other crates
-
-My personal crate recommendation list:
-
-* Channels, pipes, and mutexes: [piper]
-* HTTP clients: [surf], [isahc], [reqwest]
-* HTTP servers: [async-h1], [hyper]
-* WebSockets: [async-tungstenite]
-* TLS authentication: [async-native-tls]
-* Signals: [ctrlc], [signal-hook]
-
-[piper]: https://docs.rs/piper
-[surf]: https://docs.rs/surf
-[isahc]: https://docs.rs/isahc
-[reqwest]: https://docs.rs/reqwest
-[async-h1]: https://docs.rs/async-h1
-[hyper]: https://docs.rs/hyper
-[async-tungstenite]: https://docs.rs/async-tungstenite
-[async-native-tls]: https://docs.rs/async-native-tls
-[native-tls]: https://docs.rs/native-tls
-[ctrlc]: https://docs.rs/ctrlc
-[signal-hook]: https://docs.rs/signal-hook
 
 ## TLS certificate
 
