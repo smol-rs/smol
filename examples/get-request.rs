@@ -1,4 +1,4 @@
-//! Connect to an HTTP website, make a GET request, and pipes the response to the standard output.
+//! Connect to an HTTP website, make a GET request, and pipe the response to the standard output.
 //!
 //! Run with:
 //!
