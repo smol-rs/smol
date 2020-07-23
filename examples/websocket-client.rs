@@ -20,7 +20,7 @@ use anyhow::{bail, Context as _, Result};
 use async_native_tls::{Certificate, TlsConnector, TlsStream};
 use async_tungstenite::WebSocketStream;
 use futures::sink::{Sink, SinkExt};
-use smol::{block_on, stream::Stream, stream::StreamExt, unblock, Async};
+use smol::{prelude::*, Async};
 use tungstenite::handshake::client::Response;
 use tungstenite::Message;
 use url::Url;
@@ -35,7 +35,7 @@ async fn connect(addr: &str, tls: TlsConnector) -> Result<(WsStream, Response)> 
     // Resolve the address.
     let socket_addr = {
         let host = host.clone();
-        unblock!((host.as_str(), port).to_socket_addrs())?
+        smol::unblock!((host.as_str(), port).to_socket_addrs())?
             .next()
             .context("cannot resolve address")?
     };
@@ -64,7 +64,7 @@ fn main() -> Result<()> {
     builder.add_root_certificate(Certificate::from_pem(include_bytes!("certificate.pem"))?);
     let tls = TlsConnector::from(builder);
 
-    block_on(async {
+    smol::run(async {
         // Connect to the server.
         let (mut stream, resp) = connect("wss://127.0.0.1:9001", tls).await?;
         dbg!(resp);

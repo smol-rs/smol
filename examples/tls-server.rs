@@ -16,7 +16,7 @@ use std::net::{TcpListener, TcpStream};
 
 use anyhow::Result;
 use async_native_tls::{Identity, TlsAcceptor, TlsStream};
-use smol::{block_on, io, Async, Task};
+use smol::{io, Async, Task};
 
 /// Echoes messages from the client back to it.
 async fn echo(stream: TlsStream<Async<TcpStream>>) -> Result<()> {
@@ -30,7 +30,7 @@ fn main() -> Result<()> {
     let identity = Identity::from_pkcs12(include_bytes!("identity.pfx"), "password")?;
     let tls = TlsAcceptor::from(native_tls::TlsAcceptor::new(identity)?);
 
-    block_on(async {
+    smol::run(async {
         // Create a listener.
         let listener = Async::<TcpListener>::bind(([127, 0, 0, 1], 7001))?;
         println!("Listening on {}", listener.get_ref().local_addr()?);

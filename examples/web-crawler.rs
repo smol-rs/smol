@@ -11,7 +11,7 @@ use std::collections::{HashSet, VecDeque};
 use anyhow::Result;
 use async_channel::{bounded, Sender};
 use scraper::{Html, Selector};
-use smol::{block_on, Task};
+use smol::Task;
 
 const ROOT: &str = "https://www.rust-lang.org";
 
@@ -34,7 +34,7 @@ fn links(body: String) -> Vec<String> {
 }
 
 fn main() -> Result<()> {
-    block_on(async {
+    smol::run(async {
         let mut seen = HashSet::new();
         let mut queue = VecDeque::new();
         seen.insert(ROOT.to_string());

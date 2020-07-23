@@ -11,7 +11,7 @@ fn main() -> std::io::Result<()> {
     use std::ffi::OsString;
 
     use inotify::{EventMask, Inotify, WatchMask};
-    use smol::{block_on, io, Async};
+    use smol::{io, Async};
 
     type Event = (OsString, EventMask);
 
@@ -32,7 +32,7 @@ fn main() -> std::io::Result<()> {
         }
     }
 
-    block_on(async {
+    smol::run(async {
         // Watch events in the current directory.
         let mut inotify = Async::new(Inotify::init()?)?;
         inotify.get_mut().add_watch(".", WatchMask::ALL_EVENTS)?;

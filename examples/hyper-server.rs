@@ -21,10 +21,7 @@ use anyhow::{Error, Result};
 use async_native_tls::{Identity, TlsAcceptor, TlsStream};
 use hyper::service::{make_service_fn, service_fn};
 use hyper::{Body, Request, Response, Server};
-use smol::{
-    block_on, future, future::Future, io, io::AsyncRead, io::AsyncWrite, ready, stream::Stream,
-    Async, Task,
-};
+use smol::{future, io, prelude::*, Async, Task};
 
 /// Serves a request and returns a response.
 async fn serve(req: Request<Body>, host: String) -> Result<Response<Body>> {
@@ -59,7 +56,7 @@ fn main() -> Result<()> {
     let tls = TlsAcceptor::from(native_tls::TlsAcceptor::new(identity)?);
 
     // Start HTTP and HTTPS servers.
-    block_on(async {
+    smol::run(async {
         let http = listen(Async::<TcpListener>::bind(([127, 0, 0, 1], 8000))?, None);
         let https = listen(
             Async::<TcpListener>::bind(([127, 0, 0, 1], 8001))?,
@@ -97,11 +94,11 @@ impl hyper::server::accept::Accept for SmolListener {
     type Error = Error;
 
     fn poll_accept(
-        mut self: Pin<&mut Self>,
+        self: Pin<&mut Self>,
         cx: &mut Context,
     ) -> Poll<Option<Result<Self::Conn, Self::Error>>> {
         let poll = Pin::new(&mut self.listener.incoming()).poll_next(cx);
-        let stream = ready!(poll).unwrap()?;
+        let stream = smol::ready!(poll).unwrap()?;
 
         let stream = match &self.tls {
             None => SmolStream::Plain(stream),
@@ -150,7 +147,7 @@ impl tokio::io::AsyncRead for SmolStream {
                 SmolStream::Plain(s) => return Pin::new(s).poll_read(cx, buf),
                 SmolStream::Tls(s) => return Pin::new(s).poll_read(cx, buf),
                 SmolStream::Handshake(f) => {
-                    let s = ready!(f.as_mut().poll(cx))?;
+                    let s = smol::ready!(f.as_mut().poll(cx))?;
                     *self = SmolStream::Tls(s);
                 }
             }
@@ -169,7 +166,7 @@ impl tokio::io::AsyncWrite for SmolStream {
                 SmolStream::Plain(s) => return Pin::new(s).poll_write(cx, buf),
                 SmolStream::Tls(s) => return Pin::new(s).poll_write(cx, buf),
                 SmolStream::Handshake(f) => {
-                    let s = ready!(f.as_mut().poll(cx))?;
+                    let s = smol::ready!(f.as_mut().poll(cx))?;
                     *self = SmolStream::Tls(s);
                 }
             }

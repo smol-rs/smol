@@ -20,7 +20,7 @@ use anyhow::{Context as _, Result};
 use async_native_tls::{Identity, TlsAcceptor, TlsStream};
 use async_tungstenite::WebSocketStream;
 use futures::sink::{Sink, SinkExt};
-use smol::{block_on, future, stream::Stream, stream::StreamExt, Async, Task};
+use smol::{future, prelude::*, Async, Task};
 use tungstenite::Message;
 
 /// Echoes messages from the client back to it.
@@ -64,7 +64,7 @@ fn main() -> Result<()> {
     let tls = TlsAcceptor::from(native_tls::TlsAcceptor::new(identity)?);
 
     // Start WS and WSS servers.
-    block_on(async {
+    smol::run(async {
         let ws = listen(Async::<TcpListener>::bind(([127, 0, 0, 1], 9000))?, None);
         let wss = listen(
             Async::<TcpListener>::bind(([127, 0, 0, 1], 9001))?,

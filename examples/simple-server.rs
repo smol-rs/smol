@@ -17,7 +17,7 @@ use std::net::{TcpListener, TcpStream};
 
 use anyhow::Result;
 use async_native_tls::{Identity, TlsAcceptor};
-use smol::{block_on, future, io::AsyncWriteExt, Async, Task};
+use smol::{future, prelude::*, Async, Task};
 
 const RESPONSE: &[u8] = br#"
 HTTP/1.1 200 OK
@@ -80,7 +80,7 @@ fn main() -> Result<()> {
     let tls = TlsAcceptor::from(native_tls::TlsAcceptor::new(identity)?);
 
     // Start HTTP and HTTPS servers.
-    block_on(async {
+    smol::run(async {
         let http = listen(Async::<TcpListener>::bind(([127, 0, 0, 1], 8000))?, None);
         let https = listen(
             Async::<TcpListener>::bind(([127, 0, 0, 1], 8001))?,

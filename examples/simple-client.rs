@@ -9,7 +9,7 @@
 use std::net::{TcpStream, ToSocketAddrs};
 
 use anyhow::{bail, Context as _, Result};
-use smol::{block_on, io::AsyncReadExt, io::AsyncWriteExt, unblock, Async};
+use smol::{prelude::*, Async};
 use url::Url;
 
 /// Sends a GET request and fetches the response.
@@ -33,7 +33,7 @@ async fn fetch(addr: &str) -> Result<Vec<u8>> {
     // Connect to the host.
     let socket_addr = {
         let host = host.clone();
-        unblock!((host.as_str(), port).to_socket_addrs())?
+        smol::unblock!((host.as_str(), port).to_socket_addrs())?
             .next()
             .context("cannot resolve address")?
     };
@@ -59,7 +59,7 @@ async fn fetch(addr: &str) -> Result<Vec<u8>> {
 }
 
 fn main() -> Result<()> {
-    block_on(async {
+    smol::run(async {
         let addr = "https://www.rust-lang.org";
         let resp = fetch(addr).await?;
         println!("{}", String::from_utf8_lossy(&resp));

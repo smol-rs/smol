@@ -16,7 +16,7 @@ use std::net::TcpStream;
 
 use anyhow::Result;
 use async_native_tls::{Certificate, TlsConnector};
-use smol::{block_on, future, io, Async, Unblock};
+use smol::{future, io, Async, Unblock};
 
 fn main() -> Result<()> {
     // Initialize TLS with the local certificate.
@@ -24,7 +24,7 @@ fn main() -> Result<()> {
     builder.add_root_certificate(Certificate::from_pem(include_bytes!("certificate.pem"))?);
     let tls = TlsConnector::from(builder);
 
-    block_on(async {
+    smol::run(async {
         // Create async stdin and stdout handles.
         let stdin = Unblock::new(std::io::stdin());
         let mut stdout = Unblock::new(std::io::stdout());
