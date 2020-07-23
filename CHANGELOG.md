@@ -1,3 +1,7 @@
+# Version 0.3.1
+
+- Fix some typos in docs.
+
 # Version 0.3.0
 
 - Reexport `futures-lite`, `blocking`, `async-executor`.
