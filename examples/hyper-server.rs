@@ -97,8 +97,9 @@ impl hyper::server::accept::Accept for SmolListener {
         self: Pin<&mut Self>,
         cx: &mut Context,
     ) -> Poll<Option<Result<Self::Conn, Self::Error>>> {
-        let poll = Pin::new(&mut self.listener.incoming()).poll_next(cx);
-        let stream = smol::ready!(poll).unwrap()?;
+        let incoming = self.listener.incoming();
+        smol::pin!(incoming);
+        let stream = smol::ready!(incoming.poll_next(cx)).unwrap()?;
 
         let stream = match &self.tls {
             None => SmolStream::Plain(stream),
