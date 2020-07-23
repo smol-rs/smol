@@ -86,7 +86,7 @@ pub mod prelude {
     };
 }
 
-/// Starts an executor and runs the future on it.
+/// Starts executors and runs the future.
 ///
 /// This function runs two executors at the same time:
 ///
