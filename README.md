@@ -80,6 +80,10 @@ minica --domains localhost -ip-addresses 127.0.0.1 -ca-cert certificate.pem
 openssl pkcs12 -export -out identity.pfx -inkey localhost/key.pem -in localhost/cert.pem
 ```
 
+Another useful tool for making certificates is [mkcert].
+
+[mkcert]: https://github.com/FiloSottile/mkcert
+
 ## License
 
 Licensed under either of
