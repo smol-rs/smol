@@ -1,3 +1,8 @@
+# Version 0.3.0
+
+- Reexport `futures-lite`, `blocking`, `async-executor`.
+- Re-introduce `smol::run()`.
+
 # Version 0.2.0
 
 - Split `smol` into `async-io`, `blocking`, and `multitask`.
