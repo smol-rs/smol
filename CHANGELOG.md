@@ -1,3 +1,7 @@
+# Version 0.3.2
+
+- Reexport `FutureExt`.
+
 # Version 0.3.1
 
 - Fix some typos in docs.

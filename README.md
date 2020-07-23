@@ -47,9 +47,8 @@ Look inside the [examples] directory for more.
 
 All async libraries work with smol out of the box.
 
-The only exception is [tokio], which is traditionally incompatible with [futures], breaks
-when used with other executors, and lacks documentation on how to fix such errors.
-Fortunately, there are ways around it.
+The only exception is [tokio], which is traditionally incompatible with [futures] and crashes
+when called from other executors. Fortunately, there are ways around it.
 
 Enable the `tokio02` feature flag and `smol::run()` will create a minimal
 tokio runtime for its libraries:
