@@ -34,9 +34,8 @@
 //!
 //! All async libraries work with smol out of the box.
 //!
-//! However, [tokio] is generally hostile towards non-tokio libraries, insists on non-standard I/O
-//! traits, and deliberately lacks documentation on integration with the larger Rust ecosystem.
-//! Fortunately, there are ways around it.
+//! The only exception is [tokio], which is traditionally incompatible with [futures] and crashes
+//! when called from other executors. Fortunately, there are ways around it.
 //!
 //! Enable the `tokio02` feature flag and [`smol::run()`][`crate::run()`] will create a minimal
 //! tokio runtime for its libraries:
@@ -47,6 +46,7 @@
 //! ```
 //!
 //! [tokio]: https://docs.rs/tokio
+//! [futures]: https://docs.rs/futures
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs, missing_debug_implementations, rust_2018_idioms)]
@@ -77,7 +77,7 @@ pub use {
 pub mod prelude {
     #[doc(no_inline)]
     pub use futures_lite::{
-        future::Future,
+        future::{Future, FutureExt},
         io::{AsyncBufRead, AsyncBufReadExt},
         io::{AsyncRead, AsyncReadExt},
         io::{AsyncSeek, AsyncSeekExt},

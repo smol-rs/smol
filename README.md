@@ -47,8 +47,8 @@ Look inside the [examples] directory for more.
 
 All async libraries work with smol out of the box.
 
-However, [tokio] is generally hostile towards non-tokio libraries, insists on non-standard I/O
-traits, and deliberately lacks documentation on integration with the larger Rust ecosystem.
+The only exception is [tokio], which is traditionally incompatible with [futures], breaks
+when used with other executors, and lacks documentation on how to fix such errors.
 Fortunately, there are ways around it.
 
 Enable the `tokio02` feature flag and `smol::run()` will create a minimal
@@ -60,6 +60,7 @@ smol = { version = "0.3", features = ["tokio02"] }
 ```
 
 [tokio]: https://docs.rs/tokio
+[futures]: https://docs.rs/futures
 
 ## TLS certificate
 
