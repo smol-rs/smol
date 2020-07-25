@@ -121,11 +121,16 @@ pub fn run<T>(future: impl Future<Output = T>) -> T {
 #[cfg(not(feature = "tokio02"))]
 fn setup<T>(num_threads: usize, shutdown: Receiver<()>, future: impl Future<Output = T>) -> T {
     let ex = Executor::new();
-    let local_ex = LocalExecutor::new();
 
     Parallel::new()
-        .each(0..num_threads, |_| ex.run(shutdown.recv()))
-        .finish(|| ex.enter(|| local_ex.run(future)))
+        .each(0..num_threads, |_| {
+            let local_ex = LocalExecutor::new();
+            local_ex.enter(|| ex.run(shutdown.recv()))
+        })
+        .finish(|| {
+            let local_ex = LocalExecutor::new();
+            local_ex.enter(|| ex.run(future))
+        })
         .1
 }
 
@@ -140,11 +145,19 @@ fn setup<T>(num_threads: usize, shutdown: Receiver<()>, future: impl Future<Outp
     let handle = rt.handle().clone();
 
     let ex = Executor::new();
-    let local_ex = LocalExecutor::new();
 
     Parallel::new()
-        .add(|| ex.enter(|| rt.block_on(shutdown.recv())))
-        .each(0..num_threads, |_| handle.enter(|| ex.run(shutdown.recv())))
-        .finish(|| handle.enter(|| ex.enter(|| local_ex.run(future))))
+        .add(|| {
+            let local_ex = LocalExecutor::new();
+            local_ex.enter(|| ex.enter(|| rt.block_on(shutdown.recv())))
+        })
+        .each(0..num_threads, |_| {
+            let local_ex = LocalExecutor::new();
+            handle.enter(|| local_ex.enter(|| ex.run(shutdown.recv())))
+        })
+        .finish(|| {
+            let local_ex = LocalExecutor::new();
+            handle.enter(|| local_ex.enter(|| ex.run(future)))
+        })
         .1
 }
