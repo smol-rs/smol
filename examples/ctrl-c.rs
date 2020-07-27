@@ -12,7 +12,7 @@ fn main() {
     // Set a handler that sends a message through a channel.
     let (s, ctrl_c) = async_channel::bounded(100);
     let handle = move || {
-        let _ = future::poll_once(s.send(()));
+        let _ = s.try_send(());
     };
     ctrlc::set_handler(handle).unwrap();
 
