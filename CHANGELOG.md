@@ -1,3 +1,8 @@
+# Version 0.3.3
+
+- Add `block_on()`.
+- Use `SMOL_THREADS` environment variable.
+
 # Version 0.3.2
 
 - Reexport `FutureExt`.
