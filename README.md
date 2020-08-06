@@ -17,7 +17,7 @@ A small and fast async runtime.
 
 Connect to an HTTP website, make a GET request, and pipe the response to the standard output:
 
-```rust
+```rust,no_run
 use async_net::TcpStream;
 use smol::{io, prelude::*, Unblock};
 
@@ -75,7 +75,7 @@ The certificate file was generated using
 [minica](https://github.com/jsha/minica) and
 [openssl](https://www.openssl.org/):
 
-```
+```text
 minica --domains localhost -ip-addresses 127.0.0.1 -ca-cert certificate.pem
 openssl pkcs12 -export -out identity.pfx -inkey localhost/key.pem -in localhost/cert.pem
 ```
