@@ -1,3 +1,9 @@
+# Version 0.4.0
+
+- Add `process`, `fs`, `net`, `lock`, `channel` modules.
+- Update all dependencies
+- Remove `smol::run()`.
+
 # Version 0.3.3
 
 - Add `block_on()`.
