@@ -50,7 +50,6 @@ pub use {
     futures_lite::{pin, ready},
 };
 
-// TODO: Mutex::lock_arc() -> ArcMutexGuard, also Mutex::try_lock_arc()
 #[doc(inline)]
 pub use {
     async_channel as channel, async_fs as fs, async_lock as lock, async_net as net,
