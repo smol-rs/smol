@@ -17,7 +17,7 @@ use std::net::TcpStream;
 use smol::{future, io, Async, Unblock};
 
 fn main() -> io::Result<()> {
-    smol::run(async {
+    smol::block_on(async {
         // Connect to the server and create async stdin and stdout.
         let stream = Async::<TcpStream>::connect(([127, 0, 0, 1], 6000)).await?;
         let stdin = Unblock::new(std::io::stdin());

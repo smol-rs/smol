@@ -32,7 +32,7 @@ fn main() -> std::io::Result<()> {
         }
     }
 
-    smol::run(async {
+    smol::block_on(async {
         // Watch events in the current directory.
         let mut inotify = Async::new(Inotify::init()?)?;
         inotify.get_mut().add_watch(".", WatchMask::ALL_EVENTS)?;

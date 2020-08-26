@@ -12,7 +12,7 @@ fn main() -> std::io::Result<()> {
 
     use smol::{prelude::*, Async};
 
-    smol::run(async {
+    smol::block_on(async {
         // Create a Unix stream that receives a byte on each signal occurrence.
         let (a, mut b) = Async::<UnixStream>::pair()?;
         signal_hook::pipe::register(signal_hook::SIGINT, a)?;

@@ -20,7 +20,7 @@ use anyhow::{Context as _, Result};
 use async_native_tls::{Identity, TlsAcceptor, TlsStream};
 use async_tungstenite::WebSocketStream;
 use futures::sink::{Sink, SinkExt};
-use smol::{future, prelude::*, Async, Task};
+use smol::{future, prelude::*, Async};
 use tungstenite::Message;
 
 /// Echoes messages from the client back to it.
@@ -46,13 +46,13 @@ async fn listen(listener: Async<TcpListener>, tls: Option<TlsAcceptor>) -> Resul
         match &tls {
             None => {
                 let stream = WsStream::Plain(async_tungstenite::accept_async(stream).await?);
-                Task::spawn(echo(stream)).detach();
+                smol::spawn(echo(stream)).detach();
             }
             Some(tls) => {
                 // In case of WSS, establish a secure TLS connection first.
                 let stream = tls.accept(stream).await?;
                 let stream = WsStream::Tls(async_tungstenite::accept_async(stream).await?);
-                Task::spawn(echo(stream)).detach();
+                smol::spawn(echo(stream)).detach();
             }
         }
     }
@@ -64,13 +64,13 @@ fn main() -> Result<()> {
     let tls = TlsAcceptor::from(native_tls::TlsAcceptor::new(identity)?);
 
     // Start WS and WSS servers.
-    smol::run(async {
+    smol::block_on(async {
         let ws = listen(Async::<TcpListener>::bind(([127, 0, 0, 1], 9000))?, None);
         let wss = listen(
             Async::<TcpListener>::bind(([127, 0, 0, 1], 9001))?,
             Some(tls),
         );
-        future::try_join(ws, wss).await?;
+        future::try_zip(ws, wss).await?;
         Ok(())
     })
 }

@@ -24,7 +24,7 @@ fn main() -> Result<()> {
     builder.add_root_certificate(Certificate::from_pem(include_bytes!("certificate.pem"))?);
     let tls = TlsConnector::from(builder);
 
-    smol::run(async {
+    smol::block_on(async {
         // Create async stdin and stdout handles.
         let stdin = Unblock::new(std::io::stdin());
         let mut stdout = Unblock::new(std::io::stdout());
@@ -37,7 +37,7 @@ fn main() -> Result<()> {
 
         // Pipe messages from stdin to the server and pipe messages from the server to stdout.
         let stream = async_dup::Mutex::new(stream);
-        future::try_join(
+        future::try_zip(
             io::copy(stdin, &mut &stream),
             io::copy(&stream, &mut stdout),
         )

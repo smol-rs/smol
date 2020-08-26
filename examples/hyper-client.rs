@@ -15,7 +15,7 @@ use anyhow::{bail, Context as _, Error, Result};
 use async_native_tls::TlsStream;
 use http::Uri;
 use hyper::{Body, Client, Request, Response};
-use smol::{io, prelude::*, Async, Task};
+use smol::{io, prelude::*, Async};
 
 /// Sends a request and fetches the response.
 async fn fetch(req: Request<Body>) -> Result<Response<Body>> {
@@ -27,7 +27,7 @@ async fn fetch(req: Request<Body>) -> Result<Response<Body>> {
 }
 
 fn main() -> Result<()> {
-    smol::run(async {
+    smol::block_on(async {
         // Create a request.
         let req = Request::get("https://www.rust-lang.org").body(Body::empty())?;
 
@@ -55,7 +55,7 @@ struct SmolExecutor;
 
 impl<F: Future + Send + 'static> hyper::rt::Executor<F> for SmolExecutor {
     fn execute(&self, fut: F) {
-        Task::spawn(async { drop(fut.await) }).detach();
+        smol::spawn(async { drop(fut.await) }).detach();
     }
 }
 
@@ -81,7 +81,8 @@ impl hyper::service::Service<Uri> for SmolConnector {
                     let socket_addr = {
                         let host = host.to_string();
                         let port = uri.port_u16().unwrap_or(80);
-                        smol::unblock!((host.as_str(), port).to_socket_addrs())?
+                        smol::unblock(move || (host.as_str(), port).to_socket_addrs())
+                            .await?
                             .next()
                             .context("cannot resolve address")?
                     };
@@ -93,7 +94,8 @@ impl hyper::service::Service<Uri> for SmolConnector {
                     let socket_addr = {
                         let host = host.to_string();
                         let port = uri.port_u16().unwrap_or(443);
-                        smol::unblock!((host.as_str(), port).to_socket_addrs())?
+                        smol::unblock(move || (host.as_str(), port).to_socket_addrs())
+                            .await?
                             .next()
                             .context("cannot resolve address")?
                     };

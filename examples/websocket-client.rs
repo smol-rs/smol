@@ -35,7 +35,8 @@ async fn connect(addr: &str, tls: TlsConnector) -> Result<(WsStream, Response)> 
     // Resolve the address.
     let socket_addr = {
         let host = host.clone();
-        smol::unblock!((host.as_str(), port).to_socket_addrs())?
+        smol::unblock(move || (host.as_str(), port).to_socket_addrs())
+            .await?
             .next()
             .context("cannot resolve address")?
     };
@@ -64,7 +65,7 @@ fn main() -> Result<()> {
     builder.add_root_certificate(Certificate::from_pem(include_bytes!("certificate.pem"))?);
     let tls = TlsConnector::from(builder);
 
-    smol::run(async {
+    smol::block_on(async {
         // Connect to the server.
         let (mut stream, resp) = connect("wss://127.0.0.1:9001", tls).await?;
         dbg!(resp);

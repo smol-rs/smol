@@ -5,12 +5,11 @@
 //! Connect to an HTTP website, make a GET request, and pipe the response to the standard output:
 //!
 //! ```
-//! use async_net::TcpStream;
-//! use smol::{io, prelude::*, Unblock};
+//! use smol::{io, net, prelude::*, Unblock};
 //!
 //! fn main() -> io::Result<()> {
-//!     smol::run(async {
-//!         let mut stream = TcpStream::connect("example.com:80").await?;
+//!     smol::block_on(async {
+//!         let mut stream = net::TcpStream::connect("example.com:80").await?;
 //!         let req = b"GET / HTTP/1.1\r\nHost: example.com\r\nConnection: close\r\n\r\n";
 //!         stream.write_all(req).await?;
 //!
@@ -21,32 +20,14 @@
 //! }
 //! ```
 //!
-//! This example uses [`async-net`] for networking, but you can also use the primitive [`Async`]
-//! type. See the [full code][get-request].
+//! This example uses the [`net`] module for networking, but you can also use the primitive
+//! [`Async`] type. See the [full code][get-request].
 //!
 //! Look inside the [examples] directory for more.
 //!
 //! [`async-net`]: https://docs.rs/async-net
 //! [examples]: https://github.com/stjepang/smol/tree/master/examples
 //! [get-request]: https://github.com/stjepang/smol/blob/master/examples/get-request.rs
-//!
-//! # Compatibility
-//!
-//! All async libraries work with smol out of the box.
-//!
-//! The only exception is [tokio], which is traditionally incompatible with [futures] and crashes
-//! when called from other executors. Fortunately, there are ways around it.
-//!
-//! Enable the `tokio02` feature flag and [`smol::run()`][`crate::run()`] will create a minimal
-//! tokio runtime for its libraries:
-//!
-//! ```toml
-//! [dependencies]
-//! smol = { version = "0.3", features = ["tokio02"] }
-//! ```
-//!
-//! [tokio]: https://docs.rs/tokio
-//! [futures]: https://docs.rs/futures
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs, missing_debug_implementations, rust_2018_idioms)]
@@ -54,31 +35,38 @@
 #[cfg(doctest)]
 doc_comment::doctest!("../README.md");
 
-use std::env;
 use std::future::Future;
+use std::panic::catch_unwind;
+use std::thread;
 
-use async_executor::{Executor, LocalExecutor};
-use cfg_if::cfg_if;
-use easy_parallel::Parallel;
+use once_cell::sync::Lazy;
 
 #[doc(inline)]
 pub use {
-    async_executor::Task,
-    async_io::Async,
-    async_io::Timer,
+    async_executor::{Executor, LocalExecutor, Task},
+    async_io::{block_on, Async, Timer},
     blocking::{unblock, Unblock},
     futures_lite::{future, io, stream},
     futures_lite::{pin, ready},
 };
 
-/// Async traits and their extensions.
-///
-/// # Examples
-///
-/// ```
-/// use smol::prelude::*;
-/// ```
+// TODO: Mutex::lock_arc() -> ArcMutexGuard, also Mutex::try_lock_arc()
+#[doc(inline)]
+pub use {
+    async_channel as channel, async_fs as fs, async_lock as lock, async_net as net,
+    async_process as process,
+};
+
 pub mod prelude {
+    //! Traits [`Future`], [`AsyncBufRead`], [`AsyncRead`], [`AsyncSeek`], [`AsyncWrite`], and
+    //! their extensions.
+    //!
+    //! # Examples
+    //!
+    //! ```
+    //! use smol::prelude::*;
+    //! ```
+
     #[doc(no_inline)]
     pub use futures_lite::{
         future::{Future, FutureExt},
@@ -90,111 +78,35 @@ pub mod prelude {
     };
 }
 
-/// Starts a thread-local executor and then runs the future.
+/// Spawns a task onto the single-threaded global executor.
+///
+/// There is a single-threaded global executor that gets lazily initialized on first use. It is
+/// advisable to use it in tests or small programs, but it is otherwise a better idea to define
+/// your own [`Executor`]s.
 ///
 /// # Examples
 ///
 /// ```
-/// use smol::Task;
+/// let task = smol::spawn(async {
+///     1 + 2
+/// });
 ///
 /// smol::block_on(async {
-///     let task = Task::local(async {
-///         println!("Hello world");
-///     });
-///     task.await;
-/// })
+///     assert_eq!(task.await, 3);
+/// });
 /// ```
-pub fn block_on<T>(future: impl Future<Output = T>) -> T {
-    let local_ex = LocalExecutor::new();
-
-    cfg_if! {
-        if #[cfg(not(feature = "tokio02"))] {
-            local_ex.run(future)
-        } else {
-            // A minimal tokio runtime to support libraries depending on it.
-            let mut rt = tokio::runtime::Builder::new()
-                .enable_all()
-                .basic_scheduler()
-                .build()
-                .expect("cannot start tokio runtime");
-            let handle = rt.handle().clone();
-
-            // A channel that coordinates shutdown when the main future completes.
-            let (trigger, shutdown) = async_channel::unbounded::<()>();
-            let future = async move {
-                let _trigger = trigger; // Dropped at the end of this async block.
-                future.await
-            };
-
-            Parallel::new()
-                .add(|| rt.block_on(shutdown.recv()))
-                .finish(|| handle.enter(|| local_ex.run(future)))
-                .1
-        }
-    }
-}
-
-/// Starts a thread-local and a multi-threaded executor and then runs the future.
-///
-/// This function runs two executors at the same time:
-///
-/// 1. The current thread runs a [`LocalExecutor`] and the main `future` on it.
-/// 2. A thread pool runs an [`Executor`] until the main `future` completes.
-///
-/// The number of spawned threads matches the number of logical CPU cores on the system, but it can
-/// be overriden by setting the `SMOL_THREADS` environment variable.
-///
-/// # Examples
-///
-/// ```
-/// use smol::Task;
-///
-/// smol::run(async {
-///     let task = Task::spawn(async {
-///         println!("Hello world");
-///     });
-///     task.await;
-/// })
-/// ```
-pub fn run<T>(future: impl Future<Output = T>) -> T {
-    // A channel that coordinates shutdown when the main future completes.
-    let (trigger, shutdown) = async_channel::unbounded::<()>();
-    let future = async move {
-        let _trigger = trigger; // Dropped at the end of this async block.
-        future.await
-    };
-
-    let num_threads = {
-        // Parse SMOL_THREADS or use the number of CPU cores on the system.
-        env::var("SMOL_THREADS")
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or_else(|| num_cpus::get())
-    };
-
-    let ex = Executor::new();
-    let local_ex = LocalExecutor::new();
-
-    cfg_if! {
-        if #[cfg(not(feature = "tokio02"))] {
-            Parallel::new()
-                .each(0..num_threads, |_| ex.run(shutdown.recv()))
-                .finish(|| ex.enter(|| local_ex.run(future)))
-                .1
-        } else {
-            // A minimal tokio runtime to support libraries depending on it.
-            let mut rt = tokio::runtime::Builder::new()
-                .enable_all()
-                .basic_scheduler()
-                .build()
-                .expect("cannot start tokio runtime");
-            let handle = rt.handle().clone();
-
-            Parallel::new()
-                .add(|| ex.enter(|| rt.block_on(shutdown.recv())))
-                .each(0..num_threads, |_| handle.enter(|| ex.run(shutdown.recv())))
-                .finish(|| handle.enter(|| ex.enter(|| local_ex.run(future))))
-                .1
-        }
-    }
+pub fn spawn<T: Send + 'static>(future: impl Future<Output = T> + Send + 'static) -> Task<T> {
+    static GLOBAL: Lazy<Executor> = Lazy::new(|| {
+        thread::Builder::new()
+            .name("smol".to_string())
+            .spawn(|| {
+                loop {
+                    let _ =
+                        catch_unwind(|| async_io::block_on(GLOBAL.run(future::pending::<()>())));
+                }
+            })
+            .unwrap();
+        Executor::new()
+    });
+    GLOBAL.spawn(future)
 }

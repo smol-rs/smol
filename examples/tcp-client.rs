@@ -17,7 +17,7 @@ use std::net::TcpStream;
 use smol::{future, io, Async, Unblock};
 
 fn main() -> io::Result<()> {
-    smol::run(async {
+    smol::block_on(async {
         // Create async stdin and stdout handles.
         let stdin = Unblock::new(std::io::stdin());
         let mut stdout = Unblock::new(std::io::stdout());
@@ -28,7 +28,7 @@ fn main() -> io::Result<()> {
         println!("Type a message and hit enter!\n");
 
         // Pipe messages from stdin to the server and pipe messages from the server to stdout.
-        future::try_join(
+        future::try_zip(
             io::copy(stdin, &mut &stream),
             io::copy(&stream, &mut stdout),
         )

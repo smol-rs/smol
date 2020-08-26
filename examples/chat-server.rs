@@ -17,7 +17,7 @@ use std::net::{SocketAddr, TcpListener, TcpStream};
 
 use async_channel::{bounded, Receiver, Sender};
 use async_dup::Arc;
-use smol::{io, prelude::*, Async, Task};
+use smol::{io, prelude::*, Async};
 
 /// An event on the chat server.
 enum Event {
@@ -76,7 +76,7 @@ async fn read_messages(sender: Sender<Event>, client: Arc<Async<TcpStream>>) -> 
 }
 
 fn main() -> io::Result<()> {
-    smol::run(async {
+    smol::block_on(async {
         // Create a listener for incoming client connections.
         let listener = Async::<TcpListener>::bind(([127, 0, 0, 1], 6000))?;
 
@@ -86,7 +86,7 @@ fn main() -> io::Result<()> {
 
         // Spawn a background task that dispatches events to clients.
         let (sender, receiver) = bounded(100);
-        Task::spawn(dispatch(receiver)).detach();
+        smol::spawn(dispatch(receiver)).detach();
 
         loop {
             // Accept the next connection.
@@ -95,7 +95,7 @@ fn main() -> io::Result<()> {
             let sender = sender.clone();
 
             // Spawn a background task reading messages from the client.
-            Task::spawn(async move {
+            smol::spawn(async move {
                 // Client starts with a `Join` event.
                 let _ = sender.send(Event::Join(addr, client.clone())).await;
 

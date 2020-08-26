@@ -10,9 +10,9 @@ use smol::{io, prelude::*, Async, Unblock};
 use std::net::{TcpStream, ToSocketAddrs};
 
 fn main() -> io::Result<()> {
-    smol::run(async {
+    smol::block_on(async {
         // Connect to http://example.com
-        let mut addrs = smol::unblock!(("example.com", 80).to_socket_addrs())?;
+        let mut addrs = smol::unblock(move || ("example.com", 80).to_socket_addrs()).await?;
         let addr = addrs.next().unwrap();
         let mut stream = Async::<TcpStream>::connect(addr).await?;
 

@@ -18,7 +18,7 @@ use std::net::TcpListener;
 use anyhow::Result;
 use async_native_tls::{Identity, TlsAcceptor};
 use http_types::{Request, Response, StatusCode};
-use smol::{future, Async, Task};
+use smol::{future, Async};
 
 /// Serves a request and returns a response.
 async fn serve(req: Request) -> http_types::Result<Response> {
@@ -47,7 +47,7 @@ async fn listen(listener: Async<TcpListener>, tls: Option<TlsAcceptor>) -> Resul
         let task = match &tls {
             None => {
                 let stream = async_dup::Arc::new(stream);
-                Task::spawn(async move {
+                smol::spawn(async move {
                     if let Err(err) = async_h1::accept(stream, serve).await {
                         println!("Connection error: {:#?}", err);
                     }
@@ -58,7 +58,7 @@ async fn listen(listener: Async<TcpListener>, tls: Option<TlsAcceptor>) -> Resul
                 match tls.accept(stream).await {
                     Ok(stream) => {
                         let stream = async_dup::Arc::new(async_dup::Mutex::new(stream));
-                        Task::spawn(async move {
+                        smol::spawn(async move {
                             if let Err(err) = async_h1::accept(stream, serve).await {
                                 println!("Connection error: {:#?}", err);
                             }
@@ -83,13 +83,13 @@ fn main() -> Result<()> {
     let tls = TlsAcceptor::from(native_tls::TlsAcceptor::new(identity)?);
 
     // Start HTTP and HTTPS servers.
-    smol::run(async {
+    smol::block_on(async {
         let http = listen(Async::<TcpListener>::bind(([127, 0, 0, 1], 8000))?, None);
         let https = listen(
             Async::<TcpListener>::bind(([127, 0, 0, 1], 8001))?,
             Some(tls),
         );
-        future::try_join(http, https).await?;
+        future::try_zip(http, https).await?;
         Ok(())
     })
 }

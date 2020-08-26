@@ -35,7 +35,7 @@ fn main() -> std::io::Result<()> {
         Ok(())
     }
 
-    smol::run(async {
+    smol::block_on(async {
         let start = Instant::now();
         println!("Sleeping...");
 

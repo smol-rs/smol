@@ -25,7 +25,8 @@ async fn fetch(req: Request) -> Result<Response> {
     // Connect to the host.
     let socket_addr = {
         let host = host.clone();
-        smol::unblock!((host.as_str(), port).to_socket_addrs())?
+        smol::unblock(move || (host.as_str(), port).to_socket_addrs())
+            .await?
             .next()
             .context("cannot resolve address")?
     };
@@ -45,7 +46,7 @@ async fn fetch(req: Request) -> Result<Response> {
 }
 
 fn main() -> Result<()> {
-    smol::run(async {
+    smol::block_on(async {
         // Create a request.
         let addr = "https://www.rust-lang.org";
         let req = Request::new(Method::Get, Url::parse(addr)?);

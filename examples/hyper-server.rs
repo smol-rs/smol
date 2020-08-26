@@ -21,7 +21,7 @@ use anyhow::{Error, Result};
 use async_native_tls::{Identity, TlsAcceptor, TlsStream};
 use hyper::service::{make_service_fn, service_fn};
 use hyper::{Body, Request, Response, Server};
-use smol::{future, io, prelude::*, Async, Task};
+use smol::{future, io, prelude::*, Async};
 
 /// Serves a request and returns a response.
 async fn serve(req: Request<Body>, host: String) -> Result<Response<Body>> {
@@ -56,13 +56,13 @@ fn main() -> Result<()> {
     let tls = TlsAcceptor::from(native_tls::TlsAcceptor::new(identity)?);
 
     // Start HTTP and HTTPS servers.
-    smol::run(async {
+    smol::block_on(async {
         let http = listen(Async::<TcpListener>::bind(([127, 0, 0, 1], 8000))?, None);
         let https = listen(
             Async::<TcpListener>::bind(([127, 0, 0, 1], 8001))?,
             Some(tls),
         );
-        future::try_join(http, https).await?;
+        future::try_zip(http, https).await?;
         Ok(())
     })
 }
@@ -73,7 +73,7 @@ struct SmolExecutor;
 
 impl<F: Future + Send + 'static> hyper::rt::Executor<F> for SmolExecutor {
     fn execute(&self, fut: F) {
-        Task::spawn(async { drop(fut.await) }).detach();
+        smol::spawn(async { drop(fut.await) }).detach();
     }
 }
 

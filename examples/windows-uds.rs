@@ -10,7 +10,7 @@
 fn main() -> std::io::Result<()> {
     use std::path::PathBuf;
 
-    use smol::{io, prelude::*, Async, Task, Unblock};
+    use smol::{io, prelude::*, Async, Unblock};
     use tempfile::tempdir;
     use uds_windows::{UnixListener, UnixStream};
 
@@ -28,13 +28,13 @@ fn main() -> std::io::Result<()> {
     let dir = tempdir()?;
     let path = dir.path().join("socket");
 
-    smol::run(async {
+    smol::block_on(async {
         // Create a listener.
         let listener = Async::new(UnixListener::bind(&path)?)?;
         println!("Listening on {:?}", listener.get_ref().local_addr()?);
 
         // Spawn a client task.
-        let task = Task::spawn(client(path));
+        let task = smol::spawn(client(path));
 
         // Accept the client.
         let (stream, _) = listener.read_with(|l| l.accept()).await?;

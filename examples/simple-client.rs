@@ -33,7 +33,8 @@ async fn fetch(addr: &str) -> Result<Vec<u8>> {
     // Connect to the host.
     let socket_addr = {
         let host = host.clone();
-        smol::unblock!((host.as_str(), port).to_socket_addrs())?
+        smol::unblock(move || (host.as_str(), port).to_socket_addrs())
+            .await?
             .next()
             .context("cannot resolve address")?
     };
@@ -59,7 +60,7 @@ async fn fetch(addr: &str) -> Result<Vec<u8>> {
 }
 
 fn main() -> Result<()> {
-    smol::run(async {
+    smol::block_on(async {
         let addr = "https://www.rust-lang.org";
         let resp = fetch(addr).await?;
         println!("{}", String::from_utf8_lossy(&resp));

@@ -14,7 +14,7 @@
 
 use std::net::{TcpListener, TcpStream};
 
-use smol::{io, Async, Task};
+use smol::{io, Async};
 
 /// Echoes messages from the client back to it.
 async fn echo(stream: Async<TcpStream>) -> io::Result<()> {
@@ -23,7 +23,7 @@ async fn echo(stream: Async<TcpStream>) -> io::Result<()> {
 }
 
 fn main() -> io::Result<()> {
-    smol::run(async {
+    smol::block_on(async {
         // Create a listener.
         let listener = Async::<TcpListener>::bind(([127, 0, 0, 1], 7000))?;
         println!("Listening on {}", listener.get_ref().local_addr()?);
@@ -35,7 +35,7 @@ fn main() -> io::Result<()> {
             println!("Accepted client: {}", peer_addr);
 
             // Spawn a task that echoes messages from the client back to it.
-            Task::spawn(echo(stream)).detach();
+            smol::spawn(echo(stream)).detach();
         }
     })
 }
