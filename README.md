@@ -18,12 +18,11 @@ A small and fast async runtime.
 Connect to an HTTP website, make a GET request, and pipe the response to the standard output:
 
 ```rust,no_run
-use async_net::TcpStream;
-use smol::{io, prelude::*, Unblock};
+use smol::{io, net, prelude::*, Unblock};
 
 fn main() -> io::Result<()> {
-    smol::run(async {
-        let mut stream = TcpStream::connect("example.com:80").await?;
+    smol::block_on(async {
+        let mut stream = net::TcpStream::connect("example.com:80").await?;
         let req = b"GET / HTTP/1.1\r\nHost: example.com\r\nConnection: close\r\n\r\n";
         stream.write_all(req).await?;
 
@@ -34,32 +33,14 @@ fn main() -> io::Result<()> {
 }
 ```
 
-This example uses [`async-net`] for networking, but you can also use the primitive `Async`
-type. See the [full code][get-request].
+This example uses the `net` module for networking, but you can also use the primitive
+`Async` type. See the [full code][get-request].
 
 Look inside the [examples] directory for more.
 
 [`async-net`]: https://docs.rs/async-net
 [examples]: https://github.com/stjepang/smol/tree/master/examples
 [get-request]: https://github.com/stjepang/smol/blob/master/examples/get-request.rs
-
-## Compatibility
-
-All async libraries work with smol out of the box.
-
-The only exception is [tokio], which is traditionally incompatible with [futures] and crashes
-when called from other executors. Fortunately, there are ways around it.
-
-Enable the `tokio02` feature flag and `smol::run()` will create a minimal
-tokio runtime for its libraries:
-
-```toml
-[dependencies]
-smol = { version = "0.3", features = ["tokio02"] }
-```
-
-[tokio]: https://docs.rs/tokio
-[futures]: https://docs.rs/futures
 
 ## TLS certificate
 
@@ -75,7 +56,7 @@ The certificate file was generated using
 [minica](https://github.com/jsha/minica) and
 [openssl](https://www.openssl.org/):
 
-```text
+```
 minica --domains localhost -ip-addresses 127.0.0.1 -ca-cert certificate.pem
 openssl pkcs12 -export -out identity.pfx -inkey localhost/key.pem -in localhost/cert.pem
 ```
