@@ -1,3 +1,7 @@
+# Version 0.4.1
+
+- Bring back `SMOL_THREADS`.
+
 # Version 0.4.0
 
 - Add `process`, `fs`, `net`, `lock`, `channel` modules.
