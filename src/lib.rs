@@ -77,13 +77,14 @@ pub mod prelude {
     };
 }
 
-/// Spawns a task onto the single-threaded global executor.
+/// Spawns a task onto the global executor (single-threaded by default).
 ///
-/// There is a (single-threaded by default) global executor that gets lazily initialized on first use.
-/// It is advisable to use it in tests or small programs, but it is otherwise a better idea to define
-/// your own [`Executor`]s.
-/// You can configure the number of threads of the global executor using the `SMOL_THREADS` environment
-/// variable.
+/// There is a global executor that gets lazily initialized on first use. It is included in this
+/// library for convenience when writing unit tests and small programs, but it is otherwise
+/// more advisable to create your own [`Executor`].
+///
+/// By default, the global executor is run by a single background thread, but you can also
+/// configure the number of threads by setting the `SMOL_THREADS` environment variable.
 ///
 /// # Examples
 ///
@@ -99,22 +100,28 @@ pub mod prelude {
 pub fn spawn<T: Send + 'static>(future: impl Future<Output = T> + Send + 'static) -> Task<T> {
     static GLOBAL: Lazy<Executor> = Lazy::new(|| {
         let num_threads = {
-            // Parse SMOL_THREADS or run a monothreaded executor.
+            // Parse SMOL_THREADS or default to 1.
             std::env::var("SMOL_THREADS")
                 .ok()
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(1)
         };
+
         for n in 1..=num_threads {
             thread::Builder::new()
                 .name(format!("smol-{}", n))
-                .spawn(|| loop {
-                    let _ =
-                        catch_unwind(|| async_io::block_on(GLOBAL.run(future::pending::<()>())));
+                .spawn(|| {
+                    loop {
+                        let _ = catch_unwind(|| {
+                            async_io::block_on(GLOBAL.run(future::pending::<()>()))
+                        });
+                    }
                 })
                 .expect("cannot spawn executor thread");
         }
+
         Executor::new()
     });
+
     GLOBAL.spawn(future)
 }
