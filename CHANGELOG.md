@@ -1,3 +1,7 @@
+# Version 0.4.2
+
+- Update dependencies.
+
 # Version 0.4.1
 
 - Bring back `SMOL_THREADS`.
