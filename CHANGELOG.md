@@ -1,3 +1,7 @@
+# Version 0.4.3
+
+- More docs.
+
 # Version 0.4.2
 
 - Update dependencies.
