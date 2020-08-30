@@ -13,6 +13,11 @@ https://discord.gg/x6m5Vvt)
 
 A small and fast async runtime.
 
+This crate simply re-exports other smaller async crates (see the source).
+
+To use tokio-based libraries with smol, apply the [`async-compat`] adapter to futures and I/O
+types.
+
 ## Examples
 
 Connect to an HTTP website, make a GET request, and pipe the response to the standard output:
@@ -33,12 +38,9 @@ fn main() -> io::Result<()> {
 }
 ```
 
-This example uses the `net` module for networking, but you can also use the primitive
-`Async` type. See the [full code][get-request].
+There's a lot more in the [examples] directory.
 
-Look inside the [examples] directory for more.
-
-[`async-net`]: https://docs.rs/async-net
+[`async-compat`]: https://docs.rs/async-compat
 [examples]: https://github.com/stjepang/smol/tree/master/examples
 [get-request]: https://github.com/stjepang/smol/blob/master/examples/get-request.rs
 
