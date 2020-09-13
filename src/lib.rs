@@ -114,9 +114,8 @@ pub fn spawn<T: Send + 'static>(future: impl Future<Output = T> + Send + 'static
                 .name(format!("smol-{}", n))
                 .spawn(|| {
                     loop {
-                        let _ = catch_unwind(|| {
-                            async_io::block_on(GLOBAL.run(future::pending::<()>()))
-                        });
+                        catch_unwind(|| async_io::block_on(GLOBAL.run(future::pending::<()>())))
+                            .ok();
                     }
                 })
                 .expect("cannot spawn executor thread");

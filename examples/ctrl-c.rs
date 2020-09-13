@@ -18,7 +18,7 @@ fn main() {
         println!("Waiting for Ctrl-C...");
 
         // Receive a message that indicates the Ctrl-C signal occurred.
-        let _ = ctrl_c.recv().await;
+        ctrl_c.recv().await.ok();
 
         println!("Done!");
     })

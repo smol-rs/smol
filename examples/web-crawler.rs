@@ -18,7 +18,7 @@ const ROOT: &str = "https://www.rust-lang.org";
 async fn fetch(url: String, sender: Sender<String>) {
     let body = surf::get(&url).recv_string().await;
     let body = body.unwrap_or_default();
-    let _ = sender.send(body).await;
+    sender.send(body).await.ok();
 }
 
 /// Extracts links from a HTML body.

@@ -57,7 +57,7 @@ async fn dispatch(receiver: Receiver<Event>) -> io::Result<()> {
         // Send the event to all active clients.
         for stream in map.values_mut() {
             // Ignore errors because the client might disconnect at any point.
-            let _ = stream.write_all(output.as_bytes()).await;
+            stream.write_all(output.as_bytes()).await.ok();
         }
     }
     Ok(())
@@ -70,7 +70,7 @@ async fn read_messages(sender: Sender<Event>, client: Arc<Async<TcpStream>>) -> 
 
     while let Some(line) = lines.next().await {
         let line = line?;
-        let _ = sender.send(Event::Message(addr, line)).await;
+        sender.send(Event::Message(addr, line)).await.ok();
     }
     Ok(())
 }
@@ -97,13 +97,13 @@ fn main() -> io::Result<()> {
             // Spawn a background task reading messages from the client.
             smol::spawn(async move {
                 // Client starts with a `Join` event.
-                let _ = sender.send(Event::Join(addr, client.clone())).await;
+                sender.send(Event::Join(addr, client.clone())).await.ok();
 
                 // Read messages from the client and ignore I/O errors when the client quits.
-                let _ = read_messages(sender.clone(), client).await;
+                read_messages(sender.clone(), client).await.ok();
 
                 // Client ends with a `Leave` event.
-                let _ = sender.send(Event::Leave(addr)).await;
+                sender.send(Event::Leave(addr)).await.ok();
             })
             .detach();
         }
