@@ -10,7 +10,7 @@ fn main() {
     // Set a handler that sends a message through a channel.
     let (s, ctrl_c) = async_channel::bounded(100);
     let handle = move || {
-        let _ = s.try_send(());
+        s.try_send(()).ok();
     };
     ctrlc::set_handler(handle).unwrap();
 
