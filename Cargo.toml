@@ -1,6 +1,6 @@
 [package]
 name = "smol"
-version = "1.0.0"
+version = "1.0.1"
 authors = ["Stjepan Glavina <stjepang@gmail.com>"]
 edition = "2018"
 description = "A small and fast async runtime"
@@ -14,14 +14,14 @@ readme = "README.md"
 
 [dependencies]
 async-channel = "1.4.2"
-async-executor = "1.0.0"
-async-fs = "1.2.0"
-async-io = "1.0.1"
+async-executor = "1.1.1"
+async-fs = "1.3.0"
+async-io = "1.1.0"
 async-lock = "2.1.2"
-async-net = "1.2.0"
+async-net = "1.3.0"
 async-process = "1.0.0"
 blocking = "1.0.0"
-futures-lite = "1.2.0"
+futures-lite = "1.4.0"
 once_cell = "1.4.1"
 
 [dev-dependencies]
@@ -42,7 +42,7 @@ native-tls = "0.2.4"
 num_cpus = "1.13.0"
 scraper = "0.12.0"
 signal-hook = "0.1.16"
-surf = { version = "2.0.0-alpha.4", default-features = false, features = ["h1-client"] }
+surf = { version = "2.0.0-alpha.5", default-features = false, features = ["h1-client"] }
 tempfile = "3.1.0"
 tide = "0.13.0"
 tokio = { version = "0.2.22", default-features = false, features = ["rt-threaded"] }

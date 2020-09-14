@@ -1,6 +1,10 @@
-# Version 0.4.3
+# Version 1.0.1
 
-- More docs.
+- Update dependencies.
+
+# Version 1.0.0
+
+- Stabilize.
 
 # Version 0.4.2
 
