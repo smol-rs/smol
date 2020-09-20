@@ -19,7 +19,7 @@
 //!         stream.write_all(req).await?;
 //!
 //!         let mut stdout = Unblock::new(std::io::stdout());
-//!         io::copy(&stream, &mut stdout).await?;
+//!         io::copy(stream, &mut stdout).await?;
 //!         Ok(())
 //!     })
 //! }
@@ -100,7 +100,7 @@ pub mod prelude {
 /// });
 /// ```
 pub fn spawn<T: Send + 'static>(future: impl Future<Output = T> + Send + 'static) -> Task<T> {
-    static GLOBAL: Lazy<Executor> = Lazy::new(|| {
+    static GLOBAL: Lazy<Executor<'_>> = Lazy::new(|| {
         let num_threads = {
             // Parse SMOL_THREADS or default to 1.
             std::env::var("SMOL_THREADS")

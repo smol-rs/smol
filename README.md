@@ -32,7 +32,7 @@ fn main() -> io::Result<()> {
         stream.write_all(req).await?;
 
         let mut stdout = Unblock::new(std::io::stdout());
-        io::copy(&stream, &mut stdout).await?;
+        io::copy(stream, &mut stdout).await?;
         Ok(())
     })
 }
