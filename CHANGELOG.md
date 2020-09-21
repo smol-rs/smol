@@ -1,3 +1,7 @@
+# Version 1.2.0
+
+- Update all dependencies.
+
 # Version 1.1.0
 
 - Update `async-executor`.
