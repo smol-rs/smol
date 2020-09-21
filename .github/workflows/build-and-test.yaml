@@ -13,7 +13,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
-        rust: [nightly, beta, stable, 1.39.0]
+        rust: [nightly, beta, stable, 1.40.0]
     steps:
       - uses: actions/checkout@v2
       
@@ -39,11 +39,10 @@ jobs:
           args: --all --bins --all-features
 
       - name: Run cargo check
-        if: startsWith(matrix.rust, '1.39.0') == false
         uses: actions-rs/cargo@v1
         with:
           command: check
-          args: --all --benches --bins --examples --tests --all-features
+          args: --all --bins --examples --tests --all-features
 
       - name: Run cargo check (without dev-dependencies to catch missing feature flags)
         if: startsWith(matrix.rust, 'nightly')
@@ -53,7 +52,6 @@ jobs:
           args: -Z features=dev_dep
 
       - name: Run cargo test
-        if: startsWith(matrix.rust, '1.39.0') == false
         uses: actions-rs/cargo@v1
         with:
           command: test
