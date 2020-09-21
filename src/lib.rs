@@ -59,8 +59,8 @@ pub use {
 };
 
 pub mod prelude {
-    //! Traits [`Future`], [`AsyncBufRead`], [`AsyncRead`], [`AsyncSeek`], [`AsyncWrite`], and
-    //! their extensions.
+    //! Traits [`Future`], [`Stream`], [`AsyncRead`], [`AsyncWrite`], [`AsyncBufRead`],
+    //! [`AsyncSeek`], and their extensions.
     //!
     //! # Examples
     //!
