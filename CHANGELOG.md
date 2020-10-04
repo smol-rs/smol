@@ -1,3 +1,7 @@
+# Version 1.2.3
+
+- Bump version for docs.rs to pick up latest dependencies.
+
 # Version 1.2.2
 
 - Bump version for docs.rs to pick up latest dependencies.
