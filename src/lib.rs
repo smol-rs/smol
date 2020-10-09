@@ -37,19 +37,12 @@
 #[cfg(doctest)]
 doc_comment::doctest!("../README.md");
 
-use std::future::Future;
-use std::panic::catch_unwind;
-use std::thread;
-
-use once_cell::sync::Lazy;
-
 #[doc(inline)]
 pub use {
     async_executor::{Executor, LocalExecutor, Task},
     async_io::{block_on, Async, Timer},
     blocking::{unblock, Unblock},
-    futures_lite::{future, io, stream},
-    futures_lite::{pin, ready},
+    futures_lite::{future, io, pin, prelude, ready, stream},
 };
 
 #[doc(inline)]
@@ -58,71 +51,5 @@ pub use {
     async_process as process,
 };
 
-pub mod prelude {
-    //! Traits [`Future`], [`Stream`], [`AsyncRead`], [`AsyncWrite`], [`AsyncBufRead`],
-    //! [`AsyncSeek`], and their extensions.
-    //!
-    //! # Examples
-    //!
-    //! ```
-    //! use smol::prelude::*;
-    //! ```
-
-    #[doc(no_inline)]
-    pub use futures_lite::{
-        future::{Future, FutureExt},
-        io::{AsyncBufRead, AsyncBufReadExt},
-        io::{AsyncRead, AsyncReadExt},
-        io::{AsyncSeek, AsyncSeekExt},
-        io::{AsyncWrite, AsyncWriteExt},
-        stream::{Stream, StreamExt},
-    };
-}
-
-/// Spawns a task onto the global executor (single-threaded by default).
-///
-/// There is a global executor that gets lazily initialized on first use. It is included in this
-/// library for convenience when writing unit tests and small programs, but it is otherwise
-/// more advisable to create your own [`Executor`].
-///
-/// By default, the global executor is run by a single background thread, but you can also
-/// configure the number of threads by setting the `SMOL_THREADS` environment variable.
-///
-/// # Examples
-///
-/// ```
-/// let task = smol::spawn(async {
-///     1 + 2
-/// });
-///
-/// smol::block_on(async {
-///     assert_eq!(task.await, 3);
-/// });
-/// ```
-pub fn spawn<T: Send + 'static>(future: impl Future<Output = T> + Send + 'static) -> Task<T> {
-    static GLOBAL: Lazy<Executor<'_>> = Lazy::new(|| {
-        let num_threads = {
-            // Parse SMOL_THREADS or default to 1.
-            std::env::var("SMOL_THREADS")
-                .ok()
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(1)
-        };
-
-        for n in 1..=num_threads {
-            thread::Builder::new()
-                .name(format!("smol-{}", n))
-                .spawn(|| {
-                    loop {
-                        catch_unwind(|| async_io::block_on(GLOBAL.run(future::pending::<()>())))
-                            .ok();
-                    }
-                })
-                .expect("cannot spawn executor thread");
-        }
-
-        Executor::new()
-    });
-
-    GLOBAL.spawn(future)
-}
+mod spawn;
+pub use spawn::spawn;

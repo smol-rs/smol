@@ -17,11 +17,11 @@ async-channel = "1.4.2"
 async-executor = "1.1.0"
 async-fs = "1.3.0"
 async-io = "1.1.2"
-async-lock = "2.1.3"
+async-lock = "2.3.0"
 async-net = "1.4.3"
 async-process = "1.0.0"
 blocking = "1.0.0"
-futures-lite = "1.7.0"
+futures-lite = "1.11.0"
 once_cell = "1.4.1"
 
 [dev-dependencies]
