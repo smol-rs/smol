@@ -44,6 +44,38 @@ There's a lot more in the [examples] directory.
 [examples]: https://github.com/stjepang/smol/tree/master/examples
 [get-request]: https://github.com/stjepang/smol/blob/master/examples/get-request.rs
 
+## Subcrates
+
+- [async-channel] - Multi-producer multi-consumer channels
+- [async-executor] - Composable async executors
+- [async-fs] - Async filesystem primitives
+- [async-io] - Async adapter for I/O types, also timers
+- [async-lock] - Async locks (barrier, mutex, reader-writer lock, semaphore)
+- [async-net] - Async networking primitives (TCP/UDP/Unix)
+- [async-process] - Async interface for working with processes
+- [async-task] - Task abstraction for building executors
+- [blocking] - A thread pool for blocking I/O
+- [futures-lite] - A lighter fork of [futures]
+- [polling] - Portable interface to epoll, kqueue, event ports, and wepoll
+
+[async-io]: https://github.com/stjepang/async-io
+[polling]: https://github.com/stjepang/polling
+[nb-connect]: https://github.com/stjepang/nb-connect
+[async-executor]: https://github.com/stjepang/async-executor
+[async-task]: https://github.com/stjepang/async-task
+[blocking]: https://github.com/stjepang/blocking
+[futures-lite]: https://github.com/stjepang/futures-lite
+[smol]: https://github.com/stjepang/smol
+[async-net]: https://github.com/stjepang/async-net
+[async-process]: https://github.com/stjepang/async-process
+[async-fs]: https://github.com/stjepang/async-fs
+[async-channel]: https://github.com/stjepang/async-channel
+[concurrent-queue]: https://github.com/stjepang/concurrent-queue
+[event-listener]: https://github.com/stjepang/event-listener
+[async-lock]: https://github.com/stjepang/async-lock
+[fastrand]: https://github.com/stjepang/fastrand
+[futures]: https://github.com/rust-lang/futures-rs
+
 ## TLS certificate
 
 Some code examples are using TLS for authentication. The repository
