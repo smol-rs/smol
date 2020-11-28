@@ -13,7 +13,7 @@ jobs:
       - uses: actions/checkout@v2
       
       - name: Set current week of the year in environnement
-        run: echo "::set-env name=CURRENT_WEEK::$(date +%V)"
+        run: echo "CURRENT_WEEK=$(date +%V)" >> $GITHUB_ENV
       
       - uses: actions-rs/audit-check@v1
         with:
