@@ -1,9 +1,9 @@
 # smol
 
-[![Build](https://github.com/stjepang/smol/workflows/Build%20and%20test/badge.svg)](
-https://github.com/stjepang/smol/actions)
+[![Build](https://github.com/smol-rs/smol/workflows/Build%20and%20test/badge.svg)](
+https://github.com/smol-rs/smol/actions)
 [![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](
-https://github.com/stjepang/smol)
+https://github.com/smol-rs/smol)
 [![Cargo](https://img.shields.io/crates/v/smol.svg)](
 https://crates.io/crates/smol)
 [![Documentation](https://docs.rs/smol/badge.svg)](
@@ -41,8 +41,8 @@ fn main() -> io::Result<()> {
 There's a lot more in the [examples] directory.
 
 [`async-compat`]: https://docs.rs/async-compat
-[examples]: https://github.com/stjepang/smol/tree/master/examples
-[get-request]: https://github.com/stjepang/smol/blob/master/examples/get-request.rs
+[examples]: https://github.com/smol-rs/smol/tree/master/examples
+[get-request]: https://github.com/smol-rs/smol/blob/master/examples/get-request.rs
 
 ## Subcrates
 
@@ -58,22 +58,22 @@ There's a lot more in the [examples] directory.
 - [futures-lite] - A lighter fork of [futures]
 - [polling] - Portable interface to epoll, kqueue, event ports, and wepoll
 
-[async-io]: https://github.com/stjepang/async-io
-[polling]: https://github.com/stjepang/polling
-[nb-connect]: https://github.com/stjepang/nb-connect
-[async-executor]: https://github.com/stjepang/async-executor
-[async-task]: https://github.com/stjepang/async-task
-[blocking]: https://github.com/stjepang/blocking
-[futures-lite]: https://github.com/stjepang/futures-lite
-[smol]: https://github.com/stjepang/smol
-[async-net]: https://github.com/stjepang/async-net
-[async-process]: https://github.com/stjepang/async-process
-[async-fs]: https://github.com/stjepang/async-fs
-[async-channel]: https://github.com/stjepang/async-channel
-[concurrent-queue]: https://github.com/stjepang/concurrent-queue
-[event-listener]: https://github.com/stjepang/event-listener
-[async-lock]: https://github.com/stjepang/async-lock
-[fastrand]: https://github.com/stjepang/fastrand
+[async-io]: https://github.com/smol-rs/async-io
+[polling]: https://github.com/smol-rs/polling
+[nb-connect]: https://github.com/smol-rs/nb-connect
+[async-executor]: https://github.com/smol-rs/async-executor
+[async-task]: https://github.com/smol-rs/async-task
+[blocking]: https://github.com/smol-rs/blocking
+[futures-lite]: https://github.com/smol-rs/futures-lite
+[smol]: https://github.com/smol-rs/smol
+[async-net]: https://github.com/smol-rs/async-net
+[async-process]: https://github.com/smol-rs/async-process
+[async-fs]: https://github.com/smol-rs/async-fs
+[async-channel]: https://github.com/smol-rs/async-channel
+[concurrent-queue]: https://github.com/smol-rs/concurrent-queue
+[event-listener]: https://github.com/smol-rs/event-listener
+[async-lock]: https://github.com/smol-rs/async-lock
+[fastrand]: https://github.com/smol-rs/fastrand
 [futures]: https://github.com/rust-lang/futures-rs
 
 ## TLS certificate
