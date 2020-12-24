@@ -11,10 +11,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v2
-      
-      - name: Set current week of the year in environnement
-        run: echo "CURRENT_WEEK=$(date +%V)" >> $GITHUB_ENV
-      
+
       - uses: actions-rs/toolchain@v1
         with:
           toolchain: stable
