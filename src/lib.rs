@@ -28,8 +28,8 @@
 //! There's a lot more in the [examples] directory.
 //!
 //! [`async-compat`]: https://docs.rs/async-compat
-//! [examples]: https://github.com/stjepang/smol/tree/master/examples
-//! [get-request]: https://github.com/stjepang/smol/blob/master/examples/get-request.rs
+//! [examples]: https://github.com/smol-rs/smol/tree/master/examples
+//! [get-request]: https://github.com/smol-rs/smol/blob/master/examples/get-request.rs
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs, missing_debug_implementations, rust_2018_idioms)]
