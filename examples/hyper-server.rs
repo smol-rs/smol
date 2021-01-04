@@ -141,12 +141,26 @@ impl tokio::io::AsyncRead for SmolStream {
     fn poll_read(
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
-        buf: &mut [u8],
-    ) -> Poll<io::Result<usize>> {
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
         loop {
             match &mut *self {
-                SmolStream::Plain(s) => return Pin::new(s).poll_read(cx, buf),
-                SmolStream::Tls(s) => return Pin::new(s).poll_read(cx, buf),
+                SmolStream::Plain(s) => {
+                    return Pin::new(s)
+                        .poll_read(cx, buf.initialize_unfilled())
+                        .map_ok(|size| {
+                            buf.advance(size);
+                            ()
+                        })
+                }
+                SmolStream::Tls(s) => {
+                    return Pin::new(s)
+                        .poll_read(cx, buf.initialize_unfilled())
+                        .map_ok(|size| {
+                            buf.advance(size);
+                            ()
+                        })
+                }
                 SmolStream::Handshake(f) => {
                     let s = smol::ready!(f.as_mut().poll(cx))?;
                     *self = SmolStream::Tls(s);
