@@ -29,8 +29,8 @@ anyhow = "1.0.37"
 async-dup = "1.2.2"
 async-h1 = "2.3.0"
 async-native-tls = "0.3.3"
-async-std = "1.8.0"
-async-tungstenite = { version = "0.11.0", features = ["async-native-tls"] }
+async-std = "1.9.0"
+async-tungstenite = { version = "0.12.0", features = ["async-native-tls"] }
 base64 = "0.13.0"
 ctrlc = "3.1.6"
 doc-comment = "0.3.3"
@@ -42,11 +42,11 @@ native-tls = "0.2.7"
 num_cpus = "1.13.0"
 scraper = "0.12.0"
 signal-hook = "0.3.2"
-surf = { version = "2.0.0-alpha.5", default-features = false, features = ["h1-client"] }
-tempfile = "3.1.0"
+surf = { version = "2.1.0", default-features = false, features = ["h1-client"] }
+tempfile = "3.2.0"
 tide = "0.15.0"
 tokio = { version = "1.0.1", default-features = false, features = ["rt-multi-thread"] }
-tungstenite = "0.11.1"
+tungstenite = "0.12.0"
 url = "2.2.0"
 
 [target.'cfg(target_os = "linux")'.dev-dependencies]
