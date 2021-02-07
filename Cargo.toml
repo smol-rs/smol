@@ -42,6 +42,7 @@ native-tls = "0.2.7"
 num_cpus = "1.13.0"
 scraper = "0.12.0"
 signal-hook = "0.3.2"
+signal-hook-async-std = "0.2.1"
 surf = { version = "2.1.0", default-features = false, features = ["h1-client"] }
 tempfile = "3.2.0"
 tide = "0.15.0"
