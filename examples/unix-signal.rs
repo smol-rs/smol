@@ -8,19 +8,15 @@
 
 #[cfg(unix)]
 fn main() -> std::io::Result<()> {
-    use std::os::unix::{io::AsRawFd, net::UnixStream};
-
-    use smol::{prelude::*, Async};
+    use smol::prelude::*;
 
     smol::block_on(async {
-        // Create a Unix stream that receives a byte on each signal occurrence.
-        let (a, mut b) = Async::<UnixStream>::pair()?;
-        // Async isn't IntoRawFd, but it is AsRawFd, so let's pass the raw fd directly.
-        signal_hook::low_level::pipe::register_raw(signal_hook::consts::SIGINT, a.as_raw_fd())?;
+        // Create a signal stream for SIGINT.
+        let mut signal = signal_hook_async_std::Signals::new(&[signal_hook::consts::SIGINT])?;
         println!("Waiting for Ctrl-C...");
 
-        // Receive a byte that indicates the Ctrl-C signal occurred.
-        b.read_exact(&mut [0]).await?;
+        // Wait for the signal stream to return a signal.
+        signal.next().await;
 
         println!("Done!");
         Ok(())
