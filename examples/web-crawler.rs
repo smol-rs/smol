@@ -1,3 +1,6 @@
+fn main() {}
+
+/* TODO: surf is currently broken: https://github.com/http-rs/surf/pull/282
 //! Crawls the Rust language website and prints found pages.
 //!
 //! Run with:
@@ -78,3 +81,4 @@ fn main() -> Result<()> {
         Ok(())
     })
 }
+*/
