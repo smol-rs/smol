@@ -39,7 +39,7 @@ async fn listen(listener: Async<TcpListener>, tls: Option<TlsAcceptor>) -> Resul
     println!("Listening on {}", host);
 
     // Start a hyper server.
-    Server::builder(SmolListener::new(listener, tls))
+    Server::builder(SmolListener::new(&listener, tls))
         .executor(SmolExecutor)
         .serve(make_service_fn(move |_| {
             let host = host.clone();
@@ -78,28 +78,29 @@ impl<F: Future + Send + 'static> hyper::rt::Executor<F> for SmolExecutor {
 }
 
 /// Listens for incoming connections.
-struct SmolListener {
-    listener: Async<TcpListener>,
+struct SmolListener<'a> {
     tls: Option<TlsAcceptor>,
+    incoming: Pin<Box<dyn Stream<Item = io::Result<Async<TcpStream>>> + Send + 'a>>,
 }
 
-impl SmolListener {
-    fn new(listener: Async<TcpListener>, tls: Option<TlsAcceptor>) -> Self {
-        Self { listener, tls }
+impl<'a> SmolListener<'a> {
+    fn new(listener: &'a Async<TcpListener>, tls: Option<TlsAcceptor>) -> Self {
+        Self {
+            incoming: Box::pin(listener.incoming()),
+            tls,
+        }
     }
 }
 
-impl hyper::server::accept::Accept for SmolListener {
+impl hyper::server::accept::Accept for SmolListener<'_> {
     type Conn = SmolStream;
     type Error = Error;
 
     fn poll_accept(
-        self: Pin<&mut Self>,
+        mut self: Pin<&mut Self>,
         cx: &mut Context,
     ) -> Poll<Option<Result<Self::Conn, Self::Error>>> {
-        let incoming = self.listener.incoming();
-        smol::pin!(incoming);
-        let stream = smol::ready!(incoming.poll_next(cx)).unwrap()?;
+        let stream = smol::ready!(self.incoming.as_mut().poll_next(cx)).unwrap()?;
 
         let stream = match &self.tls {
             None => SmolStream::Plain(stream),
@@ -151,7 +152,7 @@ impl tokio::io::AsyncRead for SmolStream {
                         .map_ok(|size| {
                             buf.advance(size);
                             ()
-                        })
+                        });
                 }
                 SmolStream::Tls(s) => {
                     return Pin::new(s)
@@ -159,7 +160,7 @@ impl tokio::io::AsyncRead for SmolStream {
                         .map_ok(|size| {
                             buf.advance(size);
                             ()
-                        })
+                        });
                 }
                 SmolStream::Handshake(f) => {
                     let s = smol::ready!(f.as_mut().poll(cx))?;
