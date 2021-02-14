@@ -10,7 +10,6 @@ homepage = "https://github.com/smol-rs/smol"
 documentation = "https://docs.rs/smol"
 keywords = ["async", "await", "future", "io", "networking"]
 categories = ["asynchronous", "concurrency", "network-programming"]
-readme = "README.md"
 
 [dependencies]
 async-channel = "1.4.2"
