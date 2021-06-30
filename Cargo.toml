@@ -28,9 +28,7 @@ anyhow = "1.0.37"
 async-dup = "1.2.2"
 async-h1 = "2.3.0"
 async-native-tls = "0.3.3"
-async-std = "1.9.0"
-async-tungstenite = { version = "0.12.0", features = ["async-native-tls"] }
-base64 = "0.13.0"
+async-tungstenite = { version = "0.13", features = ["async-native-tls"] }
 ctrlc = "3.1.6"
 doc-comment = "0.3.3"
 futures = "0.3.8"
@@ -38,21 +36,18 @@ http = "0.2.2"
 http-types = "2.9.0"
 hyper = { version = "0.14.2", default-features = false, features = ["client", "http1", "server", "stream"] }
 native-tls = "0.2.7"
-num_cpus = "1.13.0"
 scraper = "0.12.0"
 signal-hook = "0.3.2"
-# TODO: surf is currently broken: https://github.com/http-rs/surf/pull/282
-# surf = { version = "2.1.0", default-features = false, features = ["h1-client"] }
+surf = { version = "2.2", default-features = false, features = ["h1-client"] }
 tempfile = "3.2.0"
-tide = "0.15.0"
 tokio = { version = "1.0.1", default-features = false, features = ["rt-multi-thread"] }
-tungstenite = "0.12.0"
+tungstenite = "0.13"
 url = "2.2.0"
 
 [target.'cfg(target_os = "linux")'.dev-dependencies]
 inotify = { version = "0.9.2", default-features = false }
-nix = "0.19.1"
+nix = "0.21"
 timerfd = "1.2.0"
 
 [target.'cfg(windows)'.dev-dependencies]
-uds_windows = "0.1.5"
+uds_windows = "1"
