@@ -52,10 +52,11 @@ pub use {
 };
 
 #[doc(inline)]
-pub use {
-    async_channel as channel, async_fs as fs, async_lock as lock, async_net as net,
-    async_process as process,
-};
+pub use {async_channel as channel, async_fs as fs, async_lock as lock, async_net as net};
+
+#[cfg(not(target_os = "espidf"))]
+#[doc(inline)]
+pub use async_process as process;
 
 mod spawn;
 pub use spawn::spawn;
