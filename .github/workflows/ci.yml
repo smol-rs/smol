@@ -1,0 +1,71 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - master
+  schedule:
+    - cron: '0 2 * * *'
+
+env:
+  RUSTFLAGS: -D warnings
+  RUST_BACKTRACE: 1
+
+jobs:
+  test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        rust: [nightly, beta, stable]
+    steps:
+      - uses: actions/checkout@v2
+      - name: Install Rust
+        run: rustup update ${{ matrix.rust }} && rustup default ${{ matrix.rust }}
+      - run: cargo build --all --all-features --all-targets
+      - name: Run cargo check (without dev-dependencies to catch missing feature flags)
+        if: startsWith(matrix.rust, 'nightly')
+        run: cargo check -Z features=dev_dep
+      - run: cargo test
+
+  msrv:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        # When updating this, the reminder to update the minimum supported
+        # Rust version in Cargo.toml and .clippy.toml.
+        rust: ['1.46']
+    steps:
+      - uses: actions/checkout@v2
+      - name: Install Rust
+        run: rustup update ${{ matrix.rust }} && rustup default ${{ matrix.rust }}
+      - run: cargo build
+
+  clippy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - name: Install Rust
+        run: rustup update stable
+      - uses: actions-rs/clippy-check@v1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          args: --all-features -- -W clippy::all
+
+  fmt:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - name: Install Rust
+        run: rustup update stable
+      - run: cargo fmt --all -- --check
+
+  security_audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - uses: actions-rs/audit-check@v1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}

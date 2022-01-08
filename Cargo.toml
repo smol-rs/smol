@@ -3,6 +3,7 @@ name = "smol"
 version = "1.2.5"
 authors = ["Stjepan Glavina <stjepang@gmail.com>"]
 edition = "2018"
+rust-version = "1.46"
 description = "A small and fast async runtime"
 license = "Apache-2.0 OR MIT"
 repository = "https://github.com/smol-rs/smol"
@@ -10,6 +11,7 @@ homepage = "https://github.com/smol-rs/smol"
 documentation = "https://docs.rs/smol"
 keywords = ["async", "await", "future", "io", "networking"]
 categories = ["asynchronous", "concurrency", "network-programming"]
+exclude = ["/.*"]
 
 [dependencies]
 async-channel = "1.4.2"
