@@ -14,14 +14,6 @@ fn main() -> std::io::Result<()> {
     use smol::{io, Async};
     use timerfd::{SetTimeFlags, TimerFd, TimerState};
 
-    /// Converts a [`nix::Error`] into [`std::io::Error`].
-    fn io_err(err: nix::Error) -> io::Error {
-        match err {
-            nix::Error::Sys(code) => code.into(),
-            err => io::Error::new(io::ErrorKind::Other, Box::new(err)),
-        }
-    }
-
     /// Sleeps using an OS timer.
     async fn sleep(dur: Duration) -> io::Result<()> {
         // Create an OS timer.
@@ -30,7 +22,7 @@ fn main() -> std::io::Result<()> {
 
         // When the OS timer fires, a 64-bit integer can be read from it.
         Async::new(timer)?
-            .read_with(|t| nix::unistd::read(t.as_raw_fd(), &mut [0u8; 8]).map_err(io_err))
+            .read_with(|t| nix::unistd::read(t.as_raw_fd(), &mut [0u8; 8]).map_err(io::Error::from))
             .await?;
         Ok(())
     }
