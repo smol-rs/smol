@@ -151,7 +151,6 @@ impl tokio::io::AsyncRead for SmolStream {
                         .poll_read(cx, buf.initialize_unfilled())
                         .map_ok(|size| {
                             buf.advance(size);
-                            ()
                         });
                 }
                 SmolStream::Tls(s) => {
@@ -159,7 +158,6 @@ impl tokio::io::AsyncRead for SmolStream {
                         .poll_read(cx, buf.initialize_unfilled())
                         .map_ok(|size| {
                             buf.advance(size);
-                            ()
                         });
                 }
                 SmolStream::Handshake(f) => {
