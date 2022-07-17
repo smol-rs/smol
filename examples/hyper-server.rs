@@ -129,6 +129,7 @@ enum SmolStream {
     Tls(TlsStream<Async<TcpStream>>),
 
     /// A TCP connection that is in process of getting secured by TLS.
+    #[allow(clippy::type_complexity)]
     Handshake(Pin<Box<dyn Future<Output = io::Result<TlsStream<Async<TcpStream>>>> + Send>>),
 }
 
