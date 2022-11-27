@@ -36,7 +36,7 @@ jobs:
     strategy:
       matrix:
         # When updating this, the reminder to update the minimum supported
-        # Rust version in Cargo.toml and .clippy.toml.
+        # Rust version in Cargo.toml.
         rust: ['1.47']
     steps:
       - uses: actions/checkout@v3
