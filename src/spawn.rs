@@ -4,8 +4,8 @@ use std::thread;
 
 use async_executor::{Executor, Task};
 use async_io::block_on;
+use async_lock::OnceCell;
 use futures_lite::future;
-use once_cell::sync::Lazy;
 
 /// Spawns a task onto the global executor (single-threaded by default).
 ///
@@ -28,26 +28,30 @@ use once_cell::sync::Lazy;
 /// });
 /// ```
 pub fn spawn<T: Send + 'static>(future: impl Future<Output = T> + Send + 'static) -> Task<T> {
-    static GLOBAL: Lazy<Executor<'_>> = Lazy::new(|| {
-        let num_threads = {
-            // Parse SMOL_THREADS or default to 1.
-            std::env::var("SMOL_THREADS")
-                .ok()
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(1)
-        };
+    static GLOBAL: OnceCell<Executor<'_>> = OnceCell::new();
 
-        for n in 1..=num_threads {
-            thread::Builder::new()
-                .name(format!("smol-{}", n))
-                .spawn(|| loop {
-                    catch_unwind(|| block_on(GLOBAL.run(future::pending::<()>()))).ok();
-                })
-                .expect("cannot spawn executor thread");
-        }
+    fn global() -> &'static Executor<'static> {
+        GLOBAL.get_or_init_blocking(|| {
+            let num_threads = {
+                // Parse SMOL_THREADS or default to 1.
+                std::env::var("SMOL_THREADS")
+                    .ok()
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(1)
+            };
 
-        Executor::new()
-    });
+            for n in 1..=num_threads {
+                thread::Builder::new()
+                    .name(format!("smol-{}", n))
+                    .spawn(|| loop {
+                        catch_unwind(|| block_on(global().run(future::pending::<()>()))).ok();
+                    })
+                    .expect("cannot spawn executor thread");
+            }
 
-    GLOBAL.spawn(future)
+            Executor::new()
+        })
+    }
+
+    global().spawn(future)
 }
