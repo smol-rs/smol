@@ -1,3 +1,7 @@
+# Version 1.3.0
+
+- Remove the dependency on the `once_cell` crate to restore the MSRV. (#241)
+
 # Version 1.2.5
 
 - Bump version for docs.rs to pick up latest dependencies.

@@ -3,15 +3,13 @@ name = "smol"
 # When publishing a new version:
 # - Update CHANGELOG.md
 # - Create "v1.x.y" git tag
-version = "1.2.5"
+version = "1.3.0"
 authors = ["Stjepan Glavina <stjepang@gmail.com>"]
 edition = "2018"
 rust-version = "1.47"
 description = "A small and fast async runtime"
 license = "Apache-2.0 OR MIT"
 repository = "https://github.com/smol-rs/smol"
-homepage = "https://github.com/smol-rs/smol"
-documentation = "https://docs.rs/smol"
 keywords = ["async", "await", "future", "io", "networking"]
 categories = ["asynchronous", "concurrency", "network-programming"]
 exclude = ["/.*"]
