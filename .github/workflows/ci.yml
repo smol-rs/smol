@@ -6,11 +6,20 @@ on:
     branches:
       - master
   schedule:
-    - cron: '0 2 * * *'
+    - cron: '0 2 * * 0'
 
 env:
-  RUSTFLAGS: -D warnings
+  CARGO_INCREMENTAL: 0
+  CARGO_NET_RETRY: 10
+  CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
+  RUSTFLAGS: -D warnings
+  RUSTDOCFLAGS: -D warnings
+  RUSTUP_MAX_RETRIES: 10
+
+defaults:
+  run:
+    shell: bash
 
 jobs:
   test:
@@ -64,6 +73,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
-      - uses: actions-rs/audit-check@v1
+      # https://github.com/rustsec/audit-check/issues/2
+      - uses: rustsec/audit-check@master
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
