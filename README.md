@@ -99,6 +99,10 @@ Another useful tool for making certificates is [mkcert].
 
 [mkcert]: https://github.com/FiloSottile/mkcert
 
+## MSRV Policy
+
+The Minimum Supported Rust Version (MSRV) of this crate is **1.47**. As a **tentative** policy, the MSRV will not advance past the [current Rust version provided by Debian Stable](https://packages.debian.org/stable/rust/rustc). At the time of writing, this version of Rust is *1.48*. However, the MSRV may be advanced further in the event of a major ecosystem shift or a security vulnerability.
+
 ## License
 
 Licensed under either of
