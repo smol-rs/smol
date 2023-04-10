@@ -38,7 +38,7 @@ http = "0.2"
 http-types = "2"
 hyper = { version = "0.14", default-features = false, features = ["client", "http1", "server", "stream"] }
 native-tls = "0.2"
-scraper = "0.15"
+scraper = "0.16"
 signal-hook = "0.3"
 surf = { version = "2", default-features = false, features = ["h1-client"] }
 tempfile = "3"
