@@ -30,7 +30,7 @@ anyhow = "1"
 async-dup = "1"
 async-h1 = "2"
 async-native-tls = "0.5"
-async-tungstenite = { version = "0.20", features = ["async-native-tls"] }
+async-tungstenite = { version = "0.21", features = ["async-native-tls"] }
 ctrlc = "3"
 doc-comment = "0.3"
 futures = "0.3"
@@ -43,7 +43,7 @@ signal-hook = "0.3"
 surf = { version = "2", default-features = false, features = ["h1-client"] }
 tempfile = "3"
 tokio = { version = "1", default-features = false, features = ["rt-multi-thread"] }
-tungstenite = "0.18"
+tungstenite = "0.19"
 url = "2"
 
 [target.'cfg(target_os = "linux")'.dev-dependencies]
