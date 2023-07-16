@@ -11,6 +11,8 @@ https://docs.rs/smol)
 [![Chat](https://img.shields.io/discord/701824908866617385.svg?logo=discord)](
 https://discord.gg/x6m5Vvt)
 
+<img src="https://raw.githubusercontent.com/smol-rs/smol/master/assets/images/logo_fullsize_transparent.png" alt="kitty" width="100px" style="float: left;" />
+
 A small and fast async runtime.
 
 This crate simply re-exports other smaller async crates (see the source).
