@@ -18,7 +18,7 @@ use std::task::{Context, Poll};
 
 use anyhow::{bail, Context as _, Result};
 use async_native_tls::{Certificate, TlsConnector, TlsStream};
-use async_tungstenite::WebSocketStream;
+use async_tungstenite::{tungstenite, WebSocketStream};
 use futures::sink::{Sink, SinkExt};
 use smol::{prelude::*, Async};
 use tungstenite::handshake::client::Response;
