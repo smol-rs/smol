@@ -49,7 +49,7 @@ url = "2"
 
 [target.'cfg(target_os = "linux")'.dev-dependencies]
 inotify = { version = "0.10", default-features = false }
-nix = "0.27"
+rustix = "0.38"
 timerfd = "1"
 
 [target.'cfg(windows)'.dev-dependencies]

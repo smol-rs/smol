@@ -8,7 +8,6 @@
 
 #[cfg(target_os = "linux")]
 fn main() -> std::io::Result<()> {
-    use std::os::unix::io::AsRawFd;
     use std::time::{Duration, Instant};
 
     use smol::{io, Async};
@@ -22,7 +21,7 @@ fn main() -> std::io::Result<()> {
 
         // When the OS timer fires, a 64-bit integer can be read from it.
         Async::new(timer)?
-            .read_with(|t| nix::unistd::read(t.as_raw_fd(), &mut [0u8; 8]).map_err(io::Error::from))
+            .read_with(|t| rustix::io::read(t, &mut [0u8; 8]).map_err(io::Error::from))
             .await?;
         Ok(())
     }
