@@ -1,6 +1,6 @@
 # smol
 
-[![Build](https://github.com/smol-rs/smol/workflows/Build%20and%20test/badge.svg)](
+[![Build](https://github.com/smol-rs/smol/actions/workflows/ci.yml/badge.svg)](
 https://github.com/smol-rs/smol/actions)
 [![License](https://img.shields.io/badge/license-Apache--2.0_OR_MIT-blue.svg)](
 https://github.com/smol-rs/smol)
