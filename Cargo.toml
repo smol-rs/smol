@@ -15,7 +15,7 @@ categories = ["asynchronous", "concurrency", "network-programming"]
 exclude = ["/.*"]
 
 [dependencies]
-async-channel = "1.4.2"
+async-channel = "2.0.0"
 async-executor = "1.5.0"
 async-fs = "1.3.0"
 async-io = "1.12.0"
