@@ -9,6 +9,7 @@
 #[cfg(target_os = "linux")]
 fn main() -> std::io::Result<()> {
     use std::ffi::OsString;
+    use std::os::unix::io::AsFd;
 
     use inotify::{EventMask, Inotify, WatchMask};
     use smol::{io, Async};
@@ -34,9 +35,9 @@ fn main() -> std::io::Result<()> {
 
     smol::block_on(async {
         // Watch events in the current directory.
-        let mut inotify = Async::new(Inotify::init()?)?;
+        let mut inotify = Inotify::init()?;
+        let source = Async::new(inotify.as_fd().try_clone_to_owned()?)?;
         inotify
-            .get_mut()
             .watches()
             .add(".", WatchMask::ALL_EVENTS)?;
         println!("Watching for filesystem events in the current directory...");
@@ -45,7 +46,7 @@ fn main() -> std::io::Result<()> {
 
         // Wait for events in a loop and print them on the screen.
         loop {
-            for event in inotify.read_with_mut(read_op).await? {
+            for event in source.read_with(|_| read_op(&mut inotify)).await? {
                 println!("{:?}", event);
             }
         }
