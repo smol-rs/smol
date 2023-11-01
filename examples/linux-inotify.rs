@@ -37,9 +37,7 @@ fn main() -> std::io::Result<()> {
         // Watch events in the current directory.
         let mut inotify = Inotify::init()?;
         let source = Async::new(inotify.as_fd().try_clone_to_owned()?)?;
-        inotify
-            .watches()
-            .add(".", WatchMask::ALL_EVENTS)?;
+        inotify.watches().add(".", WatchMask::ALL_EVENTS)?;
         println!("Watching for filesystem events in the current directory...");
         println!("Try opening a file to trigger some events.");
         println!();
