@@ -49,7 +49,11 @@ pub fn spawn<T: Send + 'static>(future: impl Future<Output = T> + Send + 'static
                     .expect("cannot spawn executor thread");
             }
 
-            Executor::new()
+            // Prevent spawning another thread by running the process driver on this thread.
+            let ex = Executor::new();
+            #[cfg(not(target_os = "espidf"))]
+            ex.spawn(async_process::driver()).detach();
+            ex
         })
     }
 
