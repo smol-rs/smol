@@ -16,7 +16,7 @@ fn main() -> std::io::Result<()> {
     use std::io;
     use tempfile::tempdir;
 
-    // n.b.: notgull: uds_windows does not support I/O safety uet, hence the wrapper types
+    // n.b.: notgull: uds_windows does not support I/O safety yet, hence the wrapper types
 
     struct UnixListener(uds_windows::UnixListener);
 
