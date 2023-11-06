@@ -1,3 +1,8 @@
+# Version 2.0.0
+
+- **Breaking:** Bump subcrates to their newest major versions. (#277, #280, #281, #282, #283)
+- Run the `async-process` driver on the executor. (#284)
+
 # Version 1.3.0
 
 - Remove the dependency on the `once_cell` crate to restore the MSRV. (#241)
