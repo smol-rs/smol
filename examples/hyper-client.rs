@@ -8,7 +8,6 @@
 
 use std::convert::TryInto;
 use std::pin::Pin;
-use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use anyhow::{bail, Context as _, Result};
@@ -23,7 +22,7 @@ use smol_macros::main;
 
 /// Sends a request and fetches the response.
 async fn fetch(
-    ex: &Arc<Executor<'static>>,
+    ex: &Executor<'static>,
     req: Request<Empty<&'static [u8]>>,
 ) -> Result<Response<Incoming>> {
     // Connect to the HTTP server.
@@ -66,7 +65,7 @@ async fn fetch(
 }
 
 #[apply(main!)]
-async fn main(ex: Arc<Executor<'static>>) -> Result<()> {
+async fn main(ex: &Executor<'static>) -> Result<()> {
     // Create a request.
     let url: hyper::Uri = "https://www.rust-lang.org".try_into()?;
     let req = Request::builder()
@@ -78,7 +77,7 @@ async fn main(ex: Arc<Executor<'static>>) -> Result<()> {
         .body(Empty::new())?;
 
     // Fetch the response.
-    let resp = fetch(&ex, req).await?;
+    let resp = fetch(ex, req).await?;
     println!("{:#?}", resp);
 
     // Read the message body.
