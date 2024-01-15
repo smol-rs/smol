@@ -37,11 +37,15 @@ ctrlc = "3"
 doc-comment = "0.3"
 futures = "0.3"
 http = "0.2"
+http-body-util = "0.1.0"
 http-types = "2"
-hyper = { version = "0.14", default-features = false, features = ["client", "http1", "server", "stream"] }
+hyper = { version = "1.0", default-features = false, features = ["client", "http1", "server"] }
+macro_rules_attribute = "0.2.0"
 native-tls = "0.2"
 scraper = "0.18"
 signal-hook = "0.3"
+smol-hyper = "0.1.0"
+smol-macros = "0.1.0"
 surf = { version = "2", default-features = false, features = ["h1-client"] }
 tempfile = "3"
 tokio = { version = "1", default-features = false, features = ["rt-multi-thread"] }
