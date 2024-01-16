@@ -8,8 +8,8 @@ https://github.com/smol-rs/smol)
 https://crates.io/crates/smol)
 [![Documentation](https://docs.rs/smol/badge.svg)](
 https://docs.rs/smol)
-[![Chat](https://img.shields.io/discord/701824908866617385.svg?logo=discord)](
-https://discord.gg/x6m5Vvt)
+[![Chat](https://img.shields.io/matrix/smol-rs%3Amatrix.org)](
+https://matrix.to/#/#smol-rs:matrix.org)
 
 <img src="https://raw.githubusercontent.com/smol-rs/smol/master/assets/images/logo_fullsize_transparent.png" alt="kitty" width="100px" style="float: left;" />
 
