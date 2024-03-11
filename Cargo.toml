@@ -36,7 +36,7 @@ async-tungstenite = { version = "0.25", features = ["async-native-tls"] }
 ctrlc = "3"
 doc-comment = "0.3"
 futures = "0.3"
-http = "0.2"
+http = "1.1"
 http-body-util = "0.1.0"
 http-types = "2"
 hyper = { version = "1.0", default-features = false, features = ["client", "http1", "server"] }
