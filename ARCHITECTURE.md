@@ -12,29 +12,31 @@ be useful for evaluating [`smol`] in comparison with other runtimes.
 [`smol`] is a small, safe and fast concurrent runtime built in pure Rust. Its
 primary goal is to enable M:N concurrency in Rust programs; multiple coroutines
 can be multiplexed onto a single thread, allowing a server to handle hundreds
-of thousands (if not millions) of clients at a time. [`smol`] is intended to
-work on any scale; [`smol`] should work for programs with two coroutines as well
-as two million.
+of thousands (if not millions) of clients at a time. However, [`smol`] can just
+as easily multiplex tasks onto multiple threads to enable blazingy fast
+concurrency. [`smol`] is intended to work on any scale; [`smol`] should work for
+programs with two coroutines as well as two million.
 
 On an architectural level, [`smol`] prioritizes maintainable code and clarity.
 [`smol`] aims to provide the performance of a modern `async` runtime while still
 remaining hackable. This philosophy informs much of the decisions in [`smol`]'s
 codebase and differentiate it from other contemporary runtimes.
 
-On a technical level, [`smol`] is a work-stealing executor built around a
-one-shot asynchronous event loop. It also contains a thread pool for filesystem
-operations and a reactor for waiting for child processes to finish. [`smol`]
-itself is a meta-crate that combines the features of numerous subcrates into a
-single `async` runtime-based package.
+On a technical level, [`smol`] is a [work-stealing] executor built around a
+[one-shot] asynchronous event loop. It also contains a thread pool for
+filesystem operations and a reactor for waiting for child processes to finish.
+[`smol`] itself is a meta-crate that combines the features of numerous subcrates
+into a single `async` runtime-based package.
 
-The division is as follows:
+smol-rs consists of the following crates:
 
 - [`async-io`] provides a one-shot reactor for polling asynchronous I/O. It is
   used for registering sockets into `epoll` or another system, then polling them
   simultaneously.
 - [`blocking`] provides a managed thread-pool for polling blocking operations as
   asynchronous tasks. It is used by many parts of [`smol`] for turning
-  operations that would normally be non-concurrent into concurrent operations.
+  operations that would normally be non-concurrent into concurrent operations,
+  and vice versa.
 - [`async-executor`] provides a work-stealing executor that is used as the
   scheduler for an `async` program. While the executor isn't as optimized as
   other contemporary executors, it provides a performant executor implemented in
@@ -350,3 +352,6 @@ TODO: Explain this!
 
 [`Runnable`]: https://docs.rs/async-task/latest/async_task/struct.Runnable.html
 [`Task`]: https://docs.rs/async-task/latest/async_task/struct.Task.html
+
+[work-stealing]: https://en.wikipedia.org/wiki/Work_stealing
+[one-shot]: https://github.com/smol-rs/polling
