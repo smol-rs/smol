@@ -42,7 +42,10 @@ jobs:
       - name: Run cargo check (without dev-dependencies to catch missing feature flags)
         if: startsWith(matrix.rust, 'nightly')
         run: cargo check -Z features=dev_dep
-      - run: cargo test
+      - name: Run tests with single smol thread
+        run: cargo test
+      - name: Run tests with multiple smol threads
+        run: SMOL_THREADS=2 cargo test
 
   msrv:
     runs-on: ubuntu-latest

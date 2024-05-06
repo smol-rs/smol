@@ -46,8 +46,8 @@ doc_comment::doctest!("../README.md");
 #[doc(inline)]
 pub use {
     async_executor::{Executor, LocalExecutor, Task},
-    async_io::{block_on, Async, Timer},
-    blocking::{unblock, Unblock},
+    async_io::{Async, Timer},
+    blocking::Unblock,
     futures_lite::{future, io, pin, prelude, ready, stream},
 };
 
@@ -58,5 +58,7 @@ pub use {async_channel as channel, async_fs as fs, async_lock as lock, async_net
 #[doc(inline)]
 pub use async_process as process;
 
+mod executor;
 mod spawn;
+pub use executor::{block_on, try_executor, unblock};
 pub use spawn::spawn;
