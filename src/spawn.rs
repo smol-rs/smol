@@ -16,6 +16,9 @@ use futures_lite::future;
 /// By default, the global executor is run by a single background thread, but you can also
 /// configure the number of threads by setting the `SMOL_THREADS` environment variable.
 ///
+/// Since the executor is kept around forever, `drop` is not called for tasks when the program
+/// exits.
+///
 /// # Examples
 ///
 /// ```
