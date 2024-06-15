@@ -1,3 +1,8 @@
+# Version 2.0.1
+
+- Add a mention to the documentation of `smol::spawn` that tasks spawned with
+  this function don't have their destructors called when the program ends. (#312)
+
 # Version 2.0.0
 
 - **Breaking:** Bump subcrates to their newest major versions. (#277, #280, #281, #282, #283)
