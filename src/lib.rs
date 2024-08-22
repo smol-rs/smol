@@ -5,6 +5,9 @@
 //! To use tokio-based libraries with smol, apply the [`async-compat`] adapter to futures and I/O
 //! types.
 //!
+//! See the [`smol-macros`] crate if you want a no proc-macro, fast compiling, easy-to-use
+//! async main and/or multi-threaded Executor setup out of the box.
+//!
 //! # Examples
 //!
 //! Connect to an HTTP website, make a GET request, and pipe the response to the standard output:
@@ -27,9 +30,9 @@
 //!
 //! There's a lot more in the [examples] directory.
 //!
-//! [`async-compat`]: https://docs.rs/async-compat
+//! [`async-compat`]: https://docs.rs/async-compat/latest/async_compat/
+//! [`smol-macros`]: https://docs.rs/smol-macros/latest/smol_macros/
 //! [examples]: https://github.com/smol-rs/smol/tree/master/examples
-//! [get-request]: https://github.com/smol-rs/smol/blob/master/examples/get-request.rs
 
 #![doc(
     html_favicon_url = "https://raw.githubusercontent.com/smol-rs/smol/master/assets/images/logo_fullsize_transparent.png"
