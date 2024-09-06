@@ -1,3 +1,7 @@
+# Version 2.0.2
+
+- Update docs to mention `smol-macros`. (#319)
+
 # Version 2.0.1
 
 - Add a mention to the documentation of `smol::spawn` that tasks spawned with
