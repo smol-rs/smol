@@ -42,7 +42,7 @@ http-types = "2"
 hyper = { version = "1.0", default-features = false, features = ["client", "http1", "server"] }
 macro_rules_attribute = "0.2.0"
 native-tls = "0.2"
-scraper = "0.20"
+scraper = "0.22"
 signal-hook = "0.3"
 smol-hyper = "0.1.0"
 smol-macros = "0.1.0"
