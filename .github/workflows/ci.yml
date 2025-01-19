@@ -26,6 +26,16 @@ defaults:
     shell: bash
 
 jobs:
+  fmt:
+    uses: smol-rs/.github/.github/workflows/fmt.yml@main
+  security_audit:
+    uses: smol-rs/.github/.github/workflows/security_audit.yml@main
+    permissions:
+      checks: write
+      contents: read
+      issues: write
+    secrets: inherit
+
   test:
     runs-on: ${{ matrix.os }}
     strategy:
@@ -64,27 +74,3 @@ jobs:
       - name: Install Rust
         run: rustup update stable
       - run: cargo clippy --all-features --all-targets
-
-  fmt:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install Rust
-        run: rustup update stable
-      - run: cargo fmt --all --check
-
-  security_audit:
-    permissions:
-      checks: write
-      contents: read
-      issues: write
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      # rustsec/audit-check used to do this automatically
-      - name: Generate Cargo.lock
-        run: cargo generate-lockfile
-      # https://github.com/rustsec/audit-check/issues/2
-      - uses: rustsec/audit-check@v2.0.0
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
