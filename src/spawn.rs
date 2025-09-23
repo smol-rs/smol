@@ -1,10 +1,10 @@
 use std::future::Future;
 use std::panic::catch_unwind;
+use std::sync::OnceLock;
 use std::thread;
 
 use async_executor::{Executor, Task};
 use async_io::block_on;
-use async_lock::OnceCell;
 use futures_lite::future;
 
 /// Spawns a task onto the global executor (single-threaded by default).
@@ -31,10 +31,10 @@ use futures_lite::future;
 /// });
 /// ```
 pub fn spawn<T: Send + 'static>(future: impl Future<Output = T> + Send + 'static) -> Task<T> {
-    static GLOBAL: OnceCell<Executor<'_>> = OnceCell::new();
+    static GLOBAL: OnceLock<Executor<'_>> = OnceLock::new();
 
     fn global() -> &'static Executor<'static> {
-        GLOBAL.get_or_init_blocking(|| {
+        GLOBAL.get_or_init(|| {
             let num_threads = {
                 // Parse SMOL_THREADS or default to 1.
                 std::env::var("SMOL_THREADS")
