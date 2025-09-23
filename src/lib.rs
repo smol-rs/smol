@@ -51,7 +51,7 @@ pub use {
     async_executor::{Executor, LocalExecutor, Task},
     async_io::{block_on, Async, Timer},
     blocking::{unblock, Unblock},
-    futures_lite::{future, io, pin, prelude, ready, stream},
+    futures_lite::{future, io, pin, ready, stream},
 };
 
 #[doc(inline)]
@@ -60,6 +60,8 @@ pub use {async_channel as channel, async_fs as fs, async_lock as lock, async_net
 #[cfg(not(target_os = "espidf"))]
 #[doc(inline)]
 pub use async_process as process;
+
+pub mod prelude;
 
 mod spawn;
 pub use spawn::spawn;
