@@ -54,7 +54,7 @@ pub fn spawn<T: Send + 'static>(future: impl Future<Output = T> + Send + 'static
 
             // Prevent spawning another thread by running the process driver on this thread.
             let ex = Executor::new();
-            #[cfg(not(target_os = "espidf"))]
+            #[cfg(not(any(target_os = "espidf", target_os = "haiku")))]
             ex.spawn(async_process::driver()).detach();
             ex
         })
