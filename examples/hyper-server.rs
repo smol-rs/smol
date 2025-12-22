@@ -11,7 +11,7 @@
 //! - http://localhost:8000/
 //! - https://localhost:8001/ (accept the security prompt in the browser)
 //!
-//! Refer to `README.md` to see how to the TLS certificate was generated.
+//! Refer to `README.md` to see how the TLS certificate was generated.
 
 use std::net::{TcpListener, TcpStream};
 use std::pin::Pin;
