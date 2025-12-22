@@ -21,7 +21,7 @@ async fn fetch(url: String, sender: Sender<String>) {
     sender.send(body).await.ok();
 }
 
-/// Extracts links from a HTML body.
+/// Extracts links from an HTML body.
 fn links(body: String) -> Vec<String> {
     let mut v = Vec::new();
     for elem in Html::parse_fragment(&body).select(&Selector::parse("a").unwrap()) {
