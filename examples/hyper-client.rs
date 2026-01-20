@@ -6,7 +6,6 @@
 //! cargo run --example hyper-client
 //! ```
 
-use std::convert::TryInto;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
