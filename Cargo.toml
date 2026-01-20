@@ -5,7 +5,7 @@ name = "smol"
 # - Create "v2.x.y" git tag
 version = "2.0.2"
 authors = ["Stjepan Glavina <stjepang@gmail.com>"]
-edition = "2018"
+edition = "2021"
 rust-version = "1.85"
 description = "A small and fast async runtime"
 license = "Apache-2.0 OR MIT"
