@@ -43,7 +43,7 @@ hyper = { version = "1.0", default-features = false, features = ["client", "http
 macro_rules_attribute = "0.2.0"
 native-tls = "0.2"
 scraper = "0.25"
-signal-hook = "0.3"
+signal-hook = "0.4"
 smol-hyper = "0.1.0"
 smol-macros = "0.1.0"
 surf = { version = "2", default-features = false, features = ["h1-client"] }
