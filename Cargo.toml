@@ -6,6 +6,7 @@ name = "smol"
 version = "2.0.2"
 authors = ["Stjepan Glavina <stjepang@gmail.com>"]
 edition = "2021"
+# NB: Sync with "MSRV Policy" section in README.md.
 rust-version = "1.85"
 description = "A small and fast async runtime"
 license = "Apache-2.0 OR MIT"
