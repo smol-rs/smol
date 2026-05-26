@@ -149,8 +149,8 @@ impl AsyncWrite for SmolStream {
 
     fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         match &mut *self {
-            Self::Plain(s) => Pin::new(s).poll_close(cx),
-            Self::Tls(s) => Pin::new(s).poll_close(cx),
+            Self::Plain(s) => Pin::new(s).poll_flush(cx),
+            Self::Tls(s) => Pin::new(s).poll_flush(cx),
         }
     }
 }
