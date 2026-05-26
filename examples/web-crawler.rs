@@ -14,11 +14,30 @@ use scraper::{Html, Selector};
 
 const ROOT: &str = "https://www.rust-lang.org";
 
+/// A guard that sends an empty string when dropped so the main loop never deadlocks.
+struct FetchGuard {
+    sender: Sender<String>,
+    sent: bool,
+}
+
+impl Drop for FetchGuard {
+    fn drop(&mut self) {
+        if !self.sent {
+            let _ = self.sender.try_send(String::new());
+        }
+    }
+}
+
 /// Fetches the HTML contents of a web page.
 async fn fetch(url: String, sender: Sender<String>) {
+    let mut guard = FetchGuard {
+        sender: sender.clone(),
+        sent: false,
+    };
     let body = surf::get(&url).recv_string().await;
     let body = body.unwrap_or_default();
-    sender.send(body).await.ok();
+    let _ = sender.send(body).await;
+    guard.sent = true;
 }
 
 /// Extracts links from an HTML body.

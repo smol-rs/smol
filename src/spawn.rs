@@ -41,6 +41,7 @@ pub fn spawn<T: Send + 'static>(future: impl Future<Output = T> + Send + 'static
                     .ok()
                     .and_then(|s| s.parse().ok())
                     .unwrap_or(1)
+                    .max(1)
             };
 
             for n in 1..=num_threads {
