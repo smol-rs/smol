@@ -39,7 +39,8 @@ pub fn spawn<T: Send + 'static>(future: impl Future<Output = T> + Send + 'static
                 // Parse SMOL_THREADS or default to 1.
                 std::env::var("SMOL_THREADS")
                     .ok()
-                    .and_then(|s| s.parse().ok())
+                    .and_then(|s| s.parse::<usize>().ok())
+                    .filter(|&n| n > 0)
                     .unwrap_or(1)
             };
 
