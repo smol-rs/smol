@@ -16,7 +16,7 @@ use std::net::{TcpListener, TcpStream};
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-use anyhow::{Context as _, Result};
+use anyhow::Result;
 use async_native_tls::{Identity, TlsAcceptor, TlsStream};
 use async_tungstenite::{tungstenite, WebSocketStream};
 use futures::sink::{Sink, SinkExt};
@@ -25,8 +25,10 @@ use tungstenite::Message;
 
 /// Echoes messages from the client back to it.
 async fn echo(mut stream: WsStream) -> Result<()> {
-    let msg = stream.next().await.context("expected a message")??;
-    stream.send(Message::text(msg.to_string())).await?;
+    while let Some(msg) = stream.next().await {
+        let msg = msg?;
+        stream.send(Message::text(msg.to_string())).await?;
+    }
     Ok(())
 }
 
