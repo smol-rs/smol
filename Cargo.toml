@@ -17,20 +17,20 @@ exclude = ["/.*"]
 
 [dependencies]
 async-channel = "2.0.0"
-async-executor = "1.5.0"
+async-executor = "1.8.0"
 async-fs = "2.0.0"
-async-io = "2.1.0"
-async-lock = "3.0.0"
+async-io = "2.2.2"
+async-lock = "3.1.2"
 async-net = "2.0.0"
 blocking = "1.3.0"
-futures-lite = "2.0.0"
+futures-lite = "2.0.1"
 
 [target.'cfg(not(target_os = "espidf"))'.dependencies]
 async-process = "2.0.0"
 
 [dev-dependencies]
-anyhow = "1"
-async-dup = "1"
+anyhow = "1.0.26"
+async-dup = "1.2.2"
 async-h1 = "2"
 async-native-tls = "0.6"
 async-tungstenite = { version = "0.35", features = ["async-native-tls"] }
@@ -39,18 +39,18 @@ doc-comment = "0.3"
 futures = "0.3"
 http = "1.1"
 http-body-util = "0.1.0"
-http-types = "2"
-hyper = { version = "1.0", default-features = false, features = ["client", "http1", "server"] }
+http-types = "2.9.0"
+hyper = { version = "1.1.0", default-features = false, features = ["client", "http1", "server"] }
 macro_rules_attribute = "0.2.0"
-native-tls = "0.2"
+native-tls = "0.2.8"
 scraper = "0.27"
-signal-hook = "0.4"
-smol-hyper = "0.1.0"
+signal-hook = "0.4.1"
+smol-hyper = "0.1.1"
 smol-macros = "0.1.0"
 surf = { version = "2", default-features = false, features = ["h1-client"] }
-tempfile = "3"
+tempfile = "3.1.0"
 tokio = { version = "1", default-features = false, features = ["rt-multi-thread"] }
-url = "2"
+url = "2.1.1"
 
 [target.'cfg(target_os = "linux")'.dev-dependencies]
 inotify = { version = "0.11", default-features = false }
