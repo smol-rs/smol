@@ -57,9 +57,17 @@ jobs:
       - run: cargo test
 
   msrv:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
     steps:
       - uses: taiki-e/checkout-action@v1
-      - name: Install cargo-hack
-        uses: taiki-e/install-action@cargo-hack
-      - run: cargo hack build --rust-version
+      - name: Install cargo-hack and cargo-minimal-versions
+        uses: taiki-e/install-action@v2
+        with:
+          tool: |
+            cargo-hack
+            cargo-minimal-versions
+      - run: cargo minimal-versions build --no-dev-deps --rust-version --workspace --feature-powerset
