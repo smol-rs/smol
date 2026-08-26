@@ -28,6 +28,41 @@
 //! }
 //! ```
 //!
+//! Start a multi-threaded [`Executor`] from `fn main()` and spawn a task onto it. Run the executor
+//! on a few background threads, then close the channel to let those threads exit:
+//!
+//! ```
+//! use std::sync::Arc;
+//! use std::thread;
+//!
+//! use smol::{channel, future, Executor};
+//!
+//! // An executor that can be shared between threads.
+//! let ex = Arc::new(Executor::new());
+//!
+//! // A channel used to tell the worker threads when to stop.
+//! let (signal, shutdown) = channel::unbounded::<()>();
+//!
+//! // Spawn a few threads, each running the executor until the channel is closed.
+//! let threads: Vec<_> = (0..4)
+//!     .map(|_| {
+//!         let ex = ex.clone();
+//!         let shutdown = shutdown.clone();
+//!         thread::spawn(move || future::block_on(ex.run(shutdown.recv())).ok())
+//!     })
+//!     .collect();
+//!
+//! // Spawn a task onto the executor and wait for its result.
+//! let task = ex.spawn(async { 1 + 2 });
+//! assert_eq!(future::block_on(task), 3);
+//!
+//! // Close the channel, which lets the worker threads finish, then join them.
+//! drop(signal);
+//! for t in threads {
+//!     t.join().unwrap();
+//! }
+//! ```
+//!
 //! There's a lot more in the [examples] directory.
 //!
 //! [`async-compat`]: https://docs.rs/async-compat/latest/async_compat/
